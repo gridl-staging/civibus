@@ -3,6 +3,10 @@ services:
     build:
       context: ..
       dockerfile: infra/db/Dockerfile
+    # This single-service owner needs port publishing, not a project subnet.
+    # Reuse Docker's built-in bridge so concurrent worktrees cannot exhaust the
+    # daemon's finite Compose address pools before PostgreSQL starts.
+    network_mode: bridge
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     # Docker default shm_size is 64MB; PostgreSQL needs at least shared_buffers
@@ -27,6 +31,7 @@ services:
       PGDATA: /var/lib/postgresql/data
     volumes:
       - civibus_db_data:/var/lib/postgresql/data
+      - ../infra/db/00_create_provenance_test_database.sql:/docker-entrypoint-initdb.d/00_create_provenance_test_database.sql
       - ../core/schema/entities.sql:/docker-entrypoint-initdb.d/01-entities.sql
       - ../core/schema/migrations/2026_04_30_person_bio_fields.sql:/docker-entrypoint-initdb.d/02-person-bio-fields.sql
       - ../core/schema/jurisdiction.sql:/docker-entrypoint-initdb.d/03-jurisdiction.sql

@@ -65,9 +65,12 @@ def _build_nc_ie_filing(
     *,
     committee_id: UUID,
     source_record_id: UUID,
+    data_source_id: UUID,
 ) -> Filing:
     return Filing(
         filing_fec_id=_build_nc_ie_filing_fec_id(row),
+        data_source_id=data_source_id,
+        native_filing_id=_build_nc_ie_filing_fec_id(row),
         committee_id=committee_id,
         report_type=normalize_optional_text(row.get("Doc Type")),
         amendment_indicator=to_amendment_indicator(row.get("Amend")),
@@ -97,12 +100,14 @@ def _load_nc_ie_document_index_row(
     committee_id = resolve_nc_committee_bridge(
         conn,
         committee_sboe_id,
+        data_source_id=data_source_id,
         committee_name=row.get("Committee Name"),
     )
     filing = _build_nc_ie_filing(
         row,
         committee_id=committee_id,
         source_record_id=source_record_id,
+        data_source_id=data_source_id,
     )
     upsert_filing(conn, filing)
     if report_section_url:

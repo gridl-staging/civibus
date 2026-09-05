@@ -11,9 +11,34 @@
     heading: string;
     summary: string;
     description: string;
+    displayMessage?: string;
+    showSearchRecovery?: false;
   };
 
   function getErrorRouteCopy(statusCode: number): ErrorRouteCopy {
+    if (statusCode === 401) {
+      return {
+        title: 'Data service authentication failed',
+        heading: 'Data service authentication failed',
+        summary: 'Civibus could not authenticate with its data service.',
+        description:
+          'Civibus could not load this page because it could not authenticate with its data service.',
+        displayMessage: 'This is a Civibus service problem, not an issue with your request.',
+        showSearchRecovery: false
+      };
+    }
+
+    if (statusCode === 429) {
+      return {
+        title: 'Requests temporarily limited',
+        heading: 'Requests temporarily limited',
+        summary: 'Civibus cannot load this page right now because requests are temporarily limited.',
+        description:
+          'Civibus is temporarily limiting requests. Please wait a moment, then try this page again.',
+        displayMessage: 'Please wait a moment, then try this page again.'
+      };
+    }
+
     if (statusCode === 404) {
       return {
         title: 'Page not found',
@@ -67,7 +92,7 @@
 
   $: resolvedStatus = resolveStatusCode(status, $page.status);
   $: statusCopy = getErrorRouteCopy(resolvedStatus);
-  $: displayMessage = getApiErrorDisplayMessage(error);
+  $: displayMessage = statusCopy.displayMessage ?? getApiErrorDisplayMessage(error);
 </script>
 
 <svelte:head>
@@ -82,9 +107,15 @@
   <p class="error__status">HTTP {resolvedStatus}</p>
   <p>{displayMessage}</p>
   <p class="error__actions">
-    <a href="/">Return home</a>
-    <span aria-hidden="true">&middot;</span>
-    <a href="/search">Go to search</a>
+    {#if resolvedStatus === 429}
+      <a href={$page.url.search || '?'} data-sveltekit-reload>Try this page again</a>
+    {:else}
+      <a href="/">Return home</a>
+      {#if statusCopy.showSearchRecovery !== false}
+        <span aria-hidden="true">&middot;</span>
+        <a href="/search">Go to search</a>
+      {/if}
+    {/if}
   </p>
 </section>
 

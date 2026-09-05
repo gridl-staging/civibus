@@ -1,9 +1,17 @@
 <script lang="ts">
-  import { formatCandidatePublicName } from "$lib/campaign-finance-detail/presentation";
+  import { env } from "$env/dynamic/public";
+  import { page } from "$app/stores";
+  import Breadcrumb from "$lib/breadcrumb/Breadcrumb.svelte";
   import type { MapLayerVisibility } from "$lib/config/app";
-  import TrustSection from "$lib/detail-trust/TrustSection.svelte";
   import LayerToggle, { type LayerToggleChangeDetail } from "$lib/region-map/LayerToggle.svelte";
   import RegionMap from "$lib/region-map/RegionMap.svelte";
+  import {
+    buildRegionalBreadcrumbs,
+    buildRegionalRouteMetadata
+  } from "$lib/regional-navigation/presentation";
+  import SeoHead from "$lib/seo/SeoHead.svelte";
+  import { buildDetailRouteSeo } from "$lib/seo/head";
+  import { buildBreadcrumbJsonLd, removeJsonLdContext, type JsonLdObject } from "$lib/seo/jsonld";
   import type { PageData } from "./$types";
 
   export let data: PageData;
@@ -18,82 +26,64 @@
     };
   }
 
-  function formatUsdFromCents(cents: number): string {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      maximumFractionDigits: 2
-    }).format(cents / 100);
-  }
+  $: regionalMetadata = buildRegionalRouteMetadata(data.navigationNode);
+  $: regionalSeo = buildDetailRouteSeo({
+    metadata: regionalMetadata,
+    ogType: "website",
+    schemaType: "AdministrativeArea",
+    name: data.countyName,
+    pageUrl: $page.url,
+    publicOrigin: env.PUBLIC_ORIGIN,
+    robots: regionalMetadata.robots
+  });
+  $: breadcrumbCrumbs = buildRegionalBreadcrumbs(data.navigationNode);
+  $: regionalJsonLd = {
+    "@context": "https://schema.org",
+    "@graph": [
+      removeJsonLdContext(regionalSeo.jsonLd),
+      buildBreadcrumbJsonLd({ crumbs: breadcrumbCrumbs, publicOrigin: env.PUBLIC_ORIGIN })
+    ]
+  } as JsonLdObject;
 </script>
 
-<section class="card county-map-page" aria-label="County campaign finance detail">
-  <h2>{data.countyName} County, {data.stateCode}</h2>
-  <p class="county-map-page__summary">
-    Committee-city proxy outflow totals with county boundary and congressional district overlays.
-  </p>
+<SeoHead headModel={regionalSeo.headModel} jsonLd={regionalJsonLd} />
+<Breadcrumb crumbs={breadcrumbCrumbs} />
 
-  <LayerToggle pageLevel={data.pageLevel} {layerVisibility} on:change={handleLayerToggle} />
+<section class="card county-map-page" aria-label={`County navigation for ${data.countyName}`}>
+  <h2>{data.countyName}</h2>
+  <p><strong>County</strong> in <a href={`/state/${data.stateCode}`}>{data.navigationNode.state_name}</a></p>
 
-  <RegionMap pageLevel={data.pageLevel} {layerVisibility} geometryByLevel={data.geometryByLevel} />
-
-  <section class="county-map-page__panels" aria-label="County campaign finance summaries">
-    <article class="county-map-page__panel">
-      <h3>Donor total</h3>
-      <p class="county-map-page__value">{formatUsdFromCents(data.donor_total_cents)}</p>
-      <p class="county-map-page__meta">{data.transaction_count} qualifying transactions</p>
-    </article>
-
-    <article class="county-map-page__panel">
-      <h3>Top recipient committees</h3>
-      {#if data.top_recipient_committees.length === 0}
-        <p>No qualifying recipients for this county proxy mapping.</p>
-      {:else}
-        <ul>
-          {#each data.top_recipient_committees as committee (committee.committee_id)}
-            <li>
-              <strong>{committee.committee_name}</strong>
-              <span> {formatUsdFromCents(committee.donor_total_cents)} ({committee.transaction_count} txns)</span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </article>
-
-    <article class="county-map-page__panel">
-      <h3>Top linked candidates</h3>
-      {#if data.top_linked_candidates.length === 0}
-        <p>No active linked candidates for this county proxy mapping.</p>
-      {:else}
-        <ul>
-          {#each data.top_linked_candidates as candidate (candidate.candidate_id)}
-            <li>
-              <strong
-                >{formatCandidatePublicName({
-                  name: candidate.candidate_name,
-                  // The county fetcher has a compile-time response type but no
-                  // runtime validator. Only a literal boolean true may promote
-                  // the filed string into a formatted public identity.
-                  identity_is_safe: candidate.identity_is_safe === true
-                })}</strong
-              >
-              <span> {formatUsdFromCents(candidate.donor_total_cents)} ({candidate.transaction_count} txns)</span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </article>
+  <section class="county-map-page__panel" aria-labelledby="county-finance-status">
+    <h3 id="county-finance-status">Campaign finance unavailable</h3>
+    <p>{data.navigationNode.finance.reason}</p>
   </section>
 
-  <TrustSection trustSection={data.trustSection} />
+  {#if !data.hasCountyGeometry}
+    <p role="status">County boundary geometry is unavailable; this does not change the explicit finance refusal.</p>
+  {/if}
+  <LayerToggle pageLevel={data.pageLevel} {layerVisibility} on:change={handleLayerToggle} />
+  <RegionMap
+    pageLevel={data.pageLevel}
+    stateCode={data.stateCode}
+    {layerVisibility}
+    geometryByLevel={data.geometryByLevel}
+  />
+
+  {#if data.navigationNode.proxy_analysis}
+    <section class="county-map-page__panels" aria-labelledby="county-proxy-heading">
+      <article class="county-map-page__panel">
+        <h3 id="county-proxy-heading">Ordinary-locality proxy control</h3>
+        <p><strong>Committee-city proxy</strong></p>
+        <h4>{data.navigationNode.proxy_analysis.label}</h4>
+        <p>{data.navigationNode.proxy_analysis.scope_label}</p>
+        <p>This proxy excludes {data.navigationNode.proxy_analysis.excludes.join(", ")} and is not combined with state or county-wide totals.</p>
+        <p>No aggregate-complete, source-record-backed proxy result is available.</p>
+      </article>
+    </section>
+  {/if}
 </section>
 
 <style>
-  .county-map-page__summary {
-    margin-top: 0;
-    color: var(--text-secondary, #44515e);
-  }
-
   .county-map-page__panels {
     display: grid;
     gap: 0.8rem;
@@ -103,17 +93,12 @@
   .county-map-page__panel {
     border: 1px solid var(--border-subtle, #d6dee6);
     border-radius: 0.5rem;
+    margin: 1rem 0;
     padding: 0.8rem 1rem;
   }
 
-  .county-map-page__value {
-    font-size: 1.2rem;
-    font-weight: 700;
-    margin: 0.2rem 0;
+  .county-map-page__panel h4 {
+    margin-bottom: 0.3rem;
   }
 
-  .county-map-page__meta {
-    margin: 0;
-    color: var(--text-secondary, #44515e);
-  }
 </style>

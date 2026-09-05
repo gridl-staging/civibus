@@ -193,14 +193,14 @@ test.describe("donor lookup smoke (live mode)", () => {
       ).toBeVisible();
 
       await makeLiveDonorLookupFingerprintIncompatible();
-      await page.goto("/donors?q=williams&by=name");
+      const unavailableResponse = await page.goto("/donors?q=williams&by=name");
 
-      await expect(page.getByTestId("donor-search-status")).toHaveText(
+      expect(unavailableResponse?.status()).toBe(503);
+      await expect(page.getByRole("heading", { name: "Service temporarily unavailable" })).toBeVisible();
+      await expect(page.getByText("HTTP 503")).toBeVisible();
+      await expect(page.getByText(
         "Donor search is temporarily unavailable while contribution data is refreshed."
-      );
-      await expect(page.getByTestId("donor-result-row")).toHaveCount(0);
-      await expect(page.getByText("No donors match this search.")).toHaveCount(0);
-      await expect(page.getByTestId("donor-freshness-stamp")).toHaveCount(0);
+      )).toBeVisible();
 
       await cleanup();
       await page.reload();

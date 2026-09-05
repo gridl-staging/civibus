@@ -31,7 +31,7 @@ def _registry_row(
         "jurisdiction_type": "state",
         "best_update_frequency": "daily",
         "best_last_verified_working": None,
-        "covers_sub_jurisdictions": False,
+        "covers_sub_jurisdictions": True,
         "source_count": 1,
         "source_names": ["Source"],
         "runner_wired": True,
@@ -217,6 +217,23 @@ def test_missing_target_registry_row_refuses_naming_coverage_registry() -> None:
     )
 
 
+def test_state_scope_does_not_synthesize_county_coverage_lineage() -> None:
+    registry = _registry(_registry_row("NC", "North Carolina", covers_sub_jurisdictions=True))
+    lifecycle = _lifecycle(_lifecycle_row("NC", "North Carolina"))
+
+    result = resolve_region_owners(
+        "NC_DURHAM_COUNTY",
+        coverage_registry=registry,
+        lifecycle_registry=lifecycle,
+    )
+
+    assert result == Refusal(
+        scope="NC_DURHAM_COUNTY",
+        reason="no coverage-registry row for 'NC_DURHAM_COUNTY'",
+        canonical_owner="coverage-registry",
+    )
+
+
 def test_covered_by_parent_missing_parent_registry_row_refuses() -> None:
     child = _registry_row(
         "SF",
@@ -233,11 +250,65 @@ def test_covered_by_parent_missing_parent_registry_row_refuses() -> None:
     assert isinstance(result, Refusal)
     assert result == Refusal(
         scope="SF",
-        reason=(
-            "covered_by_parent 'SF' has no resolvable parent coverage-registry row for parent_jurisdiction_code 'CA'"
-        ),
+        reason="municipality 'SF' has no coverage-registry parent 'CA'",
         canonical_owner="coverage-registry",
     )
+
+
+def test_covered_by_parent_refuses_parent_without_sub_jurisdiction_scope() -> None:
+    child = _registry_row(
+        "SF",
+        "San Francisco",
+        jurisdiction_type="municipality",
+        municipal_audit_decision="covered_by_parent",
+        parent_jurisdiction_code="CA",
+    )
+    parent = _registry_row("CA", "California", covers_sub_jurisdictions=False)
+
+    result = resolve_region_owners(
+        "SF",
+        coverage_registry=_registry(child, parent),
+        lifecycle_registry=_lifecycle(_lifecycle_row("CA", "California")),
+    )
+
+    assert result == Refusal(
+        scope="SF",
+        reason=("covered_by_parent municipality 'SF' names parent 'CA' with covers_sub_jurisdictions=false"),
+        canonical_owner="coverage-registry",
+    )
+
+
+def test_independent_target_refuses_missing_or_non_state_parent_context() -> None:
+    child = _registry_row(
+        "LA",
+        "Los Angeles",
+        jurisdiction_type="municipality",
+        municipal_audit_decision="independent_target",
+        parent_jurisdiction_code="CA",
+    )
+    municipal_parent = _registry_row(
+        "CA",
+        "Wrong local parent",
+        jurisdiction_type="municipality",
+        municipal_audit_decision="independent_target",
+        parent_jurisdiction_code="NY",
+    )
+
+    missing = resolve_region_owners(
+        "LA",
+        coverage_registry=_registry(child),
+        lifecycle_registry=_lifecycle(_lifecycle_row("LA", "Los Angeles")),
+    )
+    wrong_kind = resolve_region_owners(
+        "LA",
+        coverage_registry=_registry(child, municipal_parent),
+        lifecycle_registry=_lifecycle(_lifecycle_row("LA", "Los Angeles")),
+    )
+
+    assert isinstance(missing, Refusal)
+    assert "no coverage-registry parent" in missing.reason
+    assert isinstance(wrong_kind, Refusal)
+    assert "must be a state" in wrong_kind.reason
 
 
 def test_covered_by_parent_parent_that_is_itself_covered_by_parent_refuses() -> None:
@@ -476,6 +547,11 @@ def test_registry_only_selection_covered_by_parent_inherits_parent_without_any_l
     assert selection.identity_registry_row is child
     assert selection.status_registry_row is parent
 
+    reparsed = RegistryBranchSelection.model_validate_json(selection.model_dump_json())
+    assert reparsed.identity_registry_row.jurisdiction_code == "SF"
+    assert reparsed.status_registry_row.jurisdiction_code == "CA"
+    assert reparsed.status_origin == "inherited"
+
 
 def test_registry_only_selection_missing_row_refuses_naming_coverage_registry() -> None:
     index = build_region_owner_index(_registry(_registry_row("CA", "California")), _lifecycle())
@@ -503,9 +579,7 @@ def test_registry_only_selection_missing_parent_refuses_naming_coverage_registry
 
     assert result == Refusal(
         scope="SF",
-        reason=(
-            "covered_by_parent 'SF' has no resolvable parent coverage-registry row for parent_jurisdiction_code 'CA'"
-        ),
+        reason="municipality 'SF' has no coverage-registry parent 'CA'",
         canonical_owner="coverage-registry",
     )
 
@@ -524,9 +598,7 @@ def test_registry_only_selection_self_inheriting_parent_refuses_naming_coverage_
 
     assert result == Refusal(
         scope="SF",
-        reason=(
-            "covered_by_parent 'SF' resolves to parent 'SF' which is itself covered_by_parent and is not a status owner"
-        ),
+        reason="municipality 'SF' parent 'SF' must be a state, found municipality",
         canonical_owner="coverage-registry",
     )
 

@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "svelte/server";
 import type { CandidateListItem } from "$lib/campaign-finance-detail/contract";
 
+type NavigatingValue = null | {
+  from: { url: URL } | null;
+  to: { url: URL } | null;
+};
+
 // The candidates route reads PUBLIC_ORIGIN for canonical/OG head tags.
 vi.mock("$env/dynamic/public", () => ({
   env: {
@@ -12,7 +17,8 @@ vi.mock("$env/dynamic/public", () => ({
 // URL query params are the source of truth for filters and sort, so the page
 // store URL is the input under test for control state and link building.
 const mockPageStore = vi.hoisted(() => ({
-  url: new URL("https://civibus.test/candidates")
+  url: new URL("https://civibus.test/candidates"),
+  navigating: null as NavigatingValue
 }));
 
 vi.mock("$app/stores", () => ({
@@ -23,8 +29,8 @@ vi.mock("$app/stores", () => ({
     }
   },
   navigating: {
-    subscribe(run: (value: null) => void): () => void {
-      run(null);
+    subscribe(run: (value: NavigatingValue) => void): () => void {
+      run(mockPageStore.navigating);
       return () => {};
     }
   }
@@ -61,7 +67,8 @@ const FUNDED_CANDIDATE: CandidateListItem = {
   slug_is_unique: true,
   identity_is_safe: true,
   has_official_total: true,
-  total_receipts: "1234.56"
+  total_receipts: "1234.56",
+  summary_coverage_end_date: "2026-03-31"
 };
 
 const UNFUNDED_CANDIDATE: CandidateListItem = {
@@ -76,7 +83,8 @@ const UNFUNDED_CANDIDATE: CandidateListItem = {
   slug_is_unique: true,
   identity_is_safe: true,
   has_official_total: false,
-  total_receipts: null
+  total_receipts: null,
+  summary_coverage_end_date: null
 };
 
 const LOADED_ZERO_CANDIDATE: CandidateListItem = {
@@ -91,7 +99,26 @@ const LOADED_ZERO_CANDIDATE: CandidateListItem = {
   slug_is_unique: true,
   has_official_total: true,
   identity_is_safe: true,
-  total_receipts: "0.00"
+  total_receipts: "0.00",
+  summary_coverage_end_date: "2024-12-31"
+};
+
+const EQUAL_TOTAL_OLDER_PERIOD_CANDIDATE: CandidateListItem = {
+  ...FUNDED_CANDIDATE,
+  id: "55555555-5555-4555-8555-555555555555",
+  fec_candidate_id: "H0NC01005",
+  name: "Older Period Candidate",
+  slug: "older-period-candidate",
+  summary_coverage_end_date: "2024-12-31"
+};
+
+const FUNDED_UNKNOWN_PERIOD_CANDIDATE: CandidateListItem = {
+  ...FUNDED_CANDIDATE,
+  id: "44444444-4444-4444-8444-444444444444",
+  fec_candidate_id: "H0NC01004",
+  name: "Unknown Period Candidate",
+  slug: "unknown-period-candidate",
+  summary_coverage_end_date: null
 };
 
 function buildPageData(items: CandidateListItem[], overrides: Record<string, unknown> = {}) {
@@ -103,6 +130,10 @@ function buildPageData(items: CandidateListItem[], overrides: Record<string, unk
     ...overrides
   };
 }
+
+beforeEach(() => {
+  mockPageStore.navigating = null;
+});
 
 describe("/candidates +page.svelte money column", () => {
   beforeEach(() => {
@@ -117,6 +148,7 @@ describe("/candidates +page.svelte money column", () => {
 
     expect(row).toContain("Total raised");
     expect(row).toContain("$1,234.56");
+    expect(row).toContain("Official FEC summary through 2026-03-31");
   });
 
   it("renders unknown copy and no dollar figure for a candidate with no loaded total", () => {
@@ -131,6 +163,8 @@ describe("/candidates +page.svelte money column", () => {
     expect(row).not.toContain("$0.00");
     expect(row).not.toContain("$0");
     expect(row).not.toContain("$");
+    expect(row).not.toContain("Official FEC summary through");
+    expect(row).not.toContain("Official FEC summary coverage end not available");
   });
 
   it("still renders an explicit $0.00 when the official total is a loaded zero", () => {
@@ -153,6 +187,31 @@ describe("/candidates +page.svelte money column", () => {
     expect(rows[0]).toContain("$1,234.56");
     expect(rows[1]).toContain("Not available");
     expect(rows[1]).not.toContain("$");
+  });
+
+  it("renders candidate-specific dates when comparable amounts cover different periods", () => {
+    const rendered = render(CandidatesPage, {
+      props: { data: buildPageData([FUNDED_CANDIDATE, EQUAL_TOTAL_OLDER_PERIOD_CANDIDATE]) }
+    });
+    const rows = extractResultRows(rendered.body);
+
+    expect(rows[0]).toContain("$1,234.56");
+    expect(rows[1]).toContain("$1,234.56");
+    expect(rows[0]).toContain("Official FEC summary through 2026-03-31");
+    expect(rows[0]).not.toContain("2024-12-31");
+    expect(rows[1]).toContain("Official FEC summary through 2024-12-31");
+    expect(rows[1]).not.toContain("2026-03-31");
+  });
+
+  it("states when a loaded amount has no summary coverage-end precision", () => {
+    const rendered = render(CandidatesPage, {
+      props: { data: buildPageData([FUNDED_UNKNOWN_PERIOD_CANDIDATE]) }
+    });
+    const [row] = extractResultRows(rendered.body);
+
+    expect(row).toContain("$1,234.56");
+    expect(row).toContain("Official FEC summary coverage end not available");
+    expect(row).not.toContain("Official FEC summary through");
   });
 });
 
@@ -263,11 +322,51 @@ describe("/candidates +page.svelte name filter", () => {
     // state.
     setPageUrl("/candidates?name=zzznomatch");
     const rendered = render(CandidatesPage, {
-      props: { data: buildPageData([]) }
+      props: { data: buildPageData([], { offset: 0, has_next: false }) }
     });
 
     expect(rendered.body).toContain("No candidates found for the selected filters.");
     expect(rendered.body).toContain('id="candidate-filter-name"');
     expect(rendered.body).toContain('value="zzznomatch"');
+  });
+});
+
+describe("/candidates +page.svelte empty-page truthfulness", () => {
+  it("keeps empty positive-offset copy page-local and preserves Previous", () => {
+    setPageUrl("/candidates?name=zzznomatch&state=GA&offset=5000&limit=25");
+    const rendered = render(CandidatesPage, {
+      props: { data: buildPageData([], { offset: 5000, limit: 25, has_next: false }) }
+    });
+
+    expect(rendered.body).toContain("No candidates on this page.");
+    expect(rendered.body).not.toContain("No candidates found for the selected filters.");
+    expect(rendered.body).toContain(
+      'href="/candidates?name=zzznomatch&amp;state=GA&amp;sort=name&amp;offset=4975&amp;limit=25">Previous</a>'
+    );
+    expect(rendered.body).not.toContain(">Next</a>");
+  });
+});
+
+describe("/candidates +page.svelte pagination loading state", () => {
+  it("replaces stale rows with an accessible busy state during offset navigation", () => {
+    setPageUrl("/candidates?offset=0&limit=25");
+    mockPageStore.navigating = {
+      from: { url: new URL("https://civibus.test/candidates?offset=0&limit=25") },
+      to: { url: new URL("https://civibus.test/candidates?offset=25&limit=25") }
+    };
+
+    const rendered = render(CandidatesPage, {
+      props: {
+        data: buildPageData([FUNDED_CANDIDATE], { offset: 0 })
+      }
+    });
+
+    expect(rendered.body).toContain("Updating results…");
+    expect(rendered.body).toContain('role="status"');
+    expect(rendered.body).toContain('aria-live="polite"');
+    expect(rendered.body).toContain('aria-label="Candidate results loading"');
+    expect(rendered.body).toContain('aria-busy="true"');
+    expect(rendered.body).not.toContain('data-testid="candidate-result-row"');
+    expect(rendered.body).not.toContain('aria-label="Candidates pagination"');
   });
 });

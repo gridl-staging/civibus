@@ -21,8 +21,7 @@ from core.db import (
 )
 from core.types.python.models import Organization, compute_record_hash, utc_now
 from domains.campaign_finance.ingest.filing_loader import (
-    ensure_state_committee,
-    generate_synthetic_committee_id,
+    ensure_authority_committee,
     resolve_transaction_counterparty_ids,
     upsert_filing,
     upsert_transaction,
@@ -207,24 +206,26 @@ def _select_nc_committee_id_by_native_sboe_id(
     conn: psycopg.Connection,
     *,
     committee_sboe_id: str,
+    data_source_id: UUID,
 ) -> UUID | None:
     """Return existing NC committee id for a native SBoE id; do not create rows."""
-    synthetic_fec_committee_id = generate_synthetic_committee_id("NC", committee_sboe_id)
     with conn.cursor() as cursor:
         cursor.execute(
             """
             SELECT id
             FROM cf.committee
-            WHERE state = 'NC'
-              AND fec_committee_id = %s
-            LIMIT 1
+            WHERE data_source_id = %s
+              AND native_committee_id = %s
+            ORDER BY id
             """,
-            (synthetic_fec_committee_id,),
+            (data_source_id, committee_sboe_id),
         )
-        match = cursor.fetchone()
-    if match is None:
+        matches = cursor.fetchall()
+    if not matches:
         return None
-    return match[0]
+    if len(matches) > 1:
+        raise ValueError(f"NC committee native key {committee_sboe_id!r} is ambiguous in source {data_source_id}")
+    return matches[0][0]
 
 
 def _build_load_result(
@@ -251,10 +252,20 @@ def _build_transaction_row_load_config(data_source_id: UUID) -> _NCRowLoadConfig
     )
 
 
-def _resolve_nc_committee_id(conn: psycopg.Connection, committee: Organization) -> UUID:
+def _resolve_nc_committee_id(
+    conn: psycopg.Connection,
+    committee: Organization,
+    *,
+    data_source_id: UUID,
+) -> UUID:
     committee_id = committee.identifiers.get("nc_sboe_id")
     if committee_id:
-        existing_org_id = find_organization_by_identifier(conn, "nc_sboe_id", committee_id)
+        existing_org_id = find_organization_by_identifier(
+            conn,
+            "nc_sboe_id",
+            committee_id,
+            data_source_id=data_source_id,
+        )
         if existing_org_id is not None:
             return existing_org_id
 
@@ -264,6 +275,7 @@ def _resolve_nc_committee_id(conn: psycopg.Connection, committee: Organization) 
 def _load_nc_transaction_entities(
     conn: psycopg.Connection,
     source_record_id: UUID,
+    data_source_id: UUID,
     entities: _NCTransactionEntities,
 ) -> None:
     address_id = None
@@ -278,7 +290,12 @@ def _load_nc_transaction_entities(
             address_id=None,
         )
 
-    person_id = resolve_person_by_name_and_zip(conn, entities.person, entities.address)
+    person_id = resolve_person_by_name_and_zip(
+        conn,
+        entities.person,
+        entities.address,
+        data_source_id=data_source_id,
+    )
     if person_id is not None:
         link_entity_source_and_optional_mailing_address(
             conn,
@@ -289,7 +306,11 @@ def _load_nc_transaction_entities(
             address_id=address_id,
         )
 
-    committee_id = _resolve_nc_committee_id(conn, entities.committee)
+    committee_id = _resolve_nc_committee_id(
+        conn,
+        entities.committee,
+        data_source_id=data_source_id,
+    )
     link_entity_source_and_optional_mailing_address(
         conn,
         entity_type="organization",
@@ -299,7 +320,11 @@ def _load_nc_transaction_entities(
         address_id=None,
     )
 
-    contributor_org_id = resolve_organization_by_canonical_name(conn, entities.contributor_org)
+    contributor_org_id = resolve_organization_by_canonical_name(
+        conn,
+        entities.contributor_org,
+        data_source_id=data_source_id,
+    )
     if contributor_org_id is not None:
         link_entity_source_and_optional_mailing_address(
             conn,
@@ -325,6 +350,7 @@ def load_nc_transaction(
     _load_nc_transaction_entities(
         conn,
         source_record_id=source_record_id,
+        data_source_id=data_source_id,
         entities=_NCTransactionEntities(
             person=extracted["person"],
             contributor_org=extracted["contributor_org"],
@@ -410,9 +436,24 @@ def _resolve_nc_committee_bridge(
     conn: psycopg.Connection,
     committee_sboe_id: str,
     *,
+    data_source_id: UUID | None = None,
     committee_name: str | None = None,
 ) -> UUID:
-    organization_id = find_organization_by_identifier(conn, "nc_sboe_id", committee_sboe_id)
+    if data_source_id is None:
+        data_source_id = ensure_nc_committee_document_data_source(conn)
+    existing_committee_id = _select_nc_committee_id_by_native_sboe_id(
+        conn,
+        committee_sboe_id=committee_sboe_id,
+        data_source_id=data_source_id,
+    )
+    if existing_committee_id is not None:
+        return existing_committee_id
+    organization_id = find_organization_by_identifier(
+        conn,
+        "nc_sboe_id",
+        committee_sboe_id,
+        data_source_id=data_source_id,
+    )
     if organization_id is None:
         if committee_name is None:
             raise ValueError(
@@ -425,9 +466,11 @@ def _resolve_nc_committee_bridge(
                 committee_name=committee_name,
             ),
         )
-    return ensure_state_committee(
+    return ensure_authority_committee(
         conn,
-        state="NC",
+        data_source_id=data_source_id,
+        authority_type="state",
+        authority_code="NC",
         native_committee_id=committee_sboe_id,
         organization_id=organization_id,
     )
@@ -557,6 +600,7 @@ def _bridge_nc_registry_row_to_candidacy(
     conn: psycopg.Connection,
     row: NCCommitteeRegistryRow,
     *,
+    data_source_id: UUID | None = None,
     clear_stale_links: bool,
 ) -> int:
     """Resolve the registry row's committee through the existing NC bridge owner
@@ -569,6 +613,7 @@ def _bridge_nc_registry_row_to_candidacy(
     committee_id = _resolve_nc_committee_bridge(
         conn,
         row.sboe_id,
+        data_source_id=data_source_id,
         committee_name=row.committee_name,
     )
     keep_candidacy_id = (
@@ -601,9 +646,12 @@ def build_nc_filing(
     *,
     committee_id: UUID,
     source_record_id: UUID,
+    data_source_id: UUID,
 ) -> Filing:
     return Filing(
         filing_fec_id=_build_nc_filing_fec_id(row),
+        data_source_id=data_source_id,
+        native_filing_id=_build_nc_filing_fec_id(row),
         committee_id=committee_id,
         report_type=_normalize_optional_text(row.get("Doc Type")),
         amendment_indicator=_to_amendment_indicator(row.get("Amend")),
@@ -720,6 +768,7 @@ def _upsert_committee_document_filing(
     committee_id = _resolve_nc_committee_bridge(
         conn,
         committee_sboe_id,
+        data_source_id=committee_document_data_source_id,
         committee_name=row.get("Committee Name"),
     )
     existing_entry = filing_lookup.get(lookup_key)
@@ -728,6 +777,7 @@ def _upsert_committee_document_filing(
         row,
         committee_id=committee_id,
         source_record_id=filing_source_record_id,
+        data_source_id=committee_document_data_source_id,
     )
     filing_id = upsert_filing(conn, filing)
     entry = _select_nc_filing_lookup_entry(
@@ -851,6 +901,7 @@ def load_nc_committee_registry_rows(
                 prior_committee_id = _select_nc_committee_id_by_native_sboe_id(
                     conn,
                     committee_sboe_id=previous_sboe_id,
+                    data_source_id=committee_document_data_source_id,
                 )
                 if prior_committee_id is not None:
                     _clear_stale_nc_candidacy_committee_links(
@@ -867,6 +918,7 @@ def load_nc_committee_registry_rows(
             _bridge_nc_registry_row_to_candidacy(
                 conn,
                 row,
+                data_source_id=committee_document_data_source_id,
                 clear_stale_links=candidate_name_changed,
             )
         if inserted:
@@ -930,12 +982,7 @@ def _upsert_transaction_with_filing_lookup(
             f"(SBoE ID={committee_sboe_id!r}, report_key={report_key!r})"
         )
 
-    committee_id = _resolve_nc_committee_bridge(conn, committee_sboe_id)
-    if committee_id != filing_entry.committee_id:
-        raise ValueError(
-            "NC filing join resolved mismatched committee IDs: "
-            f"transaction committee_id={committee_id}, filing committee_id={filing_entry.committee_id}"
-        )
+    committee_id = filing_entry.committee_id
 
     contributor_person_id, contributor_organization_id = resolve_transaction_counterparty_ids(
         conn,
@@ -951,6 +998,8 @@ def _upsert_transaction_with_filing_lookup(
         Transaction(
             filing_id=filing_entry.filing_id,
             committee_id=committee_id,
+            data_source_id=transaction_data_source_id,
+            native_transaction_id=source_record_key,
             transaction_type=_require_text(row.get("Transction Type"), "Transction Type"),
             transaction_identifier=source_record_key,
             transaction_date=_parse_optional_date(row.get("Date Occured")),

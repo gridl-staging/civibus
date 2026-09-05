@@ -21,3 +21,6 @@ docs/
 tests/
 eval/
 infra/scripts/backups/
+# Transport archives are validated and expanded by the deploy owner outside
+# the repository root. A stray raw archive must never enter the image context.
+authority-promotion-bundle.tar

@@ -95,8 +95,9 @@ class TestStage4StreamingLoop:
             *,
             committee_id: object | None = None,
             source_record_id: object,
+            data_source_id: object | None = None,
         ) -> SimpleNamespace:
-            del conn
+            del conn, data_source_id
             recorder.filing_builds.append(
                 (
                     str(contribution_record["sub_id"]),
@@ -117,13 +118,6 @@ class TestStage4StreamingLoop:
 
         monkeypatch.setattr(bulk_stage4_loader, "_insert_stage4_provenance_only", _insert_provenance)
         monkeypatch.setattr(bulk_stage4_loader, "try_insert_source_records_bulk", _insert_provenance_bulk)
-        monkeypatch.setattr(
-            bulk_stage4_loader,
-            "resolve_source_record_ids",
-            lambda conn, data_source_id, source_record_keys: {
-                source_record_key: source_record_ids[source_record_key] for source_record_key in source_record_keys
-            },
-        )
         monkeypatch.setattr(bulk_stage4_loader, "build_filing_from_contribution", _build_filing)
         monkeypatch.setattr(bulk_stage4_loader, "upsert_filings_bulk", _upsert_filings_bulk)
         TestStage4StreamingLoop._install_stage4_batch_transaction_recorders(
@@ -147,10 +141,11 @@ class TestStage4StreamingLoop:
             filing_id: object,
             committee_id: object,
             source_record_id: object,
+            data_source_id: object | None = None,
             resolve_counterparty: bool = True,
             recipient_committee_id_by_fec_id: object = None,
         ) -> SimpleNamespace:
-            del conn, resolve_counterparty, recipient_committee_id_by_fec_id
+            del conn, data_source_id, resolve_counterparty, recipient_committee_id_by_fec_id
             recorder.transaction_builds.append(
                 (
                     str(contribution_record["sub_id"]),
@@ -1126,11 +1121,6 @@ class TestStage4StreamingLoop:
         )
         monkeypatch.setattr(
             bulk_stage4_loader,
-            "resolve_source_record_ids",
-            lambda *args, **kwargs: {"SUB-1": uuid4()},
-        )
-        monkeypatch.setattr(
-            bulk_stage4_loader,
             "build_filing_from_contribution",
             lambda conn, contribution_record, **kwargs: SimpleNamespace(
                 committee_id=uuid4(),
@@ -1204,7 +1194,7 @@ class TestStage4StreamingLoop:
         monkeypatch.setattr(
             bulk_stage4_loader,
             "find_committee_ids_by_fec_ids",
-            lambda conn, committee_fec_ids: (
+            lambda conn, committee_fec_ids, **_kwargs: (
                 committee_lookup_calls.append(list(committee_fec_ids)) or {"C00000001": committee_id}
             ),
         )
@@ -1287,7 +1277,7 @@ class TestStage4StreamingLoop:
         monkeypatch.setattr(
             bulk_stage4_loader,
             "find_committee_ids_by_fec_ids",
-            lambda conn, committee_fec_ids: {"C00000001": committee_id},
+            lambda conn, committee_fec_ids, **_kwargs: {"C00000001": committee_id},
         )
         recorder = self._install_stage4_batch_pipeline_recorders(
             monkeypatch,
@@ -1361,7 +1351,7 @@ class TestStage4StreamingLoop:
         monkeypatch.setattr(
             bulk_stage4_loader,
             "find_committee_ids_by_fec_ids",
-            lambda conn, committee_fec_ids: (
+            lambda conn, committee_fec_ids, **_kwargs: (
                 committee_lookup_calls.append(list(committee_fec_ids)) or {row["CMTE_ID"]: uuid4() for row in rows}
             ),
         )
@@ -1497,14 +1487,6 @@ class TestStage4StreamingLoop:
         monkeypatch.setattr(bulk_stage4_loader, "try_insert_source_records_bulk", _insert_provenance_bulk)
         monkeypatch.setattr(
             bulk_stage4_loader,
-            "resolve_source_record_ids",
-            lambda conn, data_source_id, source_record_keys: {
-                source_record_key: source_record_ids[(str(data_source_id), source_record_key)]
-                for source_record_key in source_record_keys
-            },
-        )
-        monkeypatch.setattr(
-            bulk_stage4_loader,
             "build_filing_from_contribution",
             lambda conn, contribution_record, **kwargs: SimpleNamespace(
                 committee_id=uuid4(),
@@ -1580,7 +1562,7 @@ class TestStage4StreamingLoop:
         monkeypatch.setattr(
             bulk_stage4_loader,
             "find_committee_ids_by_fec_ids",
-            lambda conn, committee_fec_ids: {"C00000001": committee_id},
+            lambda conn, committee_fec_ids, **_kwargs: {"C00000001": committee_id},
         )
         monkeypatch.setattr(
             bulk_stage4_loader,
@@ -1590,11 +1572,6 @@ class TestStage4StreamingLoop:
                 or SimpleNamespace(source_record_id=shared_source_record_id, inserted=inserted)
                 for inserted in (True, False)
             ],
-        )
-        monkeypatch.setattr(
-            bulk_stage4_loader,
-            "resolve_source_record_ids",
-            lambda conn, data_source_id, source_record_keys: {"SUB-1": shared_source_record_id},
         )
         monkeypatch.setattr(
             bulk_stage4_loader,
@@ -1656,7 +1633,7 @@ class TestStage4StreamingLoop:
         monkeypatch.setattr(
             bulk_stage4_loader,
             "find_committee_ids_by_fec_ids",
-            lambda conn, committee_fec_ids: (
+            lambda conn, committee_fec_ids, **_kwargs: (
                 committee_lookup_calls.extend(list(committee_fec_ids))
                 or {
                     "C00000001": uuid4(),
@@ -1683,13 +1660,6 @@ class TestStage4StreamingLoop:
                 or SimpleNamespace(source_record_id=uuid4(), inserted=True)
                 for source_record in source_records
             ],
-        )
-        monkeypatch.setattr(
-            bulk_stage4_loader,
-            "resolve_source_record_ids",
-            lambda conn, data_source_id, source_record_keys: {
-                source_record_key: uuid4() for source_record_key in source_record_keys
-            },
         )
         monkeypatch.setattr(
             bulk_stage4_loader,
@@ -1815,7 +1785,7 @@ class TestStage4StreamingLoop:
         monkeypatch.setattr(
             bulk_stage4_loader,
             "find_committee_ids_by_fec_ids",
-            lambda conn, committee_fec_ids: {"C00000002": committee_id},
+            lambda conn, committee_fec_ids, **_kwargs: {"C00000002": committee_id},
         )
         recorder = self._install_stage4_batch_pipeline_recorders(
             monkeypatch,
@@ -2203,7 +2173,7 @@ class TestStage4StreamingLoop:
         monkeypatch.setattr(
             bulk_stage4_loader,
             "find_committee_ids_by_fec_ids",
-            lambda conn, committee_fec_ids: {row["CMTE_ID"]: uuid4() for row in rows},
+            lambda conn, committee_fec_ids, **_kwargs: {row["CMTE_ID"]: uuid4() for row in rows},
         )
         self._install_stage4_batch_pipeline_recorders(
             monkeypatch,

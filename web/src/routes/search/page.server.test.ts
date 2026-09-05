@@ -1,14 +1,27 @@
 import { ApiResponseError } from '$lib/server/api/client';
+import { buildWashingtonNode } from '$lib/regional-navigation/test-fixtures';
 import { buildSearchPagePath } from '$lib/search/contract';
 import { describe, expect, it, vi } from 'vitest';
 import { actions, load } from './+page.server';
 
-function createLoadEvent(url: string, requestJson: ReturnType<typeof vi.fn>) {
+function createLoadEvent(
+  url: string,
+  requestJson: ReturnType<typeof vi.fn<(path: string) => unknown>>,
+  regionalResponse: unknown = {
+    items: [],
+    incomplete_node_kinds: [],
+    has_unsafe_omissions: false
+  }
+) {
+  const navigationAwareRequest = vi.fn(async (path: string) => {
+    if (path.startsWith('/v1/regional-navigation/search?')) return regionalResponse;
+    return requestJson(path);
+  });
   return {
     url: new URL(url),
     locals: {
       api: {
-        requestJson
+        requestJson: navigationAwareRequest
       }
     }
   } as unknown as Parameters<typeof load>[0];
@@ -114,6 +127,89 @@ describe('/search +page.server load', () => {
     expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=org&limit=20');
   });
 
+  it('adds only shared canonical regional results to an unfiltered first page', async () => {
+    const requestJson = vi.fn().mockResolvedValue({ items: [], has_next: false });
+    const regionalResponse = {
+      items: [buildWashingtonNode()],
+      incomplete_node_kinds: ['county', 'municipality'],
+      has_unsafe_omissions: true
+    };
+
+    const data = await load(
+      createLoadEvent(
+        'https://web.civibus.local/search?q=Washington',
+        requestJson,
+        regionalResponse
+      )
+    );
+    if (!data) throw new Error('Expected search page data.');
+
+    expect(data).toMatchObject({
+      results: [],
+      regionalResults: [
+        {
+          kind: 'state',
+          canonical_path: '/state/WA'
+        }
+      ],
+      regionalIncompleteNodeKinds: ['county', 'municipality'],
+      regionalHasUnsafeOmissions: true
+    });
+    expect(data.regionalResults[0].finance_detail?.sources[0]?.name).toBe(
+      'WA PDC Contributions'
+    );
+    expect(data.regionalResults[0].finance_detail?.money[0]).toMatchObject({
+      key: 'contributions',
+      amount: '125.50'
+    });
+    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
+      '/v1/search?q=Washington&limit=20'
+    ]);
+  });
+
+  it('uses the shared regional endpoint without calling legacy search for the Region filter', async () => {
+    const requestJson = vi.fn();
+    const regionalResponse = {
+      items: [],
+      incomplete_node_kinds: ['county', 'municipality'],
+      has_unsafe_omissions: true
+    };
+
+    const data = await load(
+      createLoadEvent(
+        'https://web.civibus.local/search?q=San+Francisco&entity_type=region',
+        requestJson,
+        regionalResponse
+      )
+    );
+
+    expect(data).toMatchObject({
+      query: 'San Francisco',
+      entityType: 'region',
+      results: [],
+      regionalIncompleteNodeKinds: ['county', 'municipality'],
+      regionalHasUnsafeOmissions: true
+    });
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
+  it('canonicalizes Region-filter offsets instead of replaying its only bounded page', async () => {
+    const requestJson = vi.fn();
+
+    await expect(
+      load(
+        createLoadEvent(
+          'https://web.civibus.local/search?q=Washington&entity_type=region&offset=20',
+          requestJson
+        )
+      )
+    ).rejects.toMatchObject({
+      status: 308,
+      location: '/search?q=Washington&entity_type=region'
+    });
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
   it('trusts backend has_next and preserves every returned renderable row', async () => {
     const backendRows = Array.from({ length: 21 }, (_, index) => ({
       entity_type: 'org',
@@ -153,6 +249,81 @@ describe('/search +page.server load', () => {
     expect(data.hasNext).toBe(false);
     expect(data.offset).toBe(20);
     expect(data.results).toHaveLength(1);
+  });
+
+  it.each(['9007199254740993', '9007199254740972'])(
+    'fails closed when backend-accepted offset %s cannot support exact web pagination arithmetic',
+    async (rawOffset) => {
+      const requestJson = vi.fn().mockResolvedValue({
+        items: [
+          {
+            entity_type: 'org',
+            entity_id: '00000000-0000-4000-8000-000000000099',
+            name: 'Unsafe Page Org'
+          }
+        ],
+        has_next: true
+      });
+
+      const data = await load(
+        createLoadEvent(
+          `https://web.civibus.local/search?q=paged&entity_type=org&offset=${rawOffset}`,
+          requestJson
+        )
+      );
+
+      expect(requestJson).toHaveBeenCalledWith(
+        `/v1/search?q=paged&entity_type=org&limit=20&offset=${rawOffset}`
+      );
+      expect(data).toEqual({
+        query: 'paged',
+        entityType: 'org',
+        offset: 0,
+        hasNext: false,
+        results: [],
+        hasUnavailableResultPage: true,
+        validationMessage:
+          'The requested search page is too large to navigate safely. Submit the search to return to the first page.'
+      });
+    }
+  );
+
+  it('includes returned-row headroom in the exact maximum supported offset', async () => {
+    const rawOffset = String(Number.MAX_SAFE_INTEGER - 20);
+    const backendRows = Array.from({ length: 21 }, (_, index) => ({
+      entity_type: 'org',
+      entity_id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      name: `Boundary Org ${index}`
+    }));
+    const exactRequestJson = vi.fn().mockResolvedValue({
+      items: backendRows.slice(0, 20),
+      has_next: true
+    });
+    const overflowRequestJson = vi.fn().mockResolvedValue({ items: backendRows, has_next: true });
+
+    const exactData = (await load(
+      createLoadEvent(`https://web.civibus.local/search?q=paged&offset=${rawOffset}`, exactRequestJson)
+    )) as { offset: number; results: unknown[]; validationMessage?: string };
+    const overflowData = await load(
+      createLoadEvent(
+        `https://web.civibus.local/search?q=paged&offset=${rawOffset}`,
+        overflowRequestJson
+      )
+    );
+
+    expect(exactData.offset).toBe(Number.MAX_SAFE_INTEGER - 20);
+    expect(exactData.results).toHaveLength(20);
+    expect(exactData.validationMessage).toBeUndefined();
+    expect(overflowData).toEqual({
+      query: 'paged',
+      entityType: '',
+      offset: 0,
+      hasNext: false,
+      results: [],
+      hasUnavailableResultPage: true,
+      validationMessage:
+        'The requested search page is too large to navigate safely. Submit the search to return to the first page.'
+    });
   });
 
   it('keeps backend 422 validation errors distinct from empty successful results', async () => {
@@ -302,6 +473,7 @@ describe('/search +page.server load', () => {
       entityType: 'candidate',
       offset: 0,
       hasNext: false,
+      hasUnrenderableResults: true,
       results: [
         {
           entity_type: 'candidate',
@@ -316,6 +488,75 @@ describe('/search +page.server load', () => {
       ]
     });
     expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=candidate&limit=20');
+  });
+
+  it('preserves backend page navigation when filtering destroys displayed row positions', async () => {
+    const requestJson = vi.fn().mockResolvedValue({
+      items: [
+        {
+          entity_type: 'legacy',
+          entity_id: 'not-routable',
+          name: 'Backend row 21'
+        },
+        {
+          entity_type: 'org',
+          entity_id: '22222222-2222-4222-8222-222222222222',
+          name: 'Backend row 22'
+        }
+      ],
+      has_next: true
+    });
+
+    const data = await load(
+      createLoadEvent('https://web.civibus.local/search?q=civ&entity_type=org&offset=20', requestJson)
+    );
+
+    expect(data).toEqual({
+      query: 'civ',
+      entityType: 'org',
+      offset: 20,
+      hasNext: true,
+      hasUnrenderableResults: true,
+      results: [
+        {
+          entity_type: 'org',
+          entity_id: '22222222-2222-4222-8222-222222222222',
+          name: 'Backend row 22'
+        }
+      ]
+    });
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=org&limit=20&offset=20');
+  });
+
+  it('preserves when every backend match is unsafe to route', async () => {
+    const requestJson = vi.fn().mockResolvedValue({
+      items: [
+        {
+          entity_type: 'candidate',
+          entity_id: 'H0NC01001',
+          name: 'Pat Candidate'
+        },
+        {
+          entity_type: 'person',
+          entity_id: 'not-a-uuid',
+          name: 'Alice'
+        }
+      ],
+      has_next: false
+    });
+
+    const data = await load(
+      createLoadEvent('https://web.civibus.local/search?q=civ', requestJson)
+    );
+
+    expect(data).toEqual({
+      query: 'civ',
+      entityType: '',
+      offset: 0,
+      hasNext: false,
+      hasUnrenderableResults: true,
+      results: []
+    });
   });
 
   it('forwards explicit empty q params so backend validation stays authoritative', async () => {
@@ -394,6 +635,24 @@ describe('/search +page.server load', () => {
 });
 
 describe('/search +page.server actions', () => {
+  it('validates Region submits through the regional endpoint and keeps the filter in the redirect', async () => {
+    const requestJson = vi.fn().mockResolvedValue({
+      items: [],
+      incomplete_node_kinds: ['county', 'municipality'],
+      has_unsafe_omissions: true
+    });
+
+    await expect(
+      actions.default(createActionEvent({ q: 'Washington', entity_type: 'region' }, requestJson))
+    ).rejects.toMatchObject({
+      status: 303,
+      location: '/search?q=Washington&entity_type=region'
+    });
+    expect(requestJson).toHaveBeenCalledWith(
+      '/v1/regional-navigation/search?q=Washington&limit=20'
+    );
+  });
+
   it('redirects successful submits through the shared search page path builder', async () => {
     const requestJson = vi.fn().mockResolvedValue({ items: [], has_next: false });
 

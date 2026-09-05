@@ -27,6 +27,14 @@ EXPECTED_FLY_DEPLOY_COMMANDS = [
     "--build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}",
     "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
 ]
+# This deliberately duplicates the canonical expression at .github/workflows/deploy.yml:130 and the independent CI
+# assertion at tests/ci/test_deploy_workflow_contract.py:504 so the three checks remain independent.
+EXPECTED_DEPLOY_IF = (
+    "github.repository == 'gridl-hq/civibus' && "
+    "(github.event_name == 'push' || "
+    "(inputs.authority_promotion_evidence_run_id == '' && "
+    "inputs.authority_promotion_evidence_artifact_name == ''))"
+)
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -36,7 +44,7 @@ def _read_json(path: Path) -> dict[str, object]:
 def _sample_live_snapshot() -> dict[str, object]:
     return {
         "workflow": {
-            "deploy_if": "github.repository == 'gridl-hq/civibus'",
+            "deploy_if": EXPECTED_DEPLOY_IF,
             "deploy_env": {
                 "FLY_API_TOKEN": "fly-secret-token",
                 "PROD_SMOKE_BASE_URL": "${{ vars.PROD_SMOKE_BASE_URL }}",
@@ -55,7 +63,7 @@ def test_extract_repo_contract_locks_fly_deploy_owner_files() -> None:
     contract = keel_gate_l13.extract_repo_contract(repo_root=REPO_ROOT)
 
     assert set(contract["owner_files"]) == EXPECTED_OWNER_FILES
-    assert contract["non_secret"]["workflow.deploy_if"] == "github.repository == 'gridl-hq/civibus'"
+    assert contract["non_secret"]["workflow.deploy_if"] == EXPECTED_DEPLOY_IF
     assert contract["non_secret"]["workflow.deploy_env.PROD_SMOKE_BASE_URL"] == "${{ vars.PROD_SMOKE_BASE_URL }}"
     assert contract["non_secret"]["workflow.fly_deploy_commands"] == sorted(EXPECTED_FLY_DEPLOY_COMMANDS)
     assert contract["non_secret"]["fly_apps.api"] == "civibus-api"

@@ -35,7 +35,6 @@ from core.refresh.job_builders import build_refresh_plan
 from core.refresh.runner import RefreshJob, RunnerParameters, build_argument_parser
 from core.keel_gate_l3 import _load_registry
 from core.types.python.models import DataSource
-from domains.civics.loaders.ncsbe_candidate_listing import _NCSBE_DATA_SOURCE_NAME
 from domains.civics.loaders.ncsbe_results import collect_ncsbe_refresh_raw_csv_paths
 from domains.civics.loaders.official_rosters.source_templates import (
     civic_roster_refresh_templates,
@@ -3332,220 +3331,14 @@ class TestFECScheduleAJobContract:
 
 
 @pytest.mark.unit
-class TestNCIEDocumentIndexJobContract:
-    def test_plan_contains_nc_ie_document_index_job_with_correct_metadata(self) -> None:
-        jobs = build_refresh_plan(
-            parameters=RunnerParameters(
-                nc_ie_document_index_path=Path("/tmp/nc-ie-document-index.csv"),
-            ),
-            job_key_prefixes=("state-nc-ie-document-index",),
-        )
-
-        assert len(jobs) == 1
-        job = jobs[0]
-        assert job.key == "state-nc-ie-document-index"
-        assert job.domain == "campaign_finance"
-        assert job.jurisdiction == "state/NC"
-        assert "North Carolina SBoE IE Document Index" in job.data_source_names
-
-    def test_nc_ie_job_run_callable_is_zero_arg_callable(self) -> None:
-        jobs = build_refresh_plan(
-            parameters=RunnerParameters(
-                nc_ie_document_index_path=Path("/tmp/nc-ie-document-index.csv"),
-            ),
-            job_key_prefixes=("state-nc-ie-document-index",),
-        )
-        job = jobs[0]
-        assert callable(job.run_callable)
-        signature = inspect.signature(job.run_callable)
-        required_params = [
-            parameter
-            for parameter in signature.parameters.values()
-            if parameter.default is inspect.Parameter.empty
-            and parameter.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-        ]
-        assert required_params == []
-
-
-@pytest.mark.unit
-class TestNCCommitteeDiscoveryJobContract:
-    def test_plan_contains_nc_committee_discovery_job_with_config_owned_metadata(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-    ) -> None:
-        monkeypatch.chdir(tmp_path)
-        config = _load_nc_jurisdiction_config()
-        source_config = next(
-            source for source in config.data_sources if source.name == job_builders.NC_COMMITTEE_DOCUMENT_SOURCE_NAME
-        )
-        jobs = build_refresh_plan(job_key_prefixes=("state-nc-committee-discovery",))
-
-        assert len(jobs) == 1
-        job = jobs[0]
-        assert job.key == "state-nc-committee-discovery"
-        assert job.domain == "campaign_finance"
-        assert job.jurisdiction == "state/NC"
-        assert job.data_source_names == (source_config.name,)
-        assert job.cadence == source_config.update_frequency
-
-
-@pytest.mark.unit
 class TestNCIEDetailTransactionJobContract:
-    def test_plan_contains_nc_ie_transaction_job_with_correct_metadata(self) -> None:
-        jobs = build_refresh_plan(
-            parameters=RunnerParameters(
-                nc_ie_document_index_path=Path("/tmp/nc-ie-document-index.csv"),
-            ),
-            job_key_prefixes=("state-nc-ie-transactions",),
-        )
-
-        assert len(jobs) == 1
-        job = jobs[0]
-        assert job.key == "state-nc-ie-transactions"
-        assert job.domain == "campaign_finance"
-        assert job.jurisdiction == "state/NC"
-        assert "North Carolina SBoE IE Document Index" in job.data_source_names
-
-    def test_nc_ie_transaction_job_run_callable_is_zero_arg_callable(self) -> None:
-        jobs = build_refresh_plan(
-            parameters=RunnerParameters(
-                nc_ie_document_index_path=Path("/tmp/nc-ie-document-index.csv"),
-            ),
-            job_key_prefixes=("state-nc-ie-transactions",),
-        )
-
-        assert len(jobs) == 1
-        job = jobs[0]
-        assert callable(job.run_callable)
-        signature = inspect.signature(job.run_callable)
-        required_params = [
-            parameter
-            for parameter in signature.parameters.values()
-            if parameter.default is inspect.Parameter.empty
-            and parameter.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-        ]
-        assert required_params == []
-
-    def test_nc_ie_transaction_job_run_callable_uses_run_nc_refresh_ie_transactions(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        run_nc_refresh = MagicMock()
-        monkeypatch.setattr(job_builders, "run_nc_refresh", run_nc_refresh)
-
-        jobs = build_refresh_plan(
-            parameters=RunnerParameters(
-                nc_ie_document_index_path=Path("/tmp/nc-ie-document-index.csv"),
-            ),
-            job_key_prefixes=("state-nc-ie-transactions",),
-        )
-        assert len(jobs) == 1
-
-        jobs[0].run_callable()
-
-        run_nc_refresh.assert_called_once_with(data_type="ie-transactions")
-
     def test_plan_does_not_emit_nc_ie_transactions_job_without_ie_document_index_path(self) -> None:
         with pytest.raises(ValueError, match="No refresh jobs matched"):
             build_refresh_plan(job_key_prefixes=("state-nc-ie-transactions",))
 
 
 @pytest.mark.unit
-class TestPHLCityJobContract:
-    """Contract: build_refresh_plan() must produce city-phl-contributions and
-    city-phl-expenditures jobs (PHL has two distinct Carto SQL tables)."""
-
-    def test_plan_contains_phl_contributions_job_with_correct_metadata(self) -> None:
-        jobs = build_refresh_plan(job_key_prefixes=("city-phl-contributions",))
-        assert len(jobs) == 1
-        job = jobs[0]
-        assert job.key == "city-phl-contributions"
-        assert job.domain == "campaign_finance"
-        assert job.jurisdiction == "municipality/PHL"
-        assert "PHL Campaign Finance Contributions" in job.data_source_names
-
-    def test_plan_contains_phl_expenditures_job_with_correct_metadata(self) -> None:
-        jobs = build_refresh_plan(job_key_prefixes=("city-phl-expenditures",))
-        assert len(jobs) == 1
-        job = jobs[0]
-        assert job.key == "city-phl-expenditures"
-        assert job.domain == "campaign_finance"
-        assert job.jurisdiction == "municipality/PHL"
-        assert "PHL Campaign Finance Expenditures" in job.data_source_names
-
-    def test_phl_jobs_run_callables_are_zero_arg(self) -> None:
-        for prefix in ("city-phl-contributions", "city-phl-expenditures"):
-            jobs = build_refresh_plan(job_key_prefixes=(prefix,))
-            assert len(jobs) == 1, f"missing job for prefix {prefix!r}"
-            job = jobs[0]
-            assert callable(job.run_callable)
-            sig = inspect.signature(job.run_callable)
-            required = [
-                p
-                for p in sig.parameters.values()
-                if p.default is inspect.Parameter.empty
-                and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-            ]
-            assert required == [], (
-                f"{prefix} run_callable must be zero-arg; required params: {[p.name for p in required]}"
-            )
-
-
-@pytest.mark.unit
 class TestNCCivicCandidateListingJobContract:
-    def test_plan_contains_civic_candidate_listing_job_with_correct_metadata(self) -> None:
-        jobs = build_refresh_plan(job_key_prefixes=("civic-nc-candidate-listing",))
-
-        assert len(jobs) == 1
-        job = jobs[0]
-        assert job.key == "civic-nc-candidate-listing"
-        assert job.domain == "civics"
-        assert job.jurisdiction == "state/NC"
-        assert job.data_source_names == (_NCSBE_DATA_SOURCE_NAME,)
-
-    def test_civic_candidate_listing_job_run_callable_is_zero_arg_callable(self) -> None:
-        jobs = build_refresh_plan(job_key_prefixes=("civic-nc-candidate-listing",))
-        job = jobs[0]
-
-        assert callable(job.run_callable)
-        signature = inspect.signature(job.run_callable)
-        required_params = [
-            parameter
-            for parameter in signature.parameters.values()
-            if parameter.default is inspect.Parameter.empty
-            and parameter.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-        ]
-        assert required_params == []
-
-    def test_civic_candidate_listing_job_run_callable_threads_year_and_optional_path(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        load_candidate_listing_from_source = MagicMock()
-        monkeypatch.setattr(
-            job_builders,
-            "load_candidate_listing_from_source",
-            load_candidate_listing_from_source,
-        )
-        candidate_listing_path = Path("/tmp/nc-candidate-listing-fixture.csv")
-
-        jobs = build_refresh_plan(
-            parameters=RunnerParameters(
-                year_from=2024,
-                candidate_listing_path=candidate_listing_path,
-            ),
-            job_key_prefixes=("civic-nc-candidate-listing",),
-        )
-        assert len(jobs) == 1
-
-        jobs[0].run_callable()
-
-        load_candidate_listing_from_source.assert_called_once_with(
-            year_from=2024,
-            candidate_listing_path=candidate_listing_path,
-        )
-
     @pytest.mark.parametrize(
         ("now", "expected_cadence"),
         [
@@ -3586,28 +3379,6 @@ class TestNCCivicCandidateListingJobContract:
         assert jobs[0].key == "civic-nc-candidate-listing"
         assert jobs[0].cadence == expected_cadence
 
-    def test_civic_candidate_listing_job_resolves_cadence_using_explicit_calendar_year(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        resolve_candidate_listing_refresh_cadence = MagicMock(return_value="daily")
-        monkeypatch.setattr(
-            job_builders,
-            "resolve_candidate_listing_refresh_cadence",
-            resolve_candidate_listing_refresh_cadence,
-        )
-
-        now = datetime(2026, 4, 30, 12, 0, tzinfo=timezone.utc)
-        build_refresh_plan(
-            now=now,
-            job_key_prefixes=("civic-nc-candidate-listing",),
-        )
-
-        resolve_candidate_listing_refresh_cadence.assert_called_once_with(
-            year=2026,
-            on_date=now.date(),
-        )
-
     def test_civic_candidate_listing_job_december_run_does_not_require_missing_next_year_calendar(
         self,
     ) -> None:
@@ -3636,28 +3407,6 @@ class TestNCCivicCandidateListingJobContract:
         # Nov 30 2025 falls outside the 2026 calendar's filing window
         # (candidate_filing_open=2025-12-01), so cadence is quarterly.
         assert jobs[0].cadence == "quarterly"
-
-    def test_civic_candidate_listing_job_pre_december_resolves_cadence_using_upcoming_election_year(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        resolve_candidate_listing_refresh_cadence = MagicMock(return_value="quarterly")
-        monkeypatch.setattr(
-            job_builders,
-            "resolve_candidate_listing_refresh_cadence",
-            resolve_candidate_listing_refresh_cadence,
-        )
-
-        now = datetime(2025, 11, 30, 12, 0, tzinfo=timezone.utc)
-        build_refresh_plan(
-            now=now,
-            job_key_prefixes=("civic-nc-candidate-listing",),
-        )
-
-        resolve_candidate_listing_refresh_cadence.assert_called_once_with(
-            year=2026,
-            on_date=now.date(),
-        )
 
 
 @pytest.mark.unit

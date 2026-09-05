@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from uuid import UUID
 
 import psycopg
@@ -17,9 +18,9 @@ from domains.campaign_finance.ingest.filing_loader import (
 )
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
 from domains.campaign_finance.jurisdictions.states.load_utils import (
-    commit_managed_transaction,
     iter_rows_with_limit,
-    try_row_without_savepoint,
+    load_relational_rows_without_savepoints,
+    validated_limit,
 )
 from domains.campaign_finance.types.models import Filing, Transaction
 
@@ -285,54 +286,35 @@ def _upsert_in_transaction_with_filing(
     )
 
 
-def _link_in_row_without_savepoint(
+def _link_in_row(
     conn: psycopg.Connection,
     row: Mapping[str, str | None],
-    *,
     source_record_id: UUID,
+    *,
     data_type: str,
     filing_lookup: dict[str, _INFilingLookupEntry],
-    manages_outer_transaction: bool,
-) -> tuple[bool, bool]:
-    """Link one loaded row through the shared no-savepoint boundary."""
-    drift_error: INFilingLookupDrift | None = None
-
-    def _link_row() -> bool:
-        nonlocal drift_error
-        transaction = _build_in_transaction(
-            conn,
-            row,
-            source_record_id=source_record_id,
-            data_type=data_type,
-        )
-        try:
-            filing_entry = _upsert_in_filing(
-                conn,
-                row,
-                source_record_id=source_record_id,
-                data_type=data_type,
-                filing_lookup=filing_lookup,
-            )
-        except INFilingLookupDrift as drift:
-            drift_error = drift
-            raise
-        _upsert_in_transaction_with_filing(
-            conn,
-            transaction,
-            filing_id=filing_entry.filing_id,
-            committee_id=filing_entry.committee_id,
-        )
-        return True
-
-    result, was_db_error = try_row_without_savepoint(
+) -> bool:
+    """Link one loaded row; failures propagate to the shared no-savepoint boundary."""
+    transaction = _build_in_transaction(
         conn,
-        _link_row,
-        manages_outer_transaction=manages_outer_transaction,
-        label=f"IN {data_type.rstrip('s')} filing link",
+        row,
+        source_record_id=source_record_id,
+        data_type=data_type,
     )
-    if drift_error is not None:
-        raise drift_error
-    return result is not None, was_db_error
+    filing_entry = _upsert_in_filing(
+        conn,
+        row,
+        source_record_id=source_record_id,
+        data_type=data_type,
+        filing_lookup=filing_lookup,
+    )
+    _upsert_in_transaction_with_filing(
+        conn,
+        transaction,
+        filing_id=filing_entry.filing_id,
+        committee_id=filing_entry.committee_id,
+    )
+    return True
 
 
 def _load_in_relational_transactions(
@@ -343,51 +325,40 @@ def _load_in_relational_transactions(
     data_type: str,
     limit: int | None,
 ) -> int:
-    """Link loaded IN rows to filings and return the number of lost links."""
+    """Delegate IN row linkage to the shared no-savepoint loop and return its error count.
+
+    The error count is the shared loop's ``errors`` total: rows that failed to
+    link plus successes lost to a managed rollback. This function owns only IN's
+    policy hooks; iteration and commit cadence belong to the shared owner.
+    """
+    validated_limit(limit)
     filing_lookup: dict[str, _INFilingLookupEntry] = {}
-    manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
-    processed_count = 0
-    error_count = 0
-    linked_rows_since_commit = 0
 
-    for row in iter_rows_with_limit(rows, limit):
-        if not isinstance(row, Mapping):
-            raise TypeError(f"Expected mapping row, got {type(row)!r}")
+    def _clear_filing_cache(hook_conn: psycopg.Connection, *, failed_row: Mapping[str, str | None]) -> None:
+        # A DB rollback erases every uncommitted filing in the batch, so a cached
+        # filing can point at a row that vanished. Clear the whole cache in place.
+        filing_lookup.clear()
 
-        source_record_id = _select_in_source_record_id(
-            conn,
-            data_source_id=data_source_id,
-            source_record_key=_in_source_record_key(row, data_type=data_type),
+    def _caller_owned_rollback(**_kwargs: object) -> INCallerTransactionRolledBack:
+        return INCallerTransactionRolledBack(
+            "IN relational DB error rolled back the caller-owned transaction; aborting load"
         )
-        if source_record_id is not None:
-            linked, was_db_error = _link_in_row_without_savepoint(
-                conn,
-                row,
-                source_record_id=source_record_id,
-                data_type=data_type,
-                filing_lookup=filing_lookup,
-                manages_outer_transaction=manages_outer_transaction,
-            )
-            if linked:
-                linked_rows_since_commit += 1
-            else:
-                error_count += 1
-            if was_db_error:
-                if not manages_outer_transaction:
-                    raise INCallerTransactionRolledBack(
-                        "IN relational DB error rolled back the caller-owned transaction; aborting load"
-                    )
-                error_count += linked_rows_since_commit
-                linked_rows_since_commit = 0
-                # A DB rollback erases every uncommitted filing in the batch, so restoring
-                # one key can leave another cached filing pointing at a row that vanished.
-                filing_lookup.clear()
 
-        processed_count += 1
-        if processed_count % _COMMIT_BATCH_ROWS == 0:
-            commit_managed_transaction(conn, manages_outer_transaction)
-            if manages_outer_transaction:
-                linked_rows_since_commit = 0
-
-    commit_managed_transaction(conn, manages_outer_transaction)
-    return error_count
+    result = load_relational_rows_without_savepoints(
+        conn,
+        iter_rows_with_limit(rows, limit),
+        source_record_key_for_row=lambda row: _in_source_record_key(row, data_type=data_type),
+        resolve_source_record_id=lambda hook_conn, source_record_key: _select_in_source_record_id(
+            hook_conn,
+            data_source_id=data_source_id,
+            source_record_key=source_record_key,
+        ),
+        link_row=partial(_link_in_row, data_type=data_type, filing_lookup=filing_lookup),
+        batch_size=_COMMIT_BATCH_ROWS,
+        label=f"IN {data_type.rstrip('s')} filing link",
+        fatal_exceptions=(INFilingLookupDrift,),
+        on_db_error_recovery=_clear_filing_cache,
+        on_managed_commit_reset=None,
+        caller_owned_rollback_error=_caller_owned_rollback,
+    )
+    return result.errors

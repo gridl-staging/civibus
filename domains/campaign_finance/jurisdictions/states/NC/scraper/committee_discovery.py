@@ -110,11 +110,18 @@ def crawl_committee_registry_httpx(
     try:
         landing_response = active_client.get(CFORGLKUP_LANDING_URL, timeout=timeout_seconds)
         landing_response.raise_for_status()
-        return crawl_committee_registry(
+        discovered = crawl_committee_registry(
             fetch_bucket_html=_fetch_bucket_html_with_client,
             buckets=buckets,
             sleep_seconds=sleep_seconds,
         )
+        if buckets is None and len(discovered) < EXPECTED_STATEWIDE_COMMITTEE_COUNT:
+            raise ValueError(
+                "NC committee discovery returned "
+                f"{len(discovered)} unique committees, below expected statewide floor "
+                f"{EXPECTED_STATEWIDE_COMMITTEE_COUNT}"
+            )
+        return discovered
     finally:
         if should_close_client:
             active_client.close()

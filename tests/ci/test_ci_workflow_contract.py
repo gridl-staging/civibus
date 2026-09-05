@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -35,6 +37,7 @@ CI_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
 INTEGRATION_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/integration.yml"
 WORKFLOW_DIRECTORY = REPO_ROOT / ".github/workflows"
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
+PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 WEB_PACKAGE_PATH = REPO_ROOT / "web/package.json"
 BATMAN_CONFIG_PATH = REPO_ROOT / ".batman.toml"
 STAGE2_DISPOSITIONS_TEST_PATH = Path("domains/civics/loaders/official_rosters/test_stage2_dispositions.py")
@@ -186,6 +189,16 @@ def test_ci_workflow_does_not_copy_make_owned_python_gate_commands() -> None:
         assert command not in workflow_text
 
 
+def test_makefile_lint_gate_uses_stable_ruff_formatter_config() -> None:
+    makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
+    lint_block = _make_target_block(makefile_text, "lint")
+    pyproject = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+    ruff_format_config = pyproject.get("tool", {}).get("ruff", {}).get("format", {})
+
+    assert "\tuv run --extra dev ruff format --check ." in lint_block.splitlines()
+    assert ruff_format_config.get("preview") in (None, False)
+
+
 def test_makefile_owns_public_python_gate_selector() -> None:
     makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
 
@@ -332,6 +345,172 @@ def test_batman_config_declares_qa_fast_merge_gate() -> None:
     assert not any(fragment in wrapper_text for fragment in copied_command_fragments)
     # The one permitted bootstrap: web dependencies from the pinned lockfile.
     assert "npm --prefix" in wrapper_text and " ci " in wrapper_text
+    assert " --offline " in wrapper_text
+    assert "--prefer-offline" not in wrapper_text
+
+
+def test_qa_fast_gate_rejects_symlinked_web_dependencies(tmp_path: Path) -> None:
+    """A cross-worktree install must not reach Vite as an accepted toolchain."""
+    test_repo = tmp_path / "repo"
+    wrapper_path = test_repo / "scripts/qa_fast_gate.sh"
+    wrapper_path.parent.mkdir(parents=True)
+    wrapper_path.write_text(
+        (REPO_ROOT / "scripts/qa_fast_gate.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    wrapper_path.chmod(0o755)
+
+    external_dependencies = tmp_path / "other_worktree/web/node_modules"
+    external_dependencies.mkdir(parents=True)
+    external_sentinel = external_dependencies / "shared_install_sentinel"
+    external_sentinel.write_text("untouched", encoding="utf-8")
+    web_directory = test_repo / "web"
+    web_directory.mkdir()
+    (web_directory / "node_modules").symlink_to(external_dependencies, target_is_directory=True)
+
+    fake_bin = tmp_path / "bin with spaces"
+    fake_bin.mkdir()
+    command_called = tmp_path / "command_called"
+    for command_name in ("npm", "make"):
+        fake_command = fake_bin / command_name
+        fake_command.write_text(
+            '#!/usr/bin/env bash\ntouch "$FAKE_COMMAND_CALLED"\nexit 0\n',
+            encoding="utf-8",
+        )
+        fake_command.chmod(0o755)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{environment['PATH']}",
+            "FAKE_COMMAND_CALLED": str(command_called),
+        }
+    )
+
+    result = subprocess.run(
+        [str(wrapper_path)],
+        cwd=test_repo,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "refusing symlinked web/node_modules" in result.stderr
+    assert "move the link aside and rerun" in result.stderr
+    assert (web_directory / "node_modules").is_symlink()
+    assert external_sentinel.read_text(encoding="utf-8") == "untouched"
+    assert not command_called.exists()
+
+
+_QA_FAST_REQUIRED_COMMANDS = (
+    "make",
+    "npm",
+    "node",
+    "uv",
+    "git",
+    "bd",
+    "batman",
+    "python3",
+    "jq",
+)
+
+
+def _run_qa_fast_gate_with_stubbed_toolchain(
+    tmp_path: Path,
+    *,
+    missing_commands: frozenset[str] = frozenset(),
+    prepare_only: bool = False,
+    dependencies_present: bool = True,
+) -> tuple[subprocess.CompletedProcess[str], str, Path]:
+    test_repo = tmp_path / "repo"
+    wrapper_path = test_repo / "scripts/qa_fast_gate.sh"
+    wrapper_path.parent.mkdir(parents=True)
+    wrapper_path.write_text(
+        (REPO_ROOT / "scripts/qa_fast_gate.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    web_directory = test_repo / "web"
+    web_directory.mkdir()
+    if dependencies_present:
+        (web_directory / "node_modules").mkdir()
+
+    fake_bin = tmp_path / "bin with spaces"
+    fake_bin.mkdir()
+    dirname_path = shutil.which("dirname")
+    bash_path = shutil.which("bash")
+    assert dirname_path is not None
+    assert bash_path is not None
+    (fake_bin / "dirname").symlink_to(dirname_path)
+
+    calls_log = tmp_path / "calls.log"
+    calls_log.write_text("", encoding="utf-8")
+    for command_name in _QA_FAST_REQUIRED_COMMANDS:
+        if command_name in missing_commands:
+            continue
+        fake_command = fake_bin / command_name
+        fake_command.write_text(
+            f"#!/bin/sh\nprintf '%s %s\\n' '{command_name}' \"$*\" >> \"$QA_FAST_STUB_CALLS\"\n",
+            encoding="utf-8",
+        )
+        fake_command.chmod(0o755)
+
+    arguments = [bash_path, str(wrapper_path)]
+    if prepare_only:
+        arguments.append("--prepare-only")
+    result = subprocess.run(
+        arguments,
+        cwd=test_repo,
+        env={"PATH": str(fake_bin), "QA_FAST_STUB_CALLS": str(calls_log)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, calls_log.read_text(encoding="utf-8"), test_repo
+
+
+@pytest.mark.parametrize("missing_command", _QA_FAST_REQUIRED_COMMANDS)
+def test_qa_fast_gate_preflights_each_required_command(tmp_path: Path, missing_command: str) -> None:
+    result, calls, _ = _run_qa_fast_gate_with_stubbed_toolchain(
+        tmp_path,
+        missing_commands=frozenset({missing_command}),
+    )
+
+    assert result.returncode == 127
+    assert result.stderr == f"qa-fast missing required commands on PATH: {missing_command}\n"
+    assert calls == "", "preflight must fail before dependency bootstrap or make"
+
+
+def test_qa_fast_gate_reports_all_missing_commands_before_work(tmp_path: Path) -> None:
+    result, calls, _ = _run_qa_fast_gate_with_stubbed_toolchain(
+        tmp_path,
+        missing_commands=frozenset({"uv", "batman"}),
+    )
+
+    assert result.returncode == 127
+    assert result.stderr == "qa-fast missing required commands on PATH: uv batman\n"
+    assert calls == "", "uv and batman must be reported together before any gate work"
+
+
+def test_qa_fast_gate_delegates_once_when_required_commands_resolve(tmp_path: Path) -> None:
+    result, calls, test_repo = _run_qa_fast_gate_with_stubbed_toolchain(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert calls == f"make -C {test_repo} qa-fast\n"
+
+
+def test_qa_fast_prepare_only_does_not_require_full_gate_toolchain(tmp_path: Path) -> None:
+    result, calls, _ = _run_qa_fast_gate_with_stubbed_toolchain(
+        tmp_path,
+        missing_commands=frozenset(set(_QA_FAST_REQUIRED_COMMANDS) - {"npm", "node"}),
+        prepare_only=True,
+        dependencies_present=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls == "npm --prefix {test_repo}/web ci --offline --no-audit --no-fund\n".format(
+        test_repo=tmp_path / "repo"
+    )
 
 
 def test_qa_fast_has_no_other_command_surface() -> None:

@@ -88,7 +88,11 @@
       <SkeletonPanel label="Committee results loading" lines={4} />
     {:else}
       {#if data.items.length === 0}
-        <p>No committees found for the selected filters.</p>
+        <p>
+          {data.offset > 0
+            ? "No committees are shown on this page."
+            : "No committees found for the selected filters."}
+        </p>
       {:else}
         <ul class="campaign-list__items">
           {#each committeeItems as itemView (itemView.item.id)}

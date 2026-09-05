@@ -15,7 +15,7 @@ from psycopg.rows import dict_row
 import api.queries as campaign_finance_queries
 import api.queries.campaign_finance as campaign_finance_query_module
 import api.routes.campaign_finance as campaign_finance_route_module
-from api.models.campaign_finance import CommitteeListParams
+from api.models.campaign_finance import CandidateListParams, CommitteeListParams
 from api.queries.civics import _UPCOMING_ELECTION_HORIZON_YEARS
 from api.queries import (
     fetch_candidate_public_money_summaries,
@@ -1335,6 +1335,7 @@ def test_selected_cycle_routes_default_and_accept_supported_cycle(
         f"/v1/candidates/{uuid4()}/independent-expenditures",
         f"/v1/candidates/{uuid4()}/independent-expenditures/summary",
         f"/v1/committees/{uuid4()}/summary",
+        f"/v1/committees/{uuid4()}/independent-expenditures-made",
         f"/v1/transactions?committee_id={uuid4()}",
     ],
 )
@@ -3557,6 +3558,59 @@ def test_candidate_list_serializes_missing_official_total_as_unknown_not_zero(
     assert zero_row["has_official_total"] is True
 
 
+def test_candidate_list_route_serializes_reporting_end_date_without_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_id = UUID("96000000-0000-0000-0000-000000000003")
+
+    def fake_fetch_candidate_list(_conn: object, _params: CandidateListParams) -> dict[str, object]:
+        return {
+            "items": [
+                {
+                    "id": candidate_id,
+                    "fec_candidate_id": "H0WY09603",
+                    "name": "Period Evidence Candidate",
+                    "office": "H",
+                    "state": "WY",
+                    "district": "01",
+                    "slug": "period-evidence-candidate",
+                    "slug_is_unique": True,
+                    "identity_is_safe": True,
+                    "has_official_total": True,
+                    "total_receipts": Decimal("1234.56"),
+                    "summary_coverage_end_date": date(2026, 3, 31),
+                }
+            ],
+            "has_next": False,
+            "offset": 0,
+            "limit": 50,
+        }
+
+    monkeypatch.setattr(campaign_finance_route_module, "fetch_candidate_list", fake_fetch_candidate_list)
+
+    response = campaign_finance_route_module.list_candidates(
+        params=CandidateListParams(),
+        conn=object(),  # type: ignore[arg-type]
+    )
+
+    assert response.model_dump(mode="json")["items"][0] == {
+        "id": str(candidate_id),
+        "fec_candidate_id": "H0WY09603",
+        "name": "Period Evidence Candidate",
+        "person_id": None,
+        "party": None,
+        "office": "H",
+        "state": "WY",
+        "district": "01",
+        "slug": "period-evidence-candidate",
+        "slug_is_unique": True,
+        "identity_is_safe": True,
+        "has_official_total": True,
+        "total_receipts": "1234.56",
+        "summary_coverage_end_date": "2026-03-31",
+    }
+
+
 def test_candidate_routes_expose_any_date_official_total_signal(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -5364,6 +5418,14 @@ def test_get_committee_ie_activity_aggregates_targets_with_provenance(
         source_url="https://example.org/record/committee-ie-source",
         pull_date=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
     )
+    future_source_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("c9000000-0000-0000-0000-000000000122"),
+        data_source_id=data_source.id,
+        source_record_key="committee-ie-future-source",
+        source_url="https://example.org/record/committee-ie-future-source",
+        pull_date=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+    )
 
     insert_committee_row(
         db_conn,
@@ -5411,10 +5473,13 @@ def test_get_committee_ie_activity_aggregates_targets_with_provenance(
                 recipient_candidate_id=candidate_id,
                 support_oppose=support_oppose,
                 source_record_id=source_record.id,
+                transaction_date=date(2024, 6, 1),
             ),
         )
 
-    # Excluded by missing candidate target, missing support/oppose, memo row, terminated amendment, and committee mismatch.
+    # The unresolved candidate target still belongs in committee aggregates. The
+    # other rows are excluded by missing support/oppose, memo status, terminated
+    # amendment, or committee mismatch.
     for transaction_id, candidate_id, support_oppose, is_memo, amendment_indicator, amount in (
         (UUID("c9000000-0000-0000-0000-000000000135"), None, "S", False, "N", "999.00"),
         (UUID("c9000000-0000-0000-0000-000000000136"), target_other_id, None, False, "N", "888.00"),
@@ -5434,6 +5499,7 @@ def test_get_committee_ie_activity_aggregates_targets_with_provenance(
                 support_oppose=support_oppose,
                 source_record_id=source_record.id,
                 is_memo=is_memo,
+                transaction_date=date(2024, 6, 1),
             ),
         )
     other_committee_id = UUID("c9000000-0000-0000-0000-000000000106")
@@ -5456,18 +5522,45 @@ def test_get_committee_ie_activity_aggregates_targets_with_provenance(
             recipient_candidate_id=target_other_id,
             support_oppose="S",
             source_record_id=source_record.id,
+            transaction_date=date(2024, 6, 1),
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("c9000000-0000-0000-0000-000000000140"),
+            filing_id=filing_id,
+            committee_id=committee_id,
+            transaction_type="24E",
+            amount=Decimal("4000.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=target_alpha_id,
+            support_oppose="S",
+            source_record_id=future_source_record.id,
+            transaction_date=date(2026, 6, 1),
         ),
     )
 
-    response = api_client.get(f"/v1/committees/{committee_id}/independent-expenditures-made")
+    response = api_client.get(f"/v1/committees/{committee_id}/independent-expenditures-made?cycle=2024")
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["committee_id"] == str(committee_id)
-    assert payload["support_total"] == "600.00"
+    _assert_selected_cycle_payload(
+        payload,
+        selected_cycle=2024,
+        coverage_start_date="2023-01-01",
+        coverage_end_date="2024-12-31",
+    )
+    assert payload["support_total"] == "1599.00"
     assert payload["oppose_total"] == "425.00"
-    assert payload["ie_transaction_count"] == 4
+    assert payload["ie_transaction_count"] == 5
     assert payload["excluded_outlier_count"] == 0
+    assert payload["coverage"] == {
+        "activity_state": "populated",
+        "completeness": "partial",
+        "basis": "fec_schedule_e_transactions",
+    }
     assert [row["candidate_id"] for row in payload["targets"]] == [
         str(target_alpha_id),
         str(target_beta_id),
@@ -5595,6 +5688,54 @@ def test_get_committee_ie_activity_returns_empty_payload_for_known_committee(
             amendment_indicator="N",
             recipient_candidate_id=candidate_id,
             support_oppose=None,
+            transaction_date=date(2026, 2, 1),
+        ),
+    )
+    sibling_committee_id = UUID("c9000000-0000-0000-0000-000000000205")
+    sibling_filing_id = UUID("c9000000-0000-0000-0000-000000000206")
+    sibling_source_record_id = UUID("c9000000-0000-0000-0000-000000000208")
+    fec_data_source = insert_data_source_for_test(
+        db_conn,
+        jurisdiction="federal/fec",
+        name_suffix="empty-committee-ie-window-evidence",
+    )
+    insert_source_record_for_test(
+        db_conn,
+        source_record_id=sibling_source_record_id,
+        data_source_id=fec_data_source.id,
+        source_record_key="schedule-e-empty-committee-window-evidence",
+        source_url="https://www.fec.gov/data/independent-expenditures/",
+        pull_date=datetime(2026, 8, 28, tzinfo=timezone.utc),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=sibling_committee_id,
+            fec_committee_id="C90900205",
+            name="Loaded Schedule E Sibling Committee",
+        ),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=sibling_filing_id,
+            filing_fec_id="LOADED-SCHEDULE-E-SIBLING-FILING",
+            committee_id=sibling_committee_id,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("c9000000-0000-0000-0000-000000000207"),
+            filing_id=sibling_filing_id,
+            committee_id=sibling_committee_id,
+            transaction_type="24E",
+            amount=Decimal("50.00"),
+            amendment_indicator="N",
+            source_record_id=sibling_source_record_id,
+            recipient_candidate_id=candidate_id,
+            support_oppose="S",
+            transaction_date=date(2026, 2, 1),
         ),
     )
 
@@ -5603,15 +5744,89 @@ def test_get_committee_ie_activity_returns_empty_payload_for_known_committee(
     assert response.status_code == 200
     assert response.json() == {
         "committee_id": str(committee_id),
+        "selected_cycle": 2026,
+        "coverage_start_date": "2025-01-01",
+        "coverage_end_date": "2026-12-31",
+        "available_cycles": [2022, 2024, 2026],
         "support_total": "0.00",
         "oppose_total": "0.00",
         "ie_transaction_count": 0,
         "excluded_outlier_count": 0,
         "targets": [],
+        "coverage": {
+            "activity_state": "loaded_zero",
+            "completeness": "partial",
+            "basis": "fec_schedule_e_transactions",
+        },
     }
 
 
-def test_get_committee_ie_activity_excludes_outliers_from_aggregates(
+def test_fetch_committee_ie_activity_uses_same_cycle_for_empty_load_evidence(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("c9000000-0000-0000-0000-000000000251")
+    candidate_id = UUID("c9000000-0000-0000-0000-000000000252")
+    filing_id = UUID("c9000000-0000-0000-0000-000000000253")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_id, fec_committee_id="C90900251", name="Other Cycle IE Spender"),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(id=candidate_id, fec_candidate_id="H0NC09252", name="Other Cycle IE Target", office="H"),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(id=filing_id, filing_fec_id="OTHER-CYCLE-IE-FILING", committee_id=committee_id),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("c9000000-0000-0000-0000-000000000254"),
+            filing_id=filing_id,
+            committee_id=committee_id,
+            transaction_type="24E",
+            amount=Decimal("75.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose="S",
+            transaction_date=date(2026, 3, 1),
+        ),
+    )
+    empty_window = campaign_finance_query_module.SelectedCycle(
+        selected_cycle=1990,
+        coverage_start_date=date(1989, 1, 1),
+        coverage_end_date=date(1990, 12, 31),
+        available_cycles=(1990,),
+    )
+
+    payload = campaign_finance_query_module.fetch_committee_ie_activity(
+        db_conn,
+        committee_id,
+        10,
+        selected_cycle=empty_window,
+    )
+
+    assert payload == {
+        "committee_id": committee_id,
+        "selected_cycle": 1990,
+        "coverage_start_date": date(1989, 1, 1),
+        "coverage_end_date": date(1990, 12, 31),
+        "available_cycles": [1990],
+        "support_total": Decimal("0.00"),
+        "oppose_total": Decimal("0.00"),
+        "ie_transaction_count": 0,
+        "excluded_outlier_count": 0,
+        "targets": [],
+        "coverage": {
+            "activity_state": "not_loaded",
+            "completeness": "unknown",
+            "basis": "no_authoritative_load_evidence",
+        },
+    }
+
+
+def test_get_committee_ie_activity_counts_outlier_only_as_populated_without_displaying_it(
     api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
@@ -5633,19 +5848,6 @@ def test_get_committee_ie_activity_excludes_outliers_from_aggregates(
     insert_transaction_row(
         db_conn,
         TransactionRowSeed(
-            id=UUID("c9000000-0000-0000-0000-000000000304"),
-            filing_id=filing_id,
-            committee_id=committee_id,
-            transaction_type="24E",
-            amount=Decimal("250.00"),
-            amendment_indicator="N",
-            recipient_candidate_id=candidate_id,
-            support_oppose="S",
-        ),
-    )
-    insert_transaction_row(
-        db_conn,
-        TransactionRowSeed(
             id=UUID("c9000000-0000-0000-0000-000000000305"),
             filing_id=filing_id,
             committee_id=committee_id,
@@ -5654,6 +5856,7 @@ def test_get_committee_ie_activity_excludes_outliers_from_aggregates(
             amendment_indicator="N",
             recipient_candidate_id=candidate_id,
             support_oppose="S",
+            transaction_date=date(2026, 4, 1),
         ),
     )
 
@@ -5661,29 +5864,16 @@ def test_get_committee_ie_activity_excludes_outliers_from_aggregates(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["support_total"] == "250.00"
+    assert payload["support_total"] == "0.00"
     assert payload["oppose_total"] == "0.00"
-    assert payload["ie_transaction_count"] == 1
+    assert payload["ie_transaction_count"] == 0
     assert payload["excluded_outlier_count"] == 1
-    assert payload["targets"] == [
-        {
-            "candidate_id": str(candidate_id),
-            "fec_candidate_id": "H0NC09302",
-            "candidate_name": "Outlier Committee IE Target",
-            "person_id": None,
-            "party": None,
-            "office": "H",
-            "state": None,
-            "district": None,
-            "slug": "outlier-committee-ie-target",
-            "slug_is_unique": True,
-            "identity_is_safe": True,
-            "support_total": "250.00",
-            "oppose_total": "0.00",
-            "transaction_count": 1,
-            "sources": [],
-        }
-    ]
+    assert payload["targets"] == []
+    assert payload["coverage"] == {
+        "activity_state": "populated",
+        "completeness": "partial",
+        "basis": "fec_schedule_e_transactions",
+    }
 
 
 def test_get_candidate_independent_expenditures_returns_paginated_rows(
@@ -6178,6 +6368,7 @@ def test_fetch_candidate_ie_summary_reports_selected_cycle_money_coverage_states
     spender_committee_id = UUID("c0000000-0000-0000-0000-000000000362")
     filing_id = UUID("c0000000-0000-0000-0000-000000000363")
     transaction_id = UUID("c0000000-0000-0000-0000-000000000364")
+    source_record_id = UUID("c0000000-0000-0000-0000-000000000360")
     insert_candidate_row(
         db_conn,
         CandidateRowSeed(
@@ -6200,8 +6391,27 @@ def test_fetch_candidate_ie_summary_reports_selected_cycle_money_coverage_states
         db_conn,
         CommitteeRowSeed(id=spender_committee_id, fec_committee_id="C99800362", name="Schedule E Spender"),
     )
+    fec_data_source = insert_data_source_for_test(
+        db_conn,
+        jurisdiction="federal/fec",
+        name_suffix="fec-schedule-e-window-evidence",
+    )
+    insert_source_record_for_test(
+        db_conn,
+        source_record_id=source_record_id,
+        data_source_id=fec_data_source.id,
+        source_record_key="schedule_e:2026:C99800362:IE-COVERAGE-FILING:IE-COVERAGE-TRANSACTION",
+        source_url="https://www.fec.gov/data/independent-expenditures/",
+        pull_date=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
     insert_filing_row(
-        db_conn, FilingRowSeed(id=filing_id, filing_fec_id="IE-COVERAGE-FILING", committee_id=spender_committee_id)
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id="IE-COVERAGE-FILING",
+            committee_id=spender_committee_id,
+            source_record_id=source_record_id,
+        ),
     )
     insert_transaction_row(
         db_conn,
@@ -6212,6 +6422,7 @@ def test_fetch_candidate_ie_summary_reports_selected_cycle_money_coverage_states
             transaction_type="24E",
             amount=Decimal("321.00"),
             amendment_indicator="N",
+            source_record_id=source_record_id,
             recipient_candidate_id=populated_candidate_id,
             support_oppose="S",
             transaction_date=date(2026, 2, 1),
@@ -6261,6 +6472,89 @@ def test_fetch_candidate_ie_summary_reports_selected_cycle_money_coverage_states
         "completeness": "unknown",
         "basis": "no_authoritative_load_evidence",
     }
+
+
+def test_schedule_e_window_load_evidence_rejects_sf_jurisdiction_source(
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("c0000000-0000-0000-0000-000000000365")
+    source_record_id = UUID("c0000000-0000-0000-0000-000000000366")
+    committee_id = UUID("c0000000-0000-0000-0000-000000000367")
+    filing_id = UUID("c0000000-0000-0000-0000-000000000368")
+    transaction_id = UUID("c0000000-0000-0000-0000-000000000369")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H8NC03365",
+            name="Unknown Federal IE Coverage Candidate",
+            office="H",
+        ),
+    )
+    sf_data_source = insert_data_source_for_test(
+        db_conn,
+        jurisdiction="municipality/SF",
+        name_suffix="sf-f496-window-evidence",
+    )
+    insert_source_record_for_test(
+        db_conn,
+        source_record_id=source_record_id,
+        data_source_id=sf_data_source.id,
+        source_record_key="da23f92a530aad1b06e80fe922b21c69ba36762d9d57b9827c9ec864c6d3a285",
+        source_url="https://sfethics.org/disclosures/campaign-finance-disclosure/campaign-finance-disclosure-data",
+        pull_date=datetime(2026, 8, 23, tzinfo=timezone.utc),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_id, fec_committee_id="C95537043", name="SF IE Committee"),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id="SF-1471862-217270011",
+            committee_id=committee_id,
+            report_type="F496",
+            source_record_id=source_record_id,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=transaction_id,
+            filing_id=filing_id,
+            committee_id=committee_id,
+            transaction_type="2-SF-S496",
+            amount=Decimal("1782.42"),
+            amendment_indicator="N",
+            source_record_id=source_record_id,
+            transaction_identifier="PDT150",
+            transaction_date=date(2026, 8, 21),
+            # The current SF loader keeps this raw stance source-local. This
+            # adversarial/legacy typed row proves the federal owner enforces
+            # jurisdiction containment even if that upstream contract regresses.
+            support_oppose="S",
+        ),
+    )
+
+    from api.queries.campaign_finance import SelectedCycle, schedule_e_window_has_load_evidence
+
+    sf_only_window = SelectedCycle(
+        selected_cycle=2026,
+        coverage_start_date=date(2025, 1, 1),
+        coverage_end_date=date(2026, 12, 31),
+        available_cycles=(2026,),
+    )
+
+    assert schedule_e_window_has_load_evidence(db_conn, sf_only_window) is False
+    assert fetch_candidate_ie_summary(db_conn, candidate_id, selected_cycle=sf_only_window)["coverage"] == {
+        "activity_state": "not_loaded",
+        "completeness": "unknown",
+        "basis": "no_authoritative_load_evidence",
+    }
+    with db_conn.cursor() as cursor:
+        cursor.execute("UPDATE cf.transaction SET source_record_id = NULL WHERE id = %s", (transaction_id,))
+    assert schedule_e_window_has_load_evidence(db_conn, sf_only_window) is False
 
 
 def test_candidate_money_routes_validate_backend_owned_coverage_contract(
@@ -6626,6 +6920,17 @@ def test_get_state_detail_returns_aggregate_panels_and_validation_behavior(
     ca_baseline = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "CA")
     assert nc_baseline is not None
     assert ca_baseline is not None
+    nc_baseline_source_keys = {source["source_record_key"] for source in nc_baseline["sources"]}
+    ca_baseline_source_keys = {source["source_record_key"] for source in ca_baseline["sources"]}
+    expected_source_fields = {
+        "domain",
+        "jurisdiction",
+        "data_source_name",
+        "data_source_url",
+        "source_record_key",
+        "record_url",
+        "pull_date",
+    }
 
     nc_committee_a = seed_committee_for_summary(
         db_conn,
@@ -6757,6 +7062,9 @@ def test_get_state_detail_returns_aggregate_panels_and_validation_behavior(
     missing_payload = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "ZZ")
 
     assert nc_payload is not None
+    nc_seeded_sources = [
+        source for source in nc_payload["sources"] if source["source_record_key"] not in nc_baseline_source_keys
+    ]
     assert nc_payload["state_code"] == "NC"
     assert nc_payload["total_raised"] - nc_baseline["total_raised"] == Decimal("390.00")
     assert nc_payload["total_spent"] - nc_baseline["total_spent"] == Decimal("130.00")
@@ -6806,31 +7114,22 @@ def test_get_state_detail_returns_aggregate_panels_and_validation_behavior(
             "total_amount": Decimal("20.00"),
         },
     ]
-    assert [source["source_record_key"] for source in nc_payload["sources"]] == [
+    assert [source["source_record_key"] for source in nc_seeded_sources] == [
         f"summary-sr-{nc_committee_b.committee_id}",
         f"summary-sr-{nc_committee_a.committee_id}",
     ]
-    assert all(
-        set(source)
-        == {
-            "domain",
-            "jurisdiction",
-            "data_source_name",
-            "data_source_url",
-            "source_record_key",
-            "record_url",
-            "pull_date",
-        }
-        for source in nc_payload["sources"]
-    )
-    assert all(source["jurisdiction"] == "state/nc" for source in nc_payload["sources"])
+    assert all(set(source) == expected_source_fields for source in nc_seeded_sources)
+    assert [source["jurisdiction"] for source in nc_seeded_sources] == ["state/nc", "state/nc"]
 
     assert ca_payload is not None
+    ca_seeded_sources = [
+        source for source in ca_payload["sources"] if source["source_record_key"] not in ca_baseline_source_keys
+    ]
     assert ca_payload["state_code"] == "CA"
     assert ca_payload["total_raised"] - ca_baseline["total_raised"] == Decimal("55.00")
-    assert [source["source_record_key"] for source in ca_payload["sources"]] == [
-        f"summary-sr-{ca_committee.committee_id}"
-    ]
+    assert [source["source_record_key"] for source in ca_seeded_sources] == [f"summary-sr-{ca_committee.committee_id}"]
+    assert all(set(source) == expected_source_fields for source in ca_seeded_sources)
+    assert [source["jurisdiction"] for source in ca_seeded_sources] == ["state/ca"]
     assert missing_payload is None
 
 
@@ -10019,10 +10318,12 @@ def test_get_committee_detail_exposes_active_linked_candidates_shape(
         "identity_is_safe",
         "has_official_total",
         "total_receipts",
+        "summary_coverage_end_date",
     }
     # This producer does not select the money column, so the shared list shape
     # reports it as unknown rather than inventing a zero.
     assert alpha_row["total_receipts"] is None
+    assert alpha_row["summary_coverage_end_date"] is None
     assert alpha_row["person_id"] == str(person_id_alpha)
     assert alpha_row["fec_candidate_id"] == "H0NC66001"
     assert alpha_row["party"] == "DEM"
@@ -10076,7 +10377,7 @@ def _seed_candidate_and_committee_for_ie(
     )
 
 
-def _insert_superseded_candidate_ie_source(db_conn: psycopg.Connection) -> UUID:
+def _insert_superseded_candidate_ie_source(db_conn: psycopg.Connection) -> tuple[UUID, UUID]:
     data_source = insert_data_source_for_test(
         db_conn,
         jurisdiction="federal/fec",
@@ -10099,7 +10400,7 @@ def _insert_superseded_candidate_ie_source(db_conn: psycopg.Connection) -> UUID:
         pull_date=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
         superseded_by=superseding_source.id,
     )
-    return superseded_source.id
+    return superseding_source.id, superseded_source.id
 
 
 def _seed_candidate_ie_summaries_fixture(
@@ -10133,7 +10434,7 @@ def _seed_candidate_ie_summaries_fixture(
             ),
         )
 
-    superseded_source_id = _insert_superseded_candidate_ie_source(db_conn)
+    active_source_id, superseded_source_id = _insert_superseded_candidate_ie_source(db_conn)
 
     transaction_rows = (
         (populated_candidate_id, Decimal("40000000.00"), date(2023, 1, 1), "N", False, "S", None),
@@ -10178,7 +10479,7 @@ def _seed_candidate_ie_summaries_fixture(
                 transaction_type="24E",
                 amount=amount,
                 amendment_indicator=amendment,
-                source_record_id=source_id,
+                source_record_id=source_id if source_id is not None else active_source_id,
                 transaction_date=transaction_date,
                 recipient_candidate_id=candidate_id,
                 is_memo=is_memo,

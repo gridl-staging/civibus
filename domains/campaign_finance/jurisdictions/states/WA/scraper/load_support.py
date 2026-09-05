@@ -5,6 +5,11 @@ from decimal import Decimal, InvalidOperation
 
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
 
+
+class WAIdentityAmbiguityError(RuntimeError):
+    """Raised when existing WA rows cannot be reconciled without guessing identity."""
+
+
 _normalize_optional_text = normalize_optional_text
 
 

@@ -14,6 +14,20 @@ const {
   (await import(new URL("./compare-fixtures.ts", import.meta.url).href)) as typeof import("./compare-fixtures");
 const { buildDonorSearchResponse } =
   (await import(new URL("./donor_lookup_fixture.ts", import.meta.url).href)) as typeof import("./donor_lookup_fixture");
+const { buildUnavailableStateNode, buildWashingtonNode, NYC_NODE, SEATTLE_NODE, WAKE_NODE } =
+  (await import(
+    new URL("../../src/lib/regional-navigation/test-fixtures.ts", import.meta.url).href
+  )) as typeof import("../../src/lib/regional-navigation/test-fixtures");
+
+const regionalStateFixtures = new Map([
+  ["WA", buildWashingtonNode()],
+  ["NC", buildUnavailableStateNode("NC", "North Carolina")],
+  ["AR", buildUnavailableStateNode("AR", "Arkansas")],
+  ["MN", buildUnavailableStateNode("MN", "Minnesota")],
+  ["LA", buildUnavailableStateNode("LA", "Louisiana")],
+  ["NY", buildUnavailableStateNode("NY", "New York")]
+]);
+const regionalFixtureNodes = [...regionalStateFixtures.values(), WAKE_NODE, SEATTLE_NODE, NYC_NODE];
 
 function writeJson(response: import("node:http").ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -577,6 +591,54 @@ const server = createServer(async (request, response) => {
 
   if (url.pathname === "/healthz") {
     writeJson(response, 200, { status: "ok" });
+    return;
+  }
+
+  if (url.pathname === "/v1/regional-navigation/resolve") {
+    const kind = url.searchParams.get("kind");
+    const stateCode = url.searchParams.get("state_code");
+    const slug = url.searchParams.get("slug");
+    const node = regionalFixtureNodes.find(
+      (candidate) =>
+        candidate.kind === kind &&
+        candidate.state_code === stateCode &&
+        (candidate.kind === "state" ? slug === null : candidate.slug === slug)
+    );
+    writeJson(response, node ? 200 : 404, node ?? { detail: "Regional navigation node not found." });
+    return;
+  }
+
+  if (url.pathname === "/v1/regional-navigation/children") {
+    const stateCode = url.searchParams.get("state_code");
+    const kind = url.searchParams.get("kind");
+    const items = regionalFixtureNodes.filter(
+      (candidate) => candidate.state_code === stateCode && candidate.kind === kind
+    );
+    writeJson(response, 200, {
+      items,
+      incomplete_node_kinds: kind === "county" || kind === "municipality" ? [kind] : [],
+      has_unsafe_omissions: true
+    });
+    return;
+  }
+
+  if (url.pathname === "/v1/regional-navigation/search") {
+    const query = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+    const requestedLimit = Number(url.searchParams.get("limit") ?? "20");
+    const limit = Number.isSafeInteger(requestedLimit) && requestedLimit > 0 ? requestedLimit : 20;
+    const items = regionalFixtureNodes
+      .filter((candidate) =>
+        [candidate.name, candidate.state_name, candidate.state_code, candidate.slug ?? ""]
+          .join(" ")
+          .toLowerCase()
+          .includes(query)
+      )
+      .slice(0, limit);
+    writeJson(response, 200, {
+      items,
+      incomplete_node_kinds: ["county", "municipality"],
+      has_unsafe_omissions: true
+    });
     return;
   }
 

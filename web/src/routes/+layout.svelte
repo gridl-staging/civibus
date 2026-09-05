@@ -21,6 +21,7 @@
 <NavigationProgress isNavigating={$navigating !== null} />
 
 <div class="shell">
+  <a class="shell__skip-link" href="#main-content" data-testid="shell-skip-link">Skip to main content</a>
   <header class="shell__header" aria-label="Application shell" data-testid="shell-header">
     <span class="shell__stage">{APP_SHELL.branding.stageLabel}</span>
     <h1 class="shell__title">{APP_SHELL.branding.name}</h1>
@@ -33,7 +34,7 @@
       {/each}
     </nav>
   </header>
-  <main aria-busy={$navigating !== null} data-testid="shell-main">
+  <main id="main-content" tabindex="-1" aria-busy={$navigating !== null} data-testid="shell-main">
     <slot />
   </main>
   <footer class="shell__footer" data-testid="shell-footer">

@@ -2,13 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Annotated, NoReturn, TypeVar
 from uuid import UUID
 
 import psycopg
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from pydantic import BaseModel, ValidationError
 
 from api.deps import get_db
+from api.middleware.logging import record_handled_exception_type
 from api.models import (
+    CAMPAIGN_FINANCE_DETAIL_UNAVAILABLE,
+    CampaignFinanceDetailErrorResponse,
     CandidateFundraisingSummary,
     CountyCampaignFinanceSummary,
     CandidateListItem,
@@ -31,6 +36,7 @@ from api.models import (
     TransactionListParams,
     TransactionResponse,
 )
+from api.models._validation import POSTGRES_SIGNED_BIGINT_MAX
 from api.queries import (
     CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL,
     CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL,
@@ -61,21 +67,32 @@ from api.queries import (
     fetch_transaction_list,
     resolve_selected_cycle,
 )
+from api.queries.campaign_finance import SUPPORTED_COMMITTEE_SUMMARY_CYCLES, InvalidCampaignFinanceMoneyError
 from api.routes.validation import build_query_params_dependency
 from core.types.python.models import validate_optional_state_code
 from domains.campaign_finance.constants import FILING_BREAKDOWN_STORE_LIMIT
 
 router = APIRouter()
 _build_transaction_list_params = build_query_params_dependency(TransactionListParams)
-_build_candidate_list_params = build_query_params_dependency(CandidateListParams)
-_build_committee_list_params = build_query_params_dependency(CommitteeListParams)
 _STATE_CAMPAIGN_FINANCE_RETIRED_DETAIL = (
     "State campaign-finance endpoints are retired for federal-first v1; "
     "use federal candidate, committee, and person endpoints instead."
 )
+_CAMPAIGN_FINANCE_DETAIL_ERROR_RESPONSES = {
+    500: {
+        "model": CampaignFinanceDetailErrorResponse,
+        "description": "The stored campaign-finance detail does not satisfy the public response contract.",
+    }
+}
+_CampaignFinanceResponseT = TypeVar("_CampaignFinanceResponseT", bound=BaseModel)
 
 
-def _selected_cycle_dependency(cycle: int | None = Query(default=None)) -> SelectedCycle:
+def _selected_cycle_dependency(
+    cycle: int | None = Query(
+        default=None,
+        json_schema_extra={"enum": SUPPORTED_COMMITTEE_SUMMARY_CYCLES},
+    ),
+) -> SelectedCycle:
     try:
         return resolve_selected_cycle(cycle)
     except ValueError as error:
@@ -122,9 +139,28 @@ def _fetch_row_or_404(conn: psycopg.Connection, query: str, row_id: UUID, not_fo
     return row
 
 
+def _raise_campaign_finance_detail_unavailable(request: Request, error: Exception) -> NoReturn:
+    """Record a safe classification and return the stable public 500 contract."""
+    record_handled_exception_type(request, error)
+    raise HTTPException(status_code=500, detail=CAMPAIGN_FINANCE_DETAIL_UNAVAILABLE) from error
+
+
+def _validate_campaign_finance_response(
+    request: Request,
+    response_model: type[_CampaignFinanceResponseT],
+    payload: object,
+) -> _CampaignFinanceResponseT:
+    """Validate stored campaign-finance data behind the sanitized error boundary."""
+    try:
+        return response_model.model_validate(payload)
+    except ValidationError as error:
+        _raise_campaign_finance_detail_unavailable(request, error)
+
+
 def _build_detail_response(
     conn: psycopg.Connection,
     *,
+    request: Request,
     query: str,
     row_id: UUID,
     not_found_detail: str,
@@ -144,12 +180,12 @@ def _build_detail_response(
     )
     if extra_detail_fields is not None:
         detail_row.update(extra_detail_fields(conn, row_id))
-    return response_model.model_validate(detail_row)
+    return _validate_campaign_finance_response(request, response_model, detail_row)
 
 
 @router.get("/committees", response_model=CommitteeListResponse)
 def list_committees(
-    params: CommitteeListParams = Depends(_build_committee_list_params),
+    params: Annotated[CommitteeListParams, Query()],
     conn: psycopg.Connection = Depends(get_db),
 ) -> CommitteeListResponse:
     result = fetch_committee_list(conn, params)
@@ -163,10 +199,19 @@ def get_committee_by_slug(slug: str, conn: psycopg.Connection = Depends(get_db))
     return [CommitteeListItem.model_validate(row) for row in rows]
 
 
-@router.get("/committees/{committee_id}", response_model=CommitteeResponse)
-def get_committee(committee_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> CommitteeResponse:
+@router.get(
+    "/committees/{committee_id}",
+    response_model=CommitteeResponse,
+    responses=_CAMPAIGN_FINANCE_DETAIL_ERROR_RESPONSES,
+)
+def get_committee(
+    committee_id: UUID,
+    request: Request,
+    conn: psycopg.Connection = Depends(get_db),
+) -> CommitteeResponse:
     return _build_detail_response(
         conn,
+        request=request,
         query=CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL,
         row_id=committee_id,
         not_found_detail="Committee not found",
@@ -183,7 +228,7 @@ def get_committee(committee_id: UUID, conn: psycopg.Connection = Depends(get_db)
 
 @router.get("/candidates", response_model=CandidateListResponse)
 def list_candidates(
-    params: CandidateListParams = Depends(_build_candidate_list_params),
+    params: Annotated[CandidateListParams, Query()],
     conn: psycopg.Connection = Depends(get_db),
 ) -> CandidateListResponse:
     result = fetch_candidate_list(conn, params)
@@ -197,10 +242,19 @@ def get_candidate_by_slug(slug: str, conn: psycopg.Connection = Depends(get_db))
     return [CandidateListItem.model_validate(row) for row in rows]
 
 
-@router.get("/candidates/{candidate_id}", response_model=CandidateResponse)
-def get_candidate(candidate_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> CandidateResponse:
+@router.get(
+    "/candidates/{candidate_id}",
+    response_model=CandidateResponse,
+    responses=_CAMPAIGN_FINANCE_DETAIL_ERROR_RESPONSES,
+)
+def get_candidate(
+    candidate_id: UUID,
+    request: Request,
+    conn: psycopg.Connection = Depends(get_db),
+) -> CandidateResponse:
     return _build_detail_response(
         conn,
+        request=request,
         query=CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL,
         row_id=candidate_id,
         not_found_detail="Candidate not found",
@@ -212,10 +266,19 @@ def get_candidate(candidate_id: UUID, conn: psycopg.Connection = Depends(get_db)
     )
 
 
-@router.get("/filings/{filing_id}", response_model=FilingResponse)
-def get_filing(filing_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> FilingResponse:
+@router.get(
+    "/filings/{filing_id}",
+    response_model=FilingResponse,
+    responses=_CAMPAIGN_FINANCE_DETAIL_ERROR_RESPONSES,
+)
+def get_filing(
+    filing_id: UUID,
+    request: Request,
+    conn: psycopg.Connection = Depends(get_db),
+) -> FilingResponse:
     return _build_detail_response(
         conn,
+        request=request,
         query=CAMPAIGN_FINANCE_FILING_DETAIL_SQL,
         row_id=filing_id,
         not_found_detail="Filing not found",
@@ -229,7 +292,20 @@ def get_filing(filing_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> F
     )
 
 
-@router.get("/transactions", response_model=list[TransactionResponse])
+@router.get(
+    "/transactions",
+    response_model=list[TransactionResponse],
+    openapi_extra={
+        "parameters": [
+            {
+                "name": "offset",
+                "in": "query",
+                "required": False,
+                "schema": TransactionListParams.model_json_schema()["properties"]["offset"],
+            }
+        ]
+    },
+)
 def list_transactions(
     params: TransactionListParams = Depends(_build_transaction_list_params),
     selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
@@ -277,22 +353,30 @@ def get_person_top_employers(
     return [PersonTopEmployerRow.model_validate(employer_row) for employer_row in employer_rows]
 
 
-@router.get("/committees/{committee_id}/summary", response_model=CommitteeFundraisingSummary)
+@router.get(
+    "/committees/{committee_id}/summary",
+    response_model=CommitteeFundraisingSummary,
+    responses=_CAMPAIGN_FINANCE_DETAIL_ERROR_RESPONSES,
+)
 def get_committee_summary(
     committee_id: UUID,
+    request: Request,
     selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
     conn: psycopg.Connection = Depends(get_db),
 ) -> CommitteeFundraisingSummary:
     detail_row = _fetch_row_or_404(conn, CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL, committee_id, "Committee not found")
 
-    summary = fetch_committee_fundraising_summary(conn, committee_id, selected_cycle)
+    try:
+        summary = fetch_committee_fundraising_summary(conn, committee_id, selected_cycle)
+    except InvalidCampaignFinanceMoneyError as error:
+        _raise_campaign_finance_detail_unavailable(request, error)
     if summary is None:
         summary = build_zero_committee_fundraising_summary(
             committee_id=committee_id,
             committee_name=detail_row["name"],
             selected_cycle=selected_cycle,
         )
-    return CommitteeFundraisingSummary.model_validate(summary)
+    return _validate_campaign_finance_response(request, CommitteeFundraisingSummary, summary)
 
 
 @router.get("/counties/{state}/{county_slug}/campaign-finance-summary", response_model=CountyCampaignFinanceSummary)
@@ -315,7 +399,7 @@ def get_county_campaign_finance_summary(
 def get_committee_filings_summary(
     committee_id: UUID,
     limit: int = Query(default=50, ge=1, le=FILING_BREAKDOWN_STORE_LIMIT),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=POSTGRES_SIGNED_BIGINT_MAX),
     conn: psycopg.Connection = Depends(get_db),
 ) -> CommitteeFilingBreakdown:
     detail_row = _fetch_row_or_404(conn, CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL, committee_id, "Committee not found")
@@ -337,9 +421,14 @@ def get_committee_filings_summary(
     )
 
 
-@router.get("/candidates/{candidate_id}/summary", response_model=CandidateFundraisingSummary)
+@router.get(
+    "/candidates/{candidate_id}/summary",
+    response_model=CandidateFundraisingSummary,
+    responses=_CAMPAIGN_FINANCE_DETAIL_ERROR_RESPONSES,
+)
 def get_candidate_summary(
     candidate_id: UUID,
+    request: Request,
     selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
     conn: psycopg.Connection = Depends(get_db),
 ) -> CandidateFundraisingSummary:
@@ -350,10 +439,13 @@ def get_candidate_summary(
     # itself, so the route does not need a fallback. ``None`` would mean the
     # candidate row has been deleted between the 404 check above and the summary
     # read; that race surfaces as 500 deliberately.
-    summary = fetch_candidate_summary(conn, candidate_id, detail_row["name"], selected_cycle)
+    try:
+        summary = fetch_candidate_summary(conn, candidate_id, detail_row["name"], selected_cycle)
+    except InvalidCampaignFinanceMoneyError as error:
+        _raise_campaign_finance_detail_unavailable(request, error)
     if summary is None:
-        raise HTTPException(status_code=500, detail="Candidate summary unavailable")
-    return CandidateFundraisingSummary.model_validate(summary)
+        raise HTTPException(status_code=500, detail=CAMPAIGN_FINANCE_DETAIL_UNAVAILABLE)
+    return _validate_campaign_finance_response(request, CandidateFundraisingSummary, summary)
 
 
 @router.get(
@@ -363,7 +455,7 @@ def get_candidate_summary(
 def get_candidate_independent_expenditures(
     candidate_id: UUID,
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=POSTGRES_SIGNED_BIGINT_MAX),
     selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
     conn: psycopg.Connection = Depends(get_db),
 ) -> list[IndependentExpenditureResponse]:
@@ -412,10 +504,11 @@ def get_campaign_finance_state_detail(
 )
 def get_committee_independent_expenditures_made(
     committee_id: UUID,
+    selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
     limit: int = Query(default=10, ge=1, le=100),
     conn: psycopg.Connection = Depends(get_db),
 ) -> CommitteeIndependentExpenditureActivity:
     _fetch_row_or_404(conn, CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL, committee_id, "Committee not found")
     return CommitteeIndependentExpenditureActivity.model_validate(
-        fetch_committee_ie_activity(conn, committee_id, limit)
+        fetch_committee_ie_activity(conn, committee_id, limit, selected_cycle=selected_cycle)
     )

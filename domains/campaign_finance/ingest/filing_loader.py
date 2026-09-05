@@ -24,7 +24,7 @@ END
 """
 
 
-_TRANSACTION_AMENDMENT_INDICATOR_INDEX = 23
+_TRANSACTION_AMENDMENT_INDICATOR_INDEX = 25
 
 
 _normalize_optional_text = normalize_optional_text
@@ -54,6 +54,24 @@ def generate_synthetic_committee_id(state: str, native_committee_id: str) -> str
     normalized_state = _normalize_state_code(state)
     normalized_native_id = _normalize_native_committee_id(native_committee_id)
     digest = hashlib.sha256(f"{normalized_state}:{normalized_native_id}".encode("utf-8")).digest()
+    committee_number = int.from_bytes(digest[:8], byteorder="big") % 100_000_000
+    return f"C{committee_number:08d}"
+
+
+def generate_authority_compatibility_committee_id(
+    authority_type: str,
+    authority_code: str,
+    native_committee_id: str,
+) -> str:
+    """Build an FEC-shaped compatibility value that is never the scoped key."""
+    normalized_type = authority_type.strip().lower()
+    normalized_code = authority_code.strip().upper()
+    normalized_native_id = _normalize_native_committee_id(native_committee_id)
+    if not normalized_type or not normalized_code:
+        raise ValueError("authority type and code must be non-empty")
+    if normalized_type == "state" and len(normalized_code) == 2:
+        return generate_synthetic_committee_id(normalized_code, normalized_native_id)
+    digest = hashlib.sha256(f"{normalized_type}:{normalized_code}:{normalized_native_id}".encode("utf-8")).digest()
     committee_number = int.from_bytes(digest[:8], byteorder="big") % 100_000_000
     return f"C{committee_number:08d}"
 
@@ -100,7 +118,7 @@ def ensure_state_committee(
             """
             INSERT INTO cf.committee (fec_committee_id, name, organization_id, state)
             VALUES (%s, %s, %s, %s)
-            ON CONFLICT (fec_committee_id)
+            ON CONFLICT (fec_committee_id) WHERE data_source_id IS NULL
             DO UPDATE SET
                 name = EXCLUDED.name,
                 organization_id = EXCLUDED.organization_id,
@@ -112,6 +130,74 @@ def ensure_state_committee(
                 canonical_name,
                 organization_id,
                 normalized_state,
+            ),
+        )
+        return cursor.fetchone()[0]
+
+
+def ensure_authority_committee(
+    conn: psycopg.Connection,
+    *,
+    data_source_id: UUID,
+    authority_type: str,
+    authority_code: str,
+    native_committee_id: str,
+    organization_id: UUID,
+    source_record_id: UUID | None = None,
+) -> UUID:
+    """Upsert a committee by typed authority, physical source, and native ID."""
+    canonical_name = _select_organization_canonical_name(conn, organization_id)
+    normalized_type = authority_type.strip().lower()
+    normalized_code = authority_code.strip().upper()
+    normalized_native_id = _normalize_native_committee_id(native_committee_id)
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT filing_authority_type, filing_authority_code
+            FROM core.data_source
+            WHERE id = %s
+            """,
+            (data_source_id,),
+        )
+        source_scope = cursor.fetchone()
+        if source_scope != (normalized_type, normalized_code):
+            raise ValueError(
+                f"data source {data_source_id} authority {source_scope!r} does not match "
+                f"{(normalized_type, normalized_code)!r}"
+            )
+        cursor.execute(
+            """
+            INSERT INTO cf.committee (
+                fec_committee_id,
+                data_source_id,
+                native_committee_id,
+                name,
+                organization_id,
+                state,
+                source_record_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (data_source_id, native_committee_id)
+            WHERE data_source_id IS NOT NULL
+            DO UPDATE SET
+                name = EXCLUDED.name,
+                organization_id = EXCLUDED.organization_id,
+                state = EXCLUDED.state,
+                source_record_id = COALESCE(EXCLUDED.source_record_id, cf.committee.source_record_id)
+            RETURNING id
+            """,
+            (
+                generate_authority_compatibility_committee_id(
+                    normalized_type,
+                    normalized_code,
+                    normalized_native_id,
+                ),
+                data_source_id,
+                normalized_native_id,
+                canonical_name,
+                organization_id,
+                normalized_code if normalized_type == "state" and len(normalized_code) == 2 else None,
+                source_record_id,
             ),
         )
         return cursor.fetchone()[0]
@@ -187,12 +273,19 @@ def update_transaction_contributor_identity_ids(
 
 
 def upsert_filing(conn: psycopg.Connection, filing: Filing) -> UUID:
+    conflict_target = (
+        "(filing_fec_id) WHERE data_source_id IS NULL"
+        if filing.data_source_id is None
+        else "(data_source_id, native_filing_id) WHERE data_source_id IS NOT NULL"
+    )
     with conn.cursor() as cursor:
         cursor.execute(
             f"""
             INSERT INTO cf.filing (
                 id,
                 filing_fec_id,
+                data_source_id,
+                native_filing_id,
                 committee_id,
                 candidate_id,
                 election_id,
@@ -207,9 +300,10 @@ def upsert_filing(conn: psycopg.Connection, filing: Filing) -> UUID:
                 amended_from_filing_id,
                 source_record_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (filing_fec_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT {conflict_target}
             DO UPDATE SET
+                filing_fec_id = EXCLUDED.filing_fec_id,
                 committee_id = EXCLUDED.committee_id,
                 candidate_id = COALESCE(EXCLUDED.candidate_id, cf.filing.candidate_id),
                 election_id = COALESCE(EXCLUDED.election_id, cf.filing.election_id),
@@ -235,6 +329,8 @@ def upsert_filing(conn: psycopg.Connection, filing: Filing) -> UUID:
             (
                 filing.id,
                 filing.filing_fec_id,
+                filing.data_source_id,
+                filing.native_filing_id,
                 filing.committee_id,
                 filing.candidate_id,
                 filing.election_id,
@@ -285,6 +381,24 @@ def _select_transaction_id_by_filing_and_identifier(
     )
 
 
+def _select_transaction_id_by_authority_native(
+    conn: psycopg.Connection,
+    data_source_id: UUID,
+    native_transaction_id: str,
+) -> UUID | None:
+    return _fetch_optional_scalar(
+        conn,
+        """
+        SELECT id
+        FROM cf.transaction
+        WHERE data_source_id = %s
+          AND native_transaction_id = %s
+        LIMIT 1
+        """,
+        (data_source_id, native_transaction_id),
+    )
+
+
 def _normalize_transaction(transaction: Transaction) -> Transaction:
     normalized_transaction_identifier = _normalize_optional_text(transaction.transaction_identifier)
     normalized_back_ref = _normalize_optional_text(transaction.back_ref_transaction_id)
@@ -299,6 +413,15 @@ def _normalize_transaction(transaction: Transaction) -> Transaction:
 
 
 def _resolve_existing_transaction_id(conn: psycopg.Connection, transaction: Transaction) -> UUID | None:
+    if transaction.data_source_id is not None:
+        if transaction.native_transaction_id is None:
+            raise ValueError("authority-scoped transaction requires native_transaction_id")
+        return _select_transaction_id_by_authority_native(
+            conn,
+            transaction.data_source_id,
+            transaction.native_transaction_id,
+        )
+
     existing_id_by_sub_id = None
     if transaction.sub_id is not None:
         existing_id_by_sub_id = _select_transaction_id_by_sub_id(conn, transaction.sub_id)
@@ -325,6 +448,8 @@ def _transaction_values(transaction: Transaction) -> tuple[object, ...]:
     return (
         transaction.filing_id,
         transaction.committee_id,
+        transaction.data_source_id,
+        transaction.native_transaction_id,
         transaction.transaction_type,
         transaction.transaction_identifier,
         transaction.back_ref_transaction_id,
@@ -378,6 +503,8 @@ def _update_transaction(
             UPDATE cf.transaction
             SET filing_id = %s,
                 committee_id = %s,
+                data_source_id = %s,
+                native_transaction_id = %s,
                 transaction_type = %s,
                 transaction_identifier = COALESCE(%s, transaction_identifier),
                 back_ref_transaction_id = COALESCE(%s, back_ref_transaction_id),
@@ -426,6 +553,8 @@ def _insert_transaction(conn: psycopg.Connection, transaction: Transaction) -> U
                 id,
                 filing_id,
                 committee_id,
+                data_source_id,
+                native_transaction_id,
                 transaction_type,
                 transaction_identifier,
                 back_ref_transaction_id,
@@ -456,7 +585,7 @@ def _insert_transaction(conn: psycopg.Connection, transaction: Transaction) -> U
                 aggregate_amount
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             RETURNING id
             """,
@@ -467,7 +596,11 @@ def _insert_transaction(conn: psycopg.Connection, transaction: Transaction) -> U
 
 def upsert_transaction_with_status(conn: psycopg.Connection, transaction: Transaction) -> TransactionUpsertResult:
     normalized_transaction = _normalize_transaction(transaction)
-    if normalized_transaction.sub_id is None and normalized_transaction.transaction_identifier is None:
+    if (
+        normalized_transaction.data_source_id is None
+        and normalized_transaction.sub_id is None
+        and normalized_transaction.transaction_identifier is None
+    ):
         raise ValueError("upsert_transaction requires at least one idempotency key")
 
     existing_transaction_id = _resolve_existing_transaction_id(conn, normalized_transaction)
@@ -498,7 +631,9 @@ def upsert_transaction(conn: psycopg.Connection, transaction: Transaction) -> UU
 
 
 __all__ = [
+    "ensure_authority_committee",
     "ensure_state_committee",
+    "generate_authority_compatibility_committee_id",
     "generate_synthetic_committee_id",
     "resolve_transaction_counterparty_ids",
     "update_transaction_contributor_identity_ids",

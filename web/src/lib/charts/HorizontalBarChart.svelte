@@ -6,10 +6,11 @@
   // for "a ranked list of a handful of rows".
   import ChartFrame from "./ChartFrame.svelte";
   import { sharedScaleWidthPct } from "./comparison-transforms";
-  import { formatCount, formatCurrency, toExactRows } from "./finance";
+  import { formatChartMoneyValue, formatCount, formatCurrency, toExactRows } from "./finance";
   import type { ChartFrameProps, HorizontalBarRow } from "./types";
 
   export let testId: string;
+  export let disclosureContext: string;
   export let title: string;
   export let cycle: number;
   export let coverageThrough: string | null;
@@ -19,23 +20,40 @@
   // omitted elsewhere, where the chart self-normalizes to its own largest row.
   export let scaleMax: number | undefined = undefined;
 
-  $: plottedRows = rows.filter((row) => row.canPlot);
+  $: geometryIsSafe = rows.every(
+    (row) => row.unit === "reported_transactions" || row.amount !== null
+  );
+  $: plottedRows = rows.filter(
+    (row) => row.canPlot && (row.unit === "reported_transactions" || row.amount !== null)
+  );
   // One expression, consumed by the frame's declared unit, so the rows' unit and
   // the frame's "Unit: …" label cannot drift apart.
   $: declaredUnit = plottedRows[0]?.unit ?? "dollars";
   $: ownMaxRowValue = Math.max(0, ...plottedRows.map((row) => getRowValue(row)));
   $: effectiveScaleMax = scaleMax ?? ownMaxRowValue;
   $: state =
-    plottedRows.length === 0
+    rows.length === 0
       ? { kind: "no-data" as const, message: "No itemized rows are loaded for this chart." }
-      : { kind: "ready" as const };
+      : !geometryIsSafe
+        ? {
+            kind: "table-only" as const,
+            message:
+              "Amounts exceed the safely plottable range; exact values are shown in the chart data table."
+          }
+        : plottedRows.length === 0
+          ? { kind: "no-data" as const, message: "No itemized rows are loaded for this chart." }
+          : { kind: "ready" as const };
   $: exactRows = toExactRows(rows);
+  $: totalTransactions = plottedRows.reduce((sum, row) => sum + row.transactionCount, 0);
   $: summary = {
-    sentence: `${title} discloses ${formatCurrency(
-      plottedRows.reduce((sum, row) => sum + row.amount, 0)
-    )} across ${formatCount(
-      plottedRows.reduce((sum, row) => sum + row.transactionCount, 0)
-    )} reported transactions in the ${cycle} cycle.`
+    sentence:
+      declaredUnit === "reported_transactions"
+        ? `${title} discloses ${formatCount(totalTransactions)} reported transactions in the ${cycle} cycle.`
+        : geometryIsSafe
+          ? `${title} discloses ${formatCurrency(
+              plottedRows.reduce((sum, row) => sum + (row.amount ?? 0), 0)
+            )} across ${formatCount(totalTransactions)} reported transactions in the ${cycle} cycle.`
+          : `Exact ${title.toLowerCase()} dollar amounts are shown for the ${cycle} cycle.`
   };
 
   function getRowWidth(row: HorizontalBarRow): string {
@@ -43,19 +61,20 @@
   }
 
   function getRowValue(row: HorizontalBarRow): number {
-    return row.unit === "reported_transactions" ? row.transactionCount : row.amount;
+    return row.unit === "reported_transactions" ? row.transactionCount : (row.amount ?? 0);
   }
 
   function formatRowUnit(row: HorizontalBarRow): string {
     if (row.unit === "reported_transactions") {
       return `${formatCount(row.transactionCount)} reported transactions`;
     }
-    return `${formatCurrency(row.amount)}; ${formatCount(row.transactionCount)} reported transactions`;
+    return `${formatChartMoneyValue(row.amount, row.amountLabel)}; ${formatCount(row.transactionCount)} reported transactions`;
   }
 </script>
 
 <ChartFrame
   {testId}
+  {disclosureContext}
   {title}
   unit={declaredUnit}
   {cycle}

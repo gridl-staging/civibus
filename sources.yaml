@@ -1119,6 +1119,74 @@ jurisdictions:
       - layer: L1
         scope: CA
         path: evidence/L1/CA/2026-04-29.json
+- scope: WA
+  phase: Phase 2
+  ownership: project-local L3 state registry; WA config remains the source URL
+    and loader contract owner
+  sources:
+  - source_id: wa_contributions
+    current_state: prototyped
+    coverage_boundary: Existing WA PDC contributions loader/source contract. Source
+      URL, coverage, and cadence remain owned by the WA config; completeness, civic
+      linkage, recurrence, and publication remain unproved.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-08-26
+      rationale: Register the existing loader-backed contributions source from one
+        bounded, operator-attended receipt without promoting scheduling, unattended
+        recurrence, full-history completeness, civic linkage, or public coverage.
+      evidence_refs:
+      - layer: docs
+        scope: WA_contributions_bounded_manual_receipt_2026_08_26
+        path: docs/live-state/2026_08_26_wa_contributions_production_refresh_receipt.md
+  - source_id: wa_expenditures
+    current_state: prototyped
+    coverage_boundary: Existing WA PDC expenditures loader/source contract. Source
+      URL, coverage, and cadence remain owned by the WA config; completeness, civic
+      linkage, recurrence, and publication remain unproved.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-08-24
+      rationale: Register the existing loader-backed expenditures source from one
+        bounded, operator-attended receipt without promoting scheduling, unattended
+        recurrence, full-history completeness, civic linkage, or public coverage.
+      evidence_refs:
+      - layer: docs
+        scope: WA_expenditures_bounded_manual_receipt_2026_08_24
+        path: docs/live-state/2026_08_23_state_wa_expenditures_refresh_proof.md
+  - source_id: wa_independent_expenditures
+    current_state: prototyped
+    coverage_boundary: One existing WA PDC independent-expenditures dataset keeps
+      C6.2 itemized expenditures, C6.3 identified-entity attribution, and C6.5
+      funding-source disclosures distinct; C6.5 source records do not land in
+      cf.transaction. Completeness, civic linkage, recurrence, and publication remain
+      unproved.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-08-23
+      rationale: Register the one polymorphic loader/source contract while preserving
+        its bounded degraded receipt and accepted record-class semantics. This does
+        not promote scheduling, unattended recurrence, completeness, civic linkage,
+        or public coverage.
+      evidence_refs:
+      - layer: docs
+        scope: WA_independent_expenditures_bounded_degraded_receipt_2026_08_23
+        path: docs/live-state/2026_08_23_wa_ie_production_refresh_receipt.md
+  - source_id: wa_loans
+    current_state: prototyped
+    coverage_boundary: Existing WA PDC loans loader/source contract. Source URL,
+      coverage, and cadence remain owned by the WA config; completeness, civic linkage,
+      recurrence, and publication remain unproved.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-08-26
+      rationale: Register the existing loader-backed loans source from one bounded,
+        operator-attended receipt without promoting scheduling, unattended recurrence,
+        full-history completeness, civic linkage, or public coverage.
+      evidence_refs:
+      - layer: docs
+        scope: WA_loans_bounded_manual_receipt_2026_08_26
+        path: docs/live-state/2026_08_26_wa_loans_success_reconciliation.md
 - scope: FEDERAL
   phase: Phase 3
   ownership: project-local pilot registry until matt-side absorption exists

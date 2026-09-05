@@ -57,13 +57,14 @@ export const SMOKE_PHL_COMMITTEE_ID = "12121212-1212-4121-8121-121212121212";
 export const SMOKE_NC_SHOWCASE_STATE_CODE = "NC";
 export const SMOKE_NC_SHOWCASE_COUNTY_SLUG = "wake";
 export const SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME = "nc_county_wake";
+export const SMOKE_NC_SHOWCASE_COUNTY_LINK_NAME = "Wake County";
 // NC-01 congressional district: the electoral division shared by the House
 // office fixture and the civic-geometry feature the fixture backend serves
 // for level=congressional_district&state=NC.
 export const SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID = "district-nc-01";
 export const SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_TYPE = "congressional_district";
 export const SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_NAME = "nc_cd_01";
-export const SMOKE_NC_SHOWCASE_COUNTY_HEADING = "Wake County, NC";
+export const SMOKE_NC_SHOWCASE_COUNTY_HEADING = "Wake County";
 export const SMOKE_NC_SHOWCASE_DONOR_TOTAL = "$1,234.56";
 export const SMOKE_NC_SHOWCASE_RECIPIENT_NAME = "Wake County Future Fund";
 export const SMOKE_NC_SHOWCASE_TRUST_SOURCE_NAME = "NC Campaign Finance (campaign_finance/state/nc)";
@@ -120,11 +121,14 @@ export const SMOKE_HOME_FORBIDDEN_WARNING_STATE = "Minnesota";
 export const SMOKE_HOME_FORBIDDEN_WARNING_TEXT = "Quarterly bulk only; refresh cadence below weekly target.";
 export const SMOKE_HOME_FORBIDDEN_CANDIDATE_ACTION = "Browse Candidates";
 export const SMOKE_HOME_FORBIDDEN_COMMITTEE_ACTION = "Browse Committees";
-export const SMOKE_STATE_DETAIL_SUPPORTED_CODE = "NC";
-export const SMOKE_STATE_DETAIL_SUPPORTED_NAME = "North Carolina";
-export const SMOKE_STATE_DETAIL_RETIRED_HEADING = "State campaign finance is outside federal-first v1";
-export const SMOKE_STATE_DETAIL_RETIRED_MESSAGE =
-  "Civibus v1 is focused on federal officials, candidates, committees, and independent expenditures.";
+export const SMOKE_STATE_DETAIL_SUPPORTED_CODE = "WA";
+export const SMOKE_STATE_DETAIL_SUPPORTED_NAME = "Washington";
+export const SMOKE_STATE_DETAIL_STATUS_HEADING = "Campaign finance available";
+export const SMOKE_STATE_DETAIL_CANDIDATE_NAME = "Alex Washington";
+export const SMOKE_STATE_DETAIL_COMMITTEE_NAME = "Washington Future Committee";
+export const SMOKE_STATE_DETAIL_MONEY = ["$125.50", "$80.25", "$45.75", "$20.00"] as const;
+export const SMOKE_STATE_DETAIL_UNAVAILABLE_CODE = "NC";
+export const SMOKE_STATE_DETAIL_UNAVAILABLE_NAME = "North Carolina";
 export const SMOKE_STATE_DETAIL_WARNING_STATE_NAME = "Minnesota";
 export const SMOKE_STATE_DETAIL_UNSUPPORTED_CODE = "AR";
 export const SMOKE_STATE_DETAIL_WARNING_CODE = "MN";

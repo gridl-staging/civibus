@@ -52,6 +52,7 @@ CA_PACKAGE = f"{STATES_PACKAGE}.CA"
 MN_PACKAGE = f"{STATES_PACKAGE}.MN"
 CITIES_LA_PACKAGE = f"{CITIES_PACKAGE}.LA"
 STATES_LA_PACKAGE = f"{STATES_PACKAGE}.LA"
+REFRESH_REGISTRY_MODULE = f"{JURISDICTIONS_PACKAGE}.refresh_registry"
 ImportPolicyEntry = tuple[str, str, str]
 
 SHARED_SEAM_MODULES = (
@@ -86,18 +87,16 @@ _DEFAULT_ACCEPTED_INBOUND_IMPORTS: frozenset[ImportPolicyEntry] = frozenset(
         ("core/keel_gate_l6.py", "core.keel_gate_l6", f"{STATES_PACKAGE}.NC.scraper.parse"),
     }
     | _accepted_inbound_imports(
-        "core/refresh/job_builders.py",
-        "core.refresh.job_builders",
+        "domains/campaign_finance/jurisdictions/refresh_registry.py",
+        REFRESH_REGISTRY_MODULE,
         _state_modules(
             """
-            AL.scraper AL.scraper.cli CA.scraper.cli CO.scraper.cli FL.scraper.cli GA.scraper.cli
-            IL.scraper.cli IN.scraper.cli KY.scraper KY.scraper.cli LA.scraper LA.scraper.cli
-            MA.scraper.cli MN.scraper.cli NC.scraper.cli NC.scraper.load_support NE.scraper
-            NE.scraper.cli NJ.scraper.cli NY.scraper.cli OR.scraper OR.scraper.cli PA.scraper.cli
-            TX.scraper.cli VA.scraper.cli WA.scraper.cli WI.scraper.cli
+            AL.refresh CA.refresh CO.refresh FL.refresh GA.refresh IL.refresh IN.refresh KY.refresh
+            LA.refresh MA.refresh MN.refresh NC.refresh NE.refresh NJ.refresh NY.refresh OR.refresh
+            PA.refresh TX.refresh VA.refresh WA.refresh WI.refresh
             """
         )
-        + _modules(CITIES_PACKAGE, "LA.scraper.cli NYC.scraper.cli PHL.scraper.cli SF.scraper.cli"),
+        + _modules(CITIES_PACKAGE, "LA.refresh NYC.refresh PHL.refresh SF.refresh"),
     )
     | _accepted_inbound_imports(
         "domains/campaign_finance/quality/freshness.py",
@@ -505,6 +504,20 @@ def test_shared_seams_are_not_region_roots(region_roots: tuple[RegionRoot, ...])
     assert STATES_PACKAGE not in package_roots
     assert CITIES_PACKAGE not in package_roots
     assert f"{JURISDICTIONS_PACKAGE}._template" not in package_roots
+
+
+def test_refresh_registry_is_the_only_allowed_refresh_adapter_composition_point() -> None:
+    registry_path = "domains/campaign_finance/jurisdictions/refresh_registry.py"
+    expected_registry_entries = {
+        (registry_path, REFRESH_REGISTRY_MODULE, f"{root}.refresh") for root in (STATES_LA_PACKAGE, CITIES_LA_PACKAGE)
+    }
+
+    assert expected_registry_entries <= _DEFAULT_ACCEPTED_INBOUND_IMPORTS
+    assert not {
+        entry
+        for entry in _DEFAULT_ACCEPTED_INBOUND_IMPORTS
+        if entry[0] == "core/refresh/job_builders.py" and entry[2].endswith(".refresh")
+    }
 
 
 # --------------------------------------------------------------------------

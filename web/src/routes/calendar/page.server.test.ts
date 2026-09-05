@@ -80,11 +80,12 @@ describe("/calendar +page.server load", () => {
       new ApiResponseError(503, { detail: "service unavailable" })
     );
 
-    const { event } = createLoadEvent();
+    const { event, setHeaders } = createLoadEvent();
 
     await expect(load(event)).rejects.toMatchObject({
       status: 503,
       body: { detail: "service unavailable" }
     });
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 });

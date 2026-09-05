@@ -2173,6 +2173,7 @@ def test_committee_response_round_trips_linked_candidates_reusing_candidate_list
     assert linked["slug_is_unique"] is True
     assert linked["identity_is_safe"] is True
     assert linked["has_official_total"] is True
+    assert linked["summary_coverage_end_date"] is None
     assert CommitteeResponse.model_validate(dumped).model_dump(mode="json") == dumped
 
 
@@ -2194,7 +2195,14 @@ def test_candidate_list_item_requires_and_round_trips_identity_is_safe() -> None
     with pytest.raises(ValidationError):
         CandidateListItem.model_validate({**base_payload, "identity_is_safe": True})
 
-    true_item = CandidateListItem.model_validate({**base_payload, "identity_is_safe": True, "has_official_total": True})
+    true_item = CandidateListItem.model_validate(
+        {
+            **base_payload,
+            "identity_is_safe": True,
+            "has_official_total": True,
+            "summary_coverage_end_date": date(2026, 3, 31),
+        }
+    )
     false_item = CandidateListItem.model_validate(
         {
             **base_payload,
@@ -2208,8 +2216,10 @@ def test_candidate_list_item_requires_and_round_trips_identity_is_safe() -> None
 
     assert true_item.model_dump(mode="json")["identity_is_safe"] is True
     assert true_item.model_dump(mode="json")["has_official_total"] is True
+    assert true_item.model_dump(mode="json")["summary_coverage_end_date"] == "2026-03-31"
     assert false_item.model_dump(mode="json")["identity_is_safe"] is False
     assert false_item.model_dump(mode="json")["has_official_total"] is False
+    assert false_item.model_dump(mode="json")["summary_coverage_end_date"] is None
     assert CandidateListItem.model_validate(false_item.model_dump(mode="json")).model_dump(
         mode="json"
     ) == false_item.model_dump(mode="json")

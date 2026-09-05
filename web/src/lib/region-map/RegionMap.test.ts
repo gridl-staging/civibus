@@ -219,11 +219,13 @@ describe("RegionMap", () => {
     expect(rendered.body).not.toContain("Congressional District 01");
   });
 
-  it("renders county features as drilldown links when the state code is provided", () => {
+  it("renders county features with the resolver-owned accessible link label", () => {
     const rendered = render(RegionMap, {
       props: {
         pageLevel: "state",
-        stateCode: "NC",
+        featureLinks: {
+          "county-id": { href: "/state/NC/county/wake", label: "Wake County" }
+        },
         layerVisibility: {
           nc_statewide_boundary: true,
           nc_county_boundaries: true,
@@ -260,6 +262,44 @@ describe("RegionMap", () => {
     });
 
     expect(rendered.body).toContain('href="/state/NC/county/wake"');
+    expect(rendered.body).toContain('href="/state/NC/county/wake">Wake County</a>');
+    expect(rendered.body).not.toContain('href="/state/NC/county/wake">nc_county_wake</a>');
+  });
+
+  it("does not derive a route from a county division name", () => {
+    const rendered = render(RegionMap, {
+      props: {
+        pageLevel: "state",
+        stateCode: "NC",
+        layerVisibility: {
+          nc_statewide_boundary: true,
+          nc_county_boundaries: true,
+          nc_congressional_districts: false
+        },
+        geometryByLevel: {
+          county: {
+            type: "FeatureCollection",
+            features: [
+              {
+                type: "Feature",
+                geometry: { type: "Polygon", coordinates: [] },
+                properties: {
+                  id: "county-id",
+                  name: "nc_county_wake",
+                  division_type: "county",
+                  state: "NC",
+                  district_number: null,
+                  boundary_year: 2024
+                }
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(rendered.body).toContain("nc_county_wake");
+    expect(rendered.body).not.toContain('href="/state/NC/county/wake"');
   });
 
   it("highlights only the matching feature id while preserving visible non-highlighted layers", () => {

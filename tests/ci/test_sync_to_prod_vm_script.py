@@ -9,8 +9,8 @@ with rsync over SSH. Tests assert the script's contract at PR time:
 - has --dry-run + --apply + --help modes
 
 These cannot exercise the actual rsync against the live VM (would require
-SSH + state changes); --dry-run can be exercised separately at CI time
-against a stubbed target.
+SSH + state changes). The default-mode contract therefore executes a copied
+script against a PATH-injected fake rsync and inspects its operative arguments.
 """
 
 from __future__ import annotations
@@ -23,17 +23,6 @@ import pytest
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "infra" / "scripts" / "sync_to_prod_vm.sh"
-
-# The script FATALs on a missing SSH key before it prints "DRY RUN", so any test
-# that actually *invokes* the script needs the canonical key present. It exists in
-# real dev checkouts but not in stripped worktrees (batman's ephemeral merge
-# worktree, secret-less CI sandboxes), where the script can never announce DRY RUN.
-# Skip — don't fail — those invocation tests when the key is absent.
-CANONICAL_SSH_KEY = Path(__file__).resolve().parents[2] / ".secret" / "hetzner_ssh_key.txt"
-_requires_ssh_key = pytest.mark.skipif(
-    not CANONICAL_SSH_KEY.exists(),
-    reason=f"requires canonical SSH key at {CANONICAL_SSH_KEY} (absent in stripped merge/CI worktrees)",
-)
 
 
 @pytest.fixture(scope="module")
@@ -129,27 +118,51 @@ def test_script_targets_canonical_vm(script_code: str) -> None:
     assert "/root/civibus/civibus_dev" in script_code
 
 
-@_requires_ssh_key
-def test_default_invocation_is_dry_run() -> None:
-    """Safe-by-default: running with no flags performs --dry-run only.
-    No state changes against the VM. (We can't fully verify "no changes
-    made" from outside, but we can assert the script reports DRY RUN and
-    exits cleanly.)
-    """
-    # Without an SSH key present at the canonical path, even --dry-run
-    # would fail at the FATAL guard. Since the test repo's .secret/ lives
-    # alongside the script, we expect the key to exist locally; the test
-    # then asserts the output starts in dry-run mode.
+def test_default_invocation_is_dry_run(tmp_path: Path) -> None:
+    """Default mode must pass the non-mutating flags to rsync without network I/O."""
+    repo_root = tmp_path / "repo"
+    copied_script = repo_root / "infra" / "scripts" / SCRIPT_PATH.name
+    copied_script.parent.mkdir(parents=True)
+    copied_script.write_text(SCRIPT_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    copied_script.chmod(0o755)
+
+    fake_key = repo_root / ".secret" / "hetzner_ssh_key.txt"
+    fake_key.parent.mkdir(parents=True)
+    fake_key.write_text("test-only-placeholder\n", encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    rsync_args_path = tmp_path / "rsync_args.txt"
+    fake_rsync = fake_bin / "rsync"
+    fake_rsync.write_text(
+        '#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$@" > "${RSYNC_ARGS_PATH:?}"\n',
+        encoding="utf-8",
+    )
+    fake_rsync.chmod(0o755)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+    env["RSYNC_ARGS_PATH"] = str(rsync_args_path)
     result = subprocess.run(
-        [str(SCRIPT_PATH)],
+        [str(copied_script)],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=10,
+        env=env,
     )
-    # The script may exit non-zero if it can't reach the VM (e.g. CI sandbox
-    # without network). We only assert the script announced dry-run BEFORE
-    # any rsync attempt.
-    assert "DRY RUN" in result.stdout, "default invocation must announce DRY RUN"
+    assert result.returncode == 0, result.stderr
+    assert "DRY RUN" in result.stdout
+
+    rsync_args = rsync_args_path.read_text(encoding="utf-8").splitlines()
+    assert "--dry-run" in rsync_args, f"default invocation omitted --dry-run: {rsync_args}"
+    assert "--itemize-changes" in rsync_args
+    assert "--delete-after" in rsync_args
+    assert rsync_args[-2:] == [
+        f"{repo_root}/",
+        "root@5.78.207.136:/root/civibus/civibus_dev/",
+    ]
+    ssh_argument_index = rsync_args.index("-e") + 1
+    assert rsync_args[ssh_argument_index] == (f"ssh -i {fake_key} -o BatchMode=yes -o ConnectTimeout=15")
 
 
 def test_help_runs_clean() -> None:

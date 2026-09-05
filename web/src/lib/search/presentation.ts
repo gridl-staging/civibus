@@ -3,18 +3,29 @@
  */
 import {
   SEARCH_ENTITY_TYPES,
+  SEARCH_FILTER_TYPES,
   SEARCH_PAGE_SIZE,
   SEARCH_QUERY_MIN_LENGTH,
   buildSearchPagePath,
-  isSearchEntityType,
+  isSearchFilterType,
   toSearchResultHref,
   type SearchApiResult,
-  type SearchEntityType
+  type SearchEntityType,
+  type SearchFilterType
 } from './contract';
 import { formatCountLabel } from '$lib/count-label';
 import { formatPersonDisplayName } from '$lib/display-name';
 import { FEC_CANDIDATE_OFFICE_OPTIONS } from '$lib/campaign-finance-detail/filter-options';
 import { buildPaginationContext } from '$lib/campaign-finance-detail/list-presentation';
+import { formatCurrency as formatExactCurrency } from '$lib/campaign-finance-detail/presentation';
+import {
+  buildRegionalSearchCards,
+  type RegionalSearchCard
+} from '$lib/regional-navigation/presentation';
+import type {
+  RegionalNavigationNode,
+  RegionalNodeKind
+} from '$lib/server/api/state-pages-contract';
 
 export type SearchResultCardData = SearchApiResult;
 
@@ -28,13 +39,17 @@ export type SearchResultCard = {
 };
 
 export type SearchEntityTypeOption = {
-  value: SearchEntityType;
+  value: SearchFilterType;
   label: string;
 };
 
 export type SearchStatusMessageInput = {
   query: string;
   resultCount: number;
+  /** The backend returned at least one row that could not become a safe link. */
+  hasUnrenderableResults?: boolean;
+  /** A successful backend page could not support exact web navigation. */
+  hasUnavailableResultPage?: boolean;
   validationMessage?: string;
   isSubmitting?: boolean;
   /**
@@ -61,23 +76,47 @@ export type SearchPagePresentationInput = {
   query: string;
   entityType: string;
   results: SearchResultCardData[];
+  regionalResults?: RegionalNavigationNode[];
+  regionalIncompleteNodeKinds?: RegionalNodeKind[];
+  regionalHasUnsafeOmissions?: boolean;
   /** Zero-based position of this page within the result set (URL `offset`). */
   offset?: number;
   /** True when the page server's LIMIT+1 probe found a further page. */
   hasNext?: boolean;
+  /** The current backend page included at least one row without a safe route. */
+  hasUnrenderableResults?: boolean;
+  /** The accepted backend page could not support exact web navigation. */
+  hasUnavailableResultPage?: boolean;
   validationMessage?: string;
   form?: SearchPageFormState | null;
   isSubmitting?: boolean;
 };
 
+const REGIONAL_OMISSION_LABELS: Record<RegionalNodeKind, string> = {
+  state: "state",
+  county: "county",
+  municipality: "municipality",
+  school_district: "school district",
+  special_district: "special district",
+};
+
+function regionalOmissionDisclosure(kinds: RegionalNodeKind[]): string {
+  const labels = [...new Set(kinds)].map(
+    (kind) => REGIONAL_OMISSION_LABELS[kind],
+  );
+  return `Regional route search is incomplete. Explicit routes may be omitted for ${labels.join(", ")} subjects.`;
+}
+
 export type SearchPagePresentation = {
   metadata: SearchRouteMetadata;
   resultCards: SearchResultCard[];
+  regionalCards: RegionalSearchCard[];
   pagination: SearchPaginationPresentation | null;
   showResultsSkeleton: boolean;
   queryValue: string;
-  selectedEntityType: SearchEntityType | '';
+  selectedEntityType: SearchFilterType | '';
   inlineValidationMessage: string;
+  queryHasValidationError: boolean;
   submitButtonLabel: string;
   queryPlaceholder: string;
   entityTypeOptions: SearchEntityTypeOption[];
@@ -131,8 +170,8 @@ const SEARCH_GUIDANCE_BLOCK_TEMPLATE =
 const DEFAULT_SEARCH_QUERY_PLACEHOLDER =
   `Search ${ENTITY_LIST_OR}`;
 
-function getSelectedEntityType(entityType: string): SearchEntityType | '' {
-  return isSearchEntityType(entityType) ? entityType : '';
+function getSelectedEntityType(entityType: string): SearchFilterType | '' {
+  return isSearchFilterType(entityType) ? entityType : '';
 }
 
 function getGuidanceBlock(query: string): string {
@@ -144,22 +183,27 @@ function getGuidanceBlock(query: string): string {
 }
 
 function buildSearchBrowseLinks(): SearchBrowseLink[] {
-  return SEARCH_ENTITY_TYPES.map((entityType) => ({
-    label: SEARCH_ENTITY_ROUTE_LABELS[entityType],
-    href: buildSearchPagePath({ entityType })
+  return SEARCH_FILTER_TYPES.map((filterType) => ({
+    label: filterType === 'region' ? 'Region' : SEARCH_ENTITY_ROUTE_LABELS[filterType],
+    href: buildSearchPagePath({ entityType: filterType })
   }));
 }
 
 function buildSearchEntityTypeOptions(): SearchEntityTypeOption[] {
-  return SEARCH_ENTITY_TYPES.map((entityType) => ({
-    value: entityType,
-    label: SEARCH_ENTITY_ROUTE_LABELS[entityType]
+  return SEARCH_FILTER_TYPES.map((filterType) => ({
+    value: filterType,
+    label: filterType === 'region' ? 'Region' : SEARCH_ENTITY_ROUTE_LABELS[filterType]
   }));
 }
 
 /**
  */
-export function buildSearchMetadata({ query, resultCount }: SearchStatusMessageInput): SearchRouteMetadata {
+export function buildSearchMetadata({
+  query,
+  resultCount,
+  hasUnrenderableResults = false,
+  hasUnavailableResultPage = false
+}: SearchStatusMessageInput): SearchRouteMetadata {
   const normalizedQuery = query.trim();
 
   if (normalizedQuery === '') {
@@ -169,7 +213,21 @@ export function buildSearchMetadata({ query, resultCount }: SearchStatusMessageI
     };
   }
 
+  if (hasUnavailableResultPage) {
+    return {
+      title: `${normalizedQuery} | Search | Civibus`,
+      description: `The requested results page for "${normalizedQuery}" could not be displayed.`
+    };
+  }
+
   const resultLabel = formatCountLabel(resultCount, 'result');
+
+  if (hasUnrenderableResults) {
+    return {
+      title: `${normalizedQuery} (${resultLabel} shown) | Search | Civibus`,
+      description: `${resultLabel} shown for "${normalizedQuery}"; some matching records could not be displayed.`
+    };
+  }
 
   return {
     title: `${normalizedQuery} (${resultLabel}) | Search | Civibus`,
@@ -182,12 +240,18 @@ export function buildSearchMetadata({ query, resultCount }: SearchStatusMessageI
 export function getSearchStatusMessage({
   query,
   resultCount,
+  hasUnrenderableResults = false,
+  hasUnavailableResultPage = false,
   validationMessage = '',
   isSubmitting = false,
   isPaged = false
 }: SearchStatusMessageInput): string {
   if (isSubmitting) {
     return 'Searching...';
+  }
+
+  if (hasUnavailableResultPage) {
+    return 'The requested results page could not be displayed. Submit the search to return to the first page.';
   }
 
   if (validationMessage.trim() !== '') {
@@ -199,7 +263,13 @@ export function getSearchStatusMessage({
   }
 
   if (resultCount === 0) {
-    return 'No matching records found.';
+    return hasUnrenderableResults
+      ? 'Matching records were found, but none could be displayed.'
+      : 'No matching records found.';
+  }
+
+  if (hasUnrenderableResults) {
+    return `${formatCountLabel(resultCount, 'result')} shown. Some matching records could not be displayed.`;
   }
 
   // "found" states a complete count; a paged set held rows back, so its count
@@ -235,22 +305,34 @@ function expandCommitteeTypeLabel(code: string): string {
   return COMMITTEE_TYPE_LABELS[normalizedCode] ?? code;
 }
 
-function formatCurrency(amount: number): string {
+function formatRoundedCurrency(amount: number): string {
   return amount.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 }
 
-function parseContextCurrencyAmount(value: number | string | null | undefined): number | null {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : null;
-  }
-
-  const normalizedValue = normalizeContextValue(value);
+function formatContextCurrency(value: number | string | null | undefined): string | null {
+  const normalizedValue = typeof value === 'string' ? normalizeContextValue(value) : value;
   if (normalizedValue == null) {
     return null;
   }
 
-  const parsedValue = Number(normalizedValue);
-  return Number.isFinite(parsedValue) ? parsedValue : null;
+  try {
+    const exactCurrency = formatExactCurrency(normalizedValue);
+    const parsedValue = typeof normalizedValue === 'number' ? normalizedValue : Number(normalizedValue);
+
+    // Search context intentionally rounds ordinary totals to whole dollars.
+    // Keep that presentation where the numeric projection retains cent-level
+    // headroom; larger serialized amounts stay exact through the shared owner.
+    if (
+      Number.isFinite(parsedValue) &&
+      Math.abs(parsedValue) <= Number.MAX_SAFE_INTEGER / 100
+    ) {
+      return formatRoundedCurrency(parsedValue);
+    }
+
+    return exactCurrency.endsWith('.00') ? exactCurrency.slice(0, -3) : exactCurrency;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeContextValue(value: string | null | undefined): string | null {
@@ -297,9 +379,9 @@ function buildGenericContextLine(result: SearchResultCardData): string {
     contextSegments.push(expandCommitteeTypeLabel(committeeType));
   }
 
-  const totalRaised = parseContextCurrencyAmount(result.total_raised);
+  const totalRaised = formatContextCurrency(result.total_raised);
   if (totalRaised != null) {
-    contextSegments.push(formatCurrency(totalRaised));
+    contextSegments.push(totalRaised);
   }
 
   const state = normalizeContextValue(result.state);
@@ -382,8 +464,13 @@ export function buildSearchPagePresentation({
   query,
   entityType,
   results,
+  regionalResults = [],
+  regionalIncompleteNodeKinds = [],
+  regionalHasUnsafeOmissions = false,
   offset = 0,
   hasNext = false,
+  hasUnrenderableResults = false,
+  hasUnavailableResultPage = false,
   validationMessage,
   form = null,
   isSubmitting = false
@@ -394,8 +481,26 @@ export function buildSearchPagePresentation({
   const showResultsSkeleton = isSubmitting;
   const resultCards =
     isSubmitting || inlineValidationMessage !== '' ? [] : buildSearchResultCards(results);
+  const regionalCards =
+    isSubmitting || inlineValidationMessage !== '' ? [] : buildRegionalSearchCards(regionalResults);
   const resultCount = resultCards.length;
+  const showRegionalStatus = !isSubmitting && inlineValidationMessage === '';
+  const regionalStatusParts: string[] = [];
+  if (showRegionalStatus && regionalCards.length > 0) {
+    regionalStatusParts.push(
+      entityType === 'region'
+        ? `${formatCountLabel(regionalCards.length, 'regional route')} found.`
+        : `${formatCountLabel(regionalCards.length, 'regional route')} shown separately from record results.`
+    );
+  }
+  if (showRegionalStatus && regionalHasUnsafeOmissions) {
+    regionalStatusParts.push(regionalOmissionDisclosure(regionalIncompleteNodeKinds));
+  }
   const isPaged = hasNext || offset > 0;
+  const discloseUnavailableResultPage =
+    hasUnavailableResultPage && form === null && !showResultsSkeleton;
+  const discloseUnrenderableResults =
+    hasUnrenderableResults && !showResultsSkeleton && inlineValidationMessage === '';
 
   // Reuses the /candidates pagination owner over the page server's LIMIT+1
   // outcome. Hrefs carry the LOADED query/type (not in-flight form state):
@@ -410,7 +515,11 @@ export function buildSearchPagePresentation({
     (paginationContext.hasPrevious || paginationContext.hasNext);
   const pagination: SearchPaginationPresentation | null = showPagination
     ? {
-        label: paginationContext.label,
+        // Filtering destroys the surviving cards' backend ordinals, so only an
+        // unfiltered page can truthfully reuse the offset-based range label.
+        label: discloseUnrenderableResults
+          ? `${formatCountLabel(resultCount, 'displayable result')} on this page`
+          : paginationContext.label,
         previousHref: paginationContext.hasPrevious
           ? buildSearchPagePath({
               q: query,
@@ -424,25 +533,60 @@ export function buildSearchPagePresentation({
       }
     : null;
 
+  const recordMetadata = buildSearchMetadata({
+    query: queryValue,
+    resultCount,
+    hasUnrenderableResults: discloseUnrenderableResults,
+    hasUnavailableResultPage: discloseUnavailableResultPage
+  });
+  const normalizedQuery = queryValue.trim();
+  const metadata =
+    showRegionalStatus && (regionalCards.length > 0 || regionalHasUnsafeOmissions) && normalizedQuery !== ''
+      ? {
+          title: `${normalizedQuery} | Search | Civibus`,
+          description: `${formatCountLabel(resultCount, 'record result')} for "${normalizedQuery}". Regional routes are shown separately and may be incomplete.`
+        }
+      : recordMetadata;
+  const recordStatusMessage = getSearchStatusMessage({
+    query: queryValue,
+    resultCount,
+    hasUnrenderableResults: discloseUnrenderableResults,
+    hasUnavailableResultPage: discloseUnavailableResultPage,
+    validationMessage: inlineValidationMessage,
+    isSubmitting,
+    isPaged
+  });
+  const regionalStatusMessage = regionalStatusParts.join(' ');
+  const statusMessage =
+    entityType === 'region' && showRegionalStatus
+      ? regionalStatusMessage || 'No exact regional routes found.'
+      : [
+          showRegionalStatus &&
+          (regionalCards.length > 0 || regionalIncompleteNodeKinds.length > 0) &&
+          recordStatusMessage === 'No matching records found.'
+            ? 'No matching record results found.'
+            : recordStatusMessage,
+          regionalStatusMessage
+        ]
+          .filter((part) => part !== '')
+          .join(' ');
+
   return {
-    metadata: buildSearchMetadata({ query: queryValue, resultCount }),
+    metadata,
     resultCards,
+    regionalCards,
     pagination,
     showResultsSkeleton,
     queryValue,
     selectedEntityType: getSelectedEntityType(selectedEntityTypeInput),
     inlineValidationMessage,
+    queryHasValidationError:
+      inlineValidationMessage !== '' && !discloseUnavailableResultPage,
     submitButtonLabel: isSubmitting ? 'Searching...' : 'Search',
     queryPlaceholder: DEFAULT_SEARCH_QUERY_PLACEHOLDER,
     entityTypeOptions: buildSearchEntityTypeOptions(),
     guidanceBlock: getGuidanceBlock(queryValue),
     browseLinks: buildSearchBrowseLinks(),
-    statusMessage: getSearchStatusMessage({
-      query: queryValue,
-      resultCount,
-      validationMessage: inlineValidationMessage,
-      isSubmitting,
-      isPaged
-    })
+    statusMessage
   };
 }

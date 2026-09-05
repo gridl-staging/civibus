@@ -120,11 +120,9 @@ run_wrapper() {
   export DETACHED_RUNNER_PROGRESS_FILE="${progress_path}"
 
   set +e
-  # The wrapper runs as a separate `bash script.sh` process, so `$$` is its own
-  # PID. BASHPID would be equivalent here but does not exist in bash 3.2, so
-  # under this script's `set -u` every handshake read below aborted the wrapper
-  # with `BASHPID: unbound variable` -- invisibly, because the wrapper's stderr
-  # goes to /dev/null, leaving `start` to report a wrapper that never readied.
+  # The wrapper is a top-level shell process, so `$$` is its launch PID on
+  # every supported Bash version. BASHPID would mean the same thing here but
+  # does not exist in stock macOS Bash 3.2.
   local child_pid="" child_status="" receipt_written=false wrapper_pid="$$"
 
   # shellcheck disable=SC2329  # Invoked by the EXIT trap below.
@@ -142,6 +140,28 @@ run_wrapper() {
       atomic_write "${directory}/exit_code" "${status}"
       receipt_written=true
     fi
+  }
+
+  # shellcheck disable=SC2329  # Invoked by wrapper_launch_approval_decided below.
+  wrapper_launch_approval_verdict() {
+    local wrapper_state="$1"
+    if [[ "${wrapper_state}" == "${wrapper_pid} approved" ]]; then
+      printf 'approved\n'
+    elif [[ "${wrapper_state}" == "${wrapper_pid} refused" ]]; then
+      printf 'refused\n'
+    elif [[ -z "${wrapper_state}" || "${wrapper_state}" == "${wrapper_pid} ready" ]]; then
+      printf 'pending\n'
+    else
+      printf 'refused\n'
+    fi
+  }
+
+  # shellcheck disable=SC2329  # Invoked indirectly by poll_until below.
+  wrapper_launch_approval_decided() {
+    local wrapper_state
+    wrapper_state="$(read_first_line_or_empty "${directory}/wrapper_ready")"
+    WRAPPER_LAUNCH_APPROVAL_VERDICT="$(wrapper_launch_approval_verdict "${wrapper_state}")"
+    [[ "${WRAPPER_LAUNCH_APPROVAL_VERDICT}" != "pending" ]]
   }
 
   # shellcheck disable=SC2329  # Invoked by the signal traps below.
@@ -167,15 +187,13 @@ run_wrapper() {
     if [[ "${wrapper_state}" != "${wrapper_pid} refused" ]]; then
       atomic_write "${directory}/wrapper_ready" "${wrapper_pid} ready"
     fi
-    while true; do
-      wrapper_state="$(read_first_line_or_empty "${directory}/wrapper_ready")"
-      if [[ "${wrapper_state}" == "${wrapper_pid} approved" ]]; then
-        rm -f "${directory}/wrapper_ready"
-        break
-      fi
-      [[ "${wrapper_state}" == "${wrapper_pid} refused" ]] && exit 1
-      sleep 0.05
-    done
+    WRAPPER_LAUNCH_APPROVAL_VERDICT="pending"
+    poll_until \
+      "${WRAPPER_LAUNCH_APPROVAL_ATTEMPTS}" \
+      "${FAST_POLL_INTERVAL_SECONDS}" \
+      wrapper_launch_approval_decided || exit 1
+    [[ "${WRAPPER_LAUNCH_APPROVAL_VERDICT}" == "approved" ]] || exit 1
+    rm -f "${directory}/wrapper_ready"
   fi
   "$@" >> "${log_path}" 2>&1 &
   child_pid=$!
@@ -202,19 +220,35 @@ run_start() {
   local directory display_command started_at wrapper_pid process_identity wrapper_pgid
   local wrapper_is_isolated=false
   directory="$(job_dir_for "${job_name}")"
-  if [[ -d "${directory}" ]]; then
-    if job_is_alive "${directory}"; then
-      echo "detached_runner.sh: job '${job_name}' is already running" >&2
-      exit 3
-    fi
-    if recorded_child_blocks_start "${directory}"; then
-      echo "detached_runner.sh: refusing to start job '${job_name}': ${RECORDED_CHILD_REFUSAL_REASON}" >&2
-      exit 3
-    fi
-  fi
-
+  # The job directory is created first because the start lock lives inside it,
+  # and the two liveness checks below never depended on the directory existing:
+  # they gate on the recorded `pid` and `child_pid` files, which a fresh job
+  # directory does not have.
   ensure_private_directory "${job_root}" "job root"
   ensure_private_directory "${directory}" "job directory"
+
+  # Everything from here through the adopted metadata is one critical section
+  # over a single job directory. Two same-name starts that interleaved it would
+  # each clear and rewrite the other's pid/pgid/process_identity and its half of
+  # the wrapper_ready handshake, leaving the job named after one wrapper and the
+  # other orphaned. The trap is armed before the lock is claimed so a failure
+  # inside the claim frees the job name too, and it is a no-op for the refused
+  # start below, which holds nothing to release.
+  trap release_start_lock EXIT
+  if ! acquire_start_lock "${directory}" "$$"; then
+    echo "detached_runner.sh: refusing to start job '${job_name}': ${CONCURRENT_START_REFUSAL_REASON}" >&2
+    exit 3
+  fi
+
+  if job_is_alive "${directory}"; then
+    echo "detached_runner.sh: job '${job_name}' is already running" >&2
+    exit 3
+  fi
+  if recorded_child_blocks_start "${directory}"; then
+    echo "detached_runner.sh: refusing to start job '${job_name}': ${RECORDED_CHILD_REFUSAL_REASON}" >&2
+    exit 3
+  fi
+
   prepare_empty_file "${directory}/log" "job log"
   prepare_empty_file "${directory}/progress.jsonl" "job progress file"
   rm -f "${directory}/exit_code" "${directory}/child_pid" \

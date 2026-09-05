@@ -18,7 +18,8 @@ vi.hoisted(() => {
 const baseFrame = {
   cycle: 2026,
   coverageThrough: "2026-06-30",
-  sources: [{ label: "FEC filings", href: "https://www.fec.gov/data/" }]
+  sources: [{ label: "FEC filings", href: "https://www.fec.gov/data/" }],
+  disclosureContext: "Example candidate (candidacy 1)"
 };
 
 let mountedComponents: Record<string, unknown>[] = [];

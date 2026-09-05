@@ -4,8 +4,10 @@ import {
   buildSearchPath,
   filterRenderableSearchResults,
   isSearchEntityType,
+  isSearchFilterType,
   isRenderableSearchResult,
   SEARCH_ENTITY_TYPES,
+  SEARCH_FILTER_TYPES,
   SEARCH_PAGE_SIZE,
   SEARCH_QUERY_MIN_LENGTH,
   toSearchResultHref,
@@ -96,6 +98,12 @@ describe('search contract', () => {
       'office',
       'contest'
     ]);
+  });
+
+  it('adds region as a page filter without treating it as a legacy entity result type', () => {
+    expect(SEARCH_FILTER_TYPES).toEqual([...SEARCH_ENTITY_TYPES, 'region']);
+    expect(isSearchFilterType('region')).toBe(true);
+    expect(isSearchEntityType('region')).toBe(false);
   });
 
   it('maps office search results to /office/<uuid> route hrefs', () => {

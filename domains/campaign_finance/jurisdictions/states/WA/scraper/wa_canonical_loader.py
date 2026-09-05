@@ -254,12 +254,18 @@ def _resolve_or_create_person(
     filer_id: str | None,
     source_record_id: UUID,
     *,
+    data_source_id: UUID,
     first_name: str | None = None,
     last_name: str | None = None,
 ) -> UUID:
     """Find existing person by wa_filer_id identifier, or create a new one."""
     if filer_id:
-        person_id = find_person_by_identifier(conn, "wa_filer_id", filer_id)
+        person_id = find_person_by_identifier(
+            conn,
+            "wa_filer_id",
+            filer_id,
+            data_source_id=data_source_id,
+        )
         if person_id is not None:
             insert_entity_source(conn, "person", person_id, source_record_id, "candidate")
             return person_id
@@ -281,6 +287,8 @@ def _ingest_contribution_row(
     conn: psycopg.Connection,
     raw_row: dict[str, str | None],
     source_record_id: UUID,
+    *,
+    data_source_id: UUID,
 ) -> None:
     office_raw = normalize_optional_text(raw_row.get("office"))
     if office_raw is None:
@@ -323,6 +331,7 @@ def _ingest_contribution_row(
         filer_name,
         filer_id,
         source_record_id,
+        data_source_id=data_source_id,
     )
     incumbent_challenge = derive_incumbent_challenge(
         conn,
@@ -392,7 +401,12 @@ def load_wa_candidates_canonical(
             continue
 
         try:
-            _ingest_contribution_row(conn, raw_row, source_record_id)
+            _ingest_contribution_row(
+                conn,
+                raw_row,
+                source_record_id,
+                data_source_id=data_source_id,
+            )
         except (ValueError, KeyError) as exc:
             LOGGER.warning("Skipping WA row %s: %s", row_id, exc)
             result.errors += 1
@@ -462,6 +476,8 @@ def _ingest_ie_row(
     conn: psycopg.Connection,
     raw_row: dict[str, str | None],
     source_record_id: UUID,
+    *,
+    data_source_id: UUID,
 ) -> None:
     candidate_office_raw = normalize_optional_text(raw_row.get("candidate_office"))
     if candidate_office_raw is None:
@@ -505,6 +521,7 @@ def _ingest_ie_row(
         display_name,
         filer_id=candidate_filer_id,
         source_record_id=source_record_id,
+        data_source_id=data_source_id,
         first_name=candidate_first,
         last_name=candidate_last,
     )
@@ -571,7 +588,12 @@ def load_wa_ie_canonical(
             continue
 
         try:
-            _ingest_ie_row(conn, raw_row, source_record_id)
+            _ingest_ie_row(
+                conn,
+                raw_row,
+                source_record_id,
+                data_source_id=data_source_id,
+            )
         except (ValueError, KeyError) as exc:
             LOGGER.warning("Skipping WA IE row %s: %s", row_id, exc)
             result.errors += 1

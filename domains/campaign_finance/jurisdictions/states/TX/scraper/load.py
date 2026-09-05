@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from functools import partial
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -39,6 +40,7 @@ from domains.campaign_finance.jurisdictions.states.load_utils import (
     ensure_data_source,
     iter_rows_with_limit,
     link_entity_source_and_optional_mailing_address,
+    load_relational_rows_without_savepoints,
     try_row_without_savepoint,
     validated_limit,
 )
@@ -63,6 +65,19 @@ _TX_COUNTERPARTY_EMPLOYER_PATH = {
     "contributions": "donor.employer",
     "loans": "lender.employer",
 }
+_COMMIT_BATCH_ROWS = 1_000
+
+
+class TXFilingLookupDrift(ValueError):
+    """The cached filing id for a filing key disagrees with the database result.
+
+    This is an integrity violation in loader state, not a bad-data row. The shared row
+    boundary catches every ``Exception``, so the relational pass explicitly re-raises it.
+    """
+
+
+class TXCallerTransactionRolledBack(RuntimeError):
+    """A relational DB error rolled back a caller-owned transaction."""
 
 
 @dataclass(slots=True)
@@ -427,8 +442,8 @@ def _load_tx_rows(
         # DB errors roll back the current transaction, losing uncommitted rows
         # in this batch. This is acceptable — we log and continue.
 
-        processed_count = counts.inserted + counts.skipped + counts.errors
-        if processed_count % 1_000 == 0:
+        processed_rows = counts.inserted + counts.skipped + counts.errors
+        if processed_rows % 1_000 == 0:
             commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
@@ -587,7 +602,7 @@ def _upsert_tx_filing(
     filing_id = upsert_filing(conn, filing)
 
     if existing_entry is not None and existing_entry.filing_id != filing_id:
-        raise ValueError(
+        raise TXFilingLookupDrift(
             f"TX filing lookup drift for filing_fec_id={filing_fec_id!r}: {existing_entry.filing_id} != {filing_id}"
         )
 
@@ -732,6 +747,43 @@ def _restore_tx_filing_lookup_entry(
     filing_lookup[filing_fec_id] = cached_entry
 
 
+def _link_tx_row(
+    conn: psycopg.Connection,
+    row: Mapping[str, str | None],
+    source_record_id: UUID,
+    *,
+    data_type: str,
+    filing_lookup: dict[str, _TXFilingLookupEntry],
+) -> bool:
+    """Link one loaded TX row; failures propagate to the shared no-savepoint boundary."""
+    filing_fec_id = _tx_filing_fec_id(row, data_type=data_type)
+    cached_entry = filing_lookup.get(filing_fec_id)
+
+    try:
+        filing_entry = _upsert_tx_filing(
+            conn,
+            row,
+            source_record_id=source_record_id,
+            data_type=data_type,
+            filing_lookup=filing_lookup,
+        )
+        return _upsert_tx_transaction_with_filing(
+            conn,
+            row,
+            filing_id=filing_entry.filing_id,
+            committee_id=filing_entry.committee_id,
+            source_record_id=source_record_id,
+            data_type=data_type,
+        )
+    except Exception:
+        _restore_tx_filing_lookup_entry(
+            filing_lookup,
+            filing_fec_id=filing_fec_id,
+            cached_entry=cached_entry,
+        )
+        raise
+
+
 def _load_tx_relational_transactions(
     conn: psycopg.Connection,
     rows: Iterable[Mapping[str, str | None]],
@@ -740,76 +792,41 @@ def _load_tx_relational_transactions(
     data_type: str,
     limit: int | None,
 ) -> _TXRelationalLoadCounts:
+    """Delegate TX row linkage to the shared no-savepoint loop."""
+    validated_limit(limit)
     filing_lookup: dict[str, _TXFilingLookupEntry] = {}
-    counts = _TXRelationalLoadCounts()
-    manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
-    processed_count = 0
 
-    for row in iter_rows_with_limit(rows, limit):
-        if not isinstance(row, Mapping):
-            raise TypeError(f"Expected mapping row, got {type(row)!r}")
+    def _clear_filing_cache(hook_conn: psycopg.Connection, *, failed_row: Mapping[str, str | None]) -> None:
+        del hook_conn, failed_row
+        filing_lookup.clear()
 
-        source_record_id = _select_tx_source_record_id(
-            conn,
+    def _caller_owned_rollback(**_kwargs: object) -> TXCallerTransactionRolledBack:
+        return TXCallerTransactionRolledBack(
+            "TX relational DB error rolled back the caller-owned transaction; aborting load"
+        )
+
+    shared_counts = load_relational_rows_without_savepoints(
+        conn,
+        iter_rows_with_limit(rows, limit),
+        source_record_key_for_row=lambda row: _tx_source_record_key(row, data_type=data_type),
+        resolve_source_record_id=lambda hook_conn, source_record_key: _select_tx_source_record_id(
+            hook_conn,
             data_source_id=data_source_id,
-            source_record_key=_tx_source_record_key(row, data_type=data_type),
-        )
-        if source_record_id is None:
-            continue
-
-        # Capture filing context before the load attempt so we can restore
-        # the in-memory lookup cache if the row fails.
-        filing_fec_id = _tx_filing_fec_id(row, data_type=data_type)
-        cached_filing_entry = filing_lookup.get(filing_fec_id)
-
-        def _link_row() -> bool:
-            """Upsert filing + link transaction. No per-row savepoint."""
-            filing_entry = _upsert_tx_filing(
-                conn,
-                row,
-                source_record_id=source_record_id,
-                data_type=data_type,
-                filing_lookup=filing_lookup,
-            )
-            return _upsert_tx_transaction_with_filing(
-                conn,
-                row,
-                filing_id=filing_entry.filing_id,
-                committee_id=filing_entry.committee_id,
-                source_record_id=source_record_id,
-                data_type=data_type,
-            )
-
-        result, was_db_error = try_row_without_savepoint(
-            conn,
-            _link_row,
-            manages_outer_transaction=manages_outer_transaction,
-            label=f"TX {data_type.rstrip('s')} filing link",
-        )
-        inserted = result
-
-        if inserted is None:
-            counts.errors += 1
-            # Restore the in-memory filing lookup cache on failure so that
-            # subsequent rows don't reference a rolled-back filing entry.
-            if filing_fec_id is not None:
-                _restore_tx_filing_lookup_entry(
-                    filing_lookup,
-                    filing_fec_id=filing_fec_id,
-                    cached_entry=cached_filing_entry,
-                )
-            continue
-
-        if inserted:
-            counts.inserted += 1
-        else:
-            counts.skipped += 1
-        processed_count += 1
-        if processed_count % 1_000 == 0:
-            commit_managed_transaction(conn, manages_outer_transaction)
-
-    commit_managed_transaction(conn, manages_outer_transaction)
-    return counts
+            source_record_key=source_record_key,
+        ),
+        link_row=partial(_link_tx_row, data_type=data_type, filing_lookup=filing_lookup),
+        batch_size=_COMMIT_BATCH_ROWS,
+        label=f"TX {data_type.rstrip('s')} filing link",
+        fatal_exceptions=(TXFilingLookupDrift,),
+        on_db_error_recovery=_clear_filing_cache,
+        on_managed_commit_reset=None,
+        caller_owned_rollback_error=_caller_owned_rollback,
+    )
+    return _TXRelationalLoadCounts(
+        inserted=shared_counts.inserted,
+        skipped=shared_counts.skipped,
+        errors=shared_counts.errors,
+    )
 
 
 def _load_tx_with_filings(

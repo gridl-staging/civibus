@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from uuid import uuid4
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -87,9 +87,17 @@ def test_load_contribution_persists_entities_and_links(monkeypatch: pytest.Monke
 
     extract_contribution.assert_called_once_with(contribution)
     upsert_address.assert_called_once_with(conn, extracted_address)
-    find_person.assert_called_once_with(conn, "JONES", "ALICE", "27701")
+    find_person.assert_called_once_with(
+        conn,
+        "JONES",
+        "ALICE",
+        "27701",
+        data_source_id=data_source_id,
+    )
     insert_person.assert_called_once_with(conn, extracted_person)
-    find_organization.assert_called_once_with(conn, "fec_committee_id", "C00123456")
+    assert find_organization.call_args_list == [
+        call(conn, "fec_committee_id", "C00123456", data_source_id=data_source_id),
+    ]
     insert_organization.assert_called_once_with(conn, extracted_organization)
 
     insert_entity_source.assert_any_call(conn, "person", person_id, source_record_id, "donor")

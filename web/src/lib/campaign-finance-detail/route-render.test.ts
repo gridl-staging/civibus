@@ -12,7 +12,8 @@ import {
 } from "./presentation";
 import {
   COMMITTEE_FILINGS_WINDOW_LIMIT,
-  type CandidateOutOfCycleOfficialTotal
+  type CandidateOutOfCycleOfficialTotal,
+  type CommitteeIndependentExpenditureActivity
 } from "./contract";
 import {
   CANDIDATE_CANONICAL_DATA,
@@ -32,7 +33,8 @@ import {
   ORG_ID,
   PERSON_ID,
   SAMPLE_TRANSACTION,
-  asDeferredValue
+  asDeferredValue,
+  buildRouteRenderFilingRow
 } from "./route-render.test-fixtures";
 
 vi.mock("$env/dynamic/public", () => ({
@@ -570,19 +572,27 @@ describe("campaign-finance route renders", () => {
     expect(wrapper).not.toBeNull();
     expect(wrapper).toContain("<h3>Outside Spending</h3>");
     expect(wrapper).toContain("This committee reported no independent expenditures");
+    expect(wrapper).toContain("$0.00");
+    expect(wrapper).toContain("0 expenditures");
   });
 
-  it("renders committee outside-spending outlier note when filtering leaves no displayed activity", () => {
+  it("does not render excluded committee outside spending as exhaustive empty or measured zero", () => {
     const rendered = render(DetailPage, {
       props: {
         presentation: buildCommitteeRoutePresentation({
           ...COMMITTEE_CANONICAL_DATA,
           independentExpendituresMade: asDeferredValue({
+            ...DEFAULT_SELECTED_CYCLE_FIELDS,
             committee_id: COMMITTEE_ID,
             support_total: "0.00",
             oppose_total: "0.00",
             ie_transaction_count: 0,
             excluded_outlier_count: 2,
+            coverage: {
+              activity_state: "populated",
+              completeness: "partial",
+              basis: "fec_schedule_e_transactions"
+            },
             targets: []
           })
         })
@@ -591,10 +601,89 @@ describe("campaign-finance route renders", () => {
 
     const wrapper = extractElementByTestId(rendered.body, "committee-outside-spending");
     expect(wrapper).not.toBeNull();
-    expect(wrapper).toContain("This committee reported no independent expenditures");
+    expect(wrapper).toContain(
+      "No independent-expenditure totals are shown because all reported expenditures were excluded as outliers."
+    );
+    expect(wrapper).not.toContain("This committee reported no independent expenditures");
+    expect(wrapper).not.toContain("$0.00");
+    expect(wrapper).not.toContain("0 expenditures");
     expect(wrapper).toContain(
       "2 reported independent expenditures were excluded from these totals as outliers."
     );
+  });
+
+  it("suppresses committee outside-spending figures for not-loaded, missing, or invalid coverage", () => {
+    const unavailableCases: Array<{
+      activity: CommitteeIndependentExpenditureActivity;
+      message: string;
+    }> = [
+      {
+        activity: {
+          ...DEFAULT_SELECTED_CYCLE_FIELDS,
+          committee_id: COMMITTEE_ID,
+          support_total: "0.00",
+          oppose_total: "0.00",
+          ie_transaction_count: 0,
+          excluded_outlier_count: 0,
+          coverage: {
+            activity_state: "not_loaded",
+            completeness: "unknown",
+            basis: "no_authoritative_load_evidence"
+          },
+          targets: []
+        },
+        message: "Independent-expenditure coverage is not yet available for this committee and cycle."
+      },
+      {
+        activity: {
+          ...DEFAULT_SELECTED_CYCLE_FIELDS,
+          committee_id: COMMITTEE_ID,
+          support_total: "0.00",
+          oppose_total: "0.00",
+          ie_transaction_count: 0,
+          excluded_outlier_count: 0,
+          targets: []
+        } as unknown as CommitteeIndependentExpenditureActivity,
+        message: "Committee independent-expenditure data is temporarily unavailable."
+      },
+      {
+        activity: {
+          ...DEFAULT_SELECTED_CYCLE_FIELDS,
+          committee_id: COMMITTEE_ID,
+          support_total: "0.00",
+          oppose_total: "0.00",
+          ie_transaction_count: 0,
+          excluded_outlier_count: 0,
+          coverage: {
+            activity_state: "populated",
+            completeness: "invalid",
+            basis: "fec_schedule_e_transactions"
+          },
+          targets: []
+        } as unknown as CommitteeIndependentExpenditureActivity,
+        message: "Committee independent-expenditure data is temporarily unavailable."
+      }
+    ];
+
+    for (const { activity, message } of unavailableCases) {
+      const rendered = render(DetailPage, {
+        props: {
+          presentation: buildCommitteeRoutePresentation({
+            ...COMMITTEE_CANONICAL_DATA,
+            independentExpendituresMade: asDeferredValue(activity)
+          })
+        }
+      });
+      const wrapper = extractElementByTestId(rendered.body, "committee-outside-spending");
+
+      expect(wrapper).not.toBeNull();
+      expect(wrapper).toContain(message);
+      expect(wrapper).not.toContain("$0.00");
+      expect(wrapper).not.toContain("0 expenditures");
+      expect(wrapper).not.toContain("This committee reported no independent expenditures");
+      expect(extractElementByTestId(rendered.body, "committee-outside-spending-targets")).toBeNull();
+      expect(extractElementByTestId(rendered.body, "committee-outside-spending-sources")).toBeNull();
+    }
   });
 
   it("renders committee outside-spending totals, ordered targets, and source links", () => {
@@ -690,6 +779,9 @@ describe("campaign-finance route renders", () => {
     expect(rendered.body).toContain("<h3>Cash-on-hand trend</h3>");
     expect(rendered.body).toContain(
       "Cash on hand is $250.50 at the latest filing period in the 2026 cycle."
+    );
+    expect(rendered.body).not.toContain(
+      "Cash on hand needs two or more dated filing-period values before plotting."
     );
     expect(rendered.body).toContain("March 31, 2026");
     expect(rendered.body).toContain("June 30, 2026");
@@ -791,6 +883,83 @@ describe("campaign-finance route renders", () => {
     );
   });
 
+  it.each([
+    ["finite unsafe integer", (BigInt(Number.MAX_SAFE_INTEGER) + 2n).toString()],
+    ["digit string beyond any signed bigint", "9".repeat(400)]
+  ])(
+    "recovers a %s filing offset to truthful last-page navigation",
+    (_description, rawOffset) => {
+      setMockPageUrl(
+        `/committee/citizens-for-civibus?tag=a&filings_offset=${rawOffset}&tag=b&view=records`
+      );
+      const rendered = render(DetailPage, {
+        props: {
+          presentation: buildCommitteeRoutePresentation(
+            COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS
+          )
+        }
+      });
+
+      expect(extractFilingTableRowIdentities(extractFilingTable(rendered.body))).toEqual([
+        "filing-010",
+        "filing-009",
+        "filing-008",
+        "filing-007",
+        "filing-006",
+        "filing-005",
+        "filing-004",
+        "filing-003",
+        "filing-002",
+        "filing-001"
+      ]);
+      expect(extractElementByTestId(rendered.body, "filing-breakdown-pagination-label")).toContain(
+        "Showing 51–60 of 60 most recent · 220,706 total filings"
+      );
+      expect(extractHrefByTestId(rendered.body, "filing-breakdown-prev")).toBe(
+        "/committee/citizens-for-civibus?tag=a&tag=b&view=records&filings_offset=25"
+      );
+      expect(extractElementByTestId(rendered.body, "filing-breakdown-next")).toBeNull();
+    }
+  );
+
+  it("reports one dated genuine zero without plotting a cash-on-hand trend", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation({
+          ...COMMITTEE_CANONICAL_DATA,
+          filingBreakdown: {
+            ...(COMMITTEE_CANONICAL_DATA.filingBreakdown as unknown as Awaited<
+              typeof COMMITTEE_CANONICAL_DATA.filingBreakdown
+            >),
+            filings: [
+              {
+                ...buildRouteRenderFilingRow(1, "2026-03-31"),
+                cash_on_hand: "0.00"
+              }
+            ]
+          }
+        })
+      }
+    });
+
+    const trend = extractElementByTestId(rendered.body, "committee-cash-on-hand-trend");
+    expect(trend).not.toBeNull();
+    expect(trend).toContain(
+      "Cash on hand is $0.00 at the latest filing period in the 2026 cycle."
+    );
+    expect(trend).not.toContain("No dated cash-on-hand filing-period values are loaded");
+    expect(trend).toContain(
+      "Cash on hand needs two or more dated filing-period values before plotting."
+    );
+    expect(trend).toMatch(
+      /<tr><th scope="row"[^>]*>March 31, 2026<\/th><td[^>]*>[\s\S]*?Cash on hand:[\s\S]*?\$0\.00[\s\S]*?Coverage gap:[\s\S]*?No explicit missing interval\.[\s\S]*?<\/td><\/tr>/
+    );
+    expect(trend).toContain("View chart data");
+    expect(trend).not.toContain('data-testid="committee-cash-on-hand-trend-plot"');
+    expect(trend).not.toContain("chart-wrapper");
+    expect(trend).not.toContain('aria-label="Cash on hand trend by filing period"');
+  });
+
   it("renders explicit no-category and no-trend messages when committee summary omits those aggregates", () => {
     const rendered = render(DetailPage, {
       props: {
@@ -808,9 +977,21 @@ describe("campaign-finance route renders", () => {
       }
     });
 
+    const trend = extractElementByTestId(rendered.body, "committee-cash-on-hand-trend");
+    expect(trend).not.toBeNull();
     expect(rendered.body).toContain("Spend categories are not available for this committee.");
-    expect(rendered.body).toContain("Cash on hand needs two or more dated filing-period values before plotting.");
-    expect(rendered.body).not.toContain('aria-label="Committee cash-on-hand trend"');
+    expect(trend).toContain(
+      "No dated cash-on-hand filing-period values are loaded for the 2026 cycle."
+    );
+    expect(trend).not.toContain(
+      "Cash on hand is $0.00 at the latest filing period in the 2026 cycle."
+    );
+    expect(trend).toContain("Cash on hand needs two or more dated filing-period values before plotting.");
+    expect(trend).toContain("View chart data");
+    expect(trend).not.toMatch(/<th scope="row"[^>]*>/);
+    expect(trend).not.toContain('data-testid="committee-cash-on-hand-trend-plot"');
+    expect(trend).not.toContain("chart-wrapper");
+    expect(trend).not.toContain('aria-label="Cash on hand trend by filing period"');
   });
 
   it("keeps committee records visible when filing-period data is unavailable", () => {

@@ -35,11 +35,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # a hang means a broken toolchain, not a slow legitimate run.
 _SUBPROCESS_TIMEOUT_SECONDS = 60
 
-# The adoption pin. bd v1.2.1 and v1.2.2 are the validated fleet window;
-# v1.2.0- lacks guarded-update semantics Batman relies on, and v1.2.3+
-# changes storage/CLI behavior this contract has not validated. Trailing
-# spaces are load-bearing: without them "bd version 1.2.10" would pass.
-_PINNED_BD_VERSION_PREFIXES = ("bd version 1.2.1 ", "bd version 1.2.2 ")
+# The adoption pin. v1.2.1 was retracted after an accidental untested schema
+# migration; v1.2.3+ changes storage/CLI behavior this contract has not
+# validated. The trailing space prevents "bd version 1.2.20" from passing.
+_PINNED_BD_VERSION_PREFIX = "bd version 1.2.2 "
 
 _TRACKED_BEADS_PATHS = (
     ".beads/.gitignore",
@@ -85,12 +84,12 @@ def test_pinned_bd_cli_version_is_exact() -> None:
     )
     completed = _run(["bd", "--version"])
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.startswith(_PINNED_BD_VERSION_PREFIXES), completed.stdout
+    assert completed.stdout.startswith(_PINNED_BD_VERSION_PREFIX), completed.stdout
     live_contract = _read(REPO_ROOT / "scripts" / "tests" / "beads_adoption_contract_live.sh")
-    for required_prefix in _PINNED_BD_VERSION_PREFIXES:
-        assert required_prefix in live_contract, (
-            "live Beads contract must allow the same pinned bd fleet window as pytest"
-        )
+    assert _PINNED_BD_VERSION_PREFIX in live_contract, (
+        "live Beads contract must require the same pinned bd release as pytest"
+    )
+    assert "bd version 1.2.1 " not in live_contract
 
 
 def test_beads_tracked_and_ignored_boundary() -> None:
@@ -155,7 +154,8 @@ def test_beads_readme_documents_recovery_and_pin() -> None:
     readme_text = _read(REPO_ROOT / ".beads" / "README.md")
     assert "scripts/bootstrap_beads.sh" in readme_text
     assert "bd bootstrap --yes" in readme_text
-    assert "Pinned CLI: v1.2.1 or v1.2.2" in readme_text
+    assert "Pinned CLI: v1.2.2" in readme_text
+    assert "v1.2.1" not in readme_text
     assert "refs/dolt/data" in readme_text
     assert "JSONL is not authoritative" in readme_text
 
@@ -352,18 +352,18 @@ def test_current_work_authority_routes_to_beads() -> None:
         "README.md": ("Historical roadmap archive",),
         ".scrai/rules.md": (
             "### Beads Work Ledger",
-            "Use pinned `bd` v1.2.1 or v1.2.2",
+            "Use pinned `bd` v1.2.2",
         ),
         # Generated outputs must carry the assembled section; catching drift
         # here means a hand-edit or stale assembly fails the union, including
-        # the widened bd compatibility window text.
+        # the exact bd pin.
         "CLAUDE.md": (
             "### Beads Work Ledger",
-            "Use pinned `bd` v1.2.1 or v1.2.2",
+            "Use pinned `bd` v1.2.2",
         ),
         "AGENTS.md": (
             "### Beads Work Ledger",
-            "Use pinned `bd` v1.2.1 or v1.2.2",
+            "Use pinned `bd` v1.2.2",
         ),
         ".beads/README.md": ("Beads is the private source of truth",),
     }
@@ -371,6 +371,10 @@ def test_current_work_authority_routes_to_beads() -> None:
         document_text = _read(REPO_ROOT / relative_path)
         for literal in literals:
             assert literal in document_text, f"{relative_path} missing: {literal}"
+    for relative_path in (".scrai/rules.md", "CLAUDE.md", "AGENTS.md", ".beads/README.md"):
+        assert "v1.2.1" not in _read(REPO_ROOT / relative_path), (
+            f"{relative_path} must not authorize retracted bd v1.2.1"
+        )
 
     retired_literals = {
         "PROJECT_OVERVIEW.md": (

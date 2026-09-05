@@ -454,15 +454,17 @@ INSERT INTO core.jurisdiction (
     name,
     jurisdiction_type,
     fips,
+    state_fips,
     state
 )
 VALUES
-    ('00000000-0000-4000-8000-000000000901', 'Washington', 'state', '53', 'WA'),
-    ('00000000-0000-4000-8000-000000000902', 'Florida', 'state', '12', 'FL')
+    ('00000000-0000-4000-8000-000000000901', 'Washington', 'state', '53', '53', 'WA'),
+    ('00000000-0000-4000-8000-000000000902', 'Florida', 'state', '12', '12', 'FL')
 ON CONFLICT (fips) WHERE fips IS NOT NULL DO UPDATE
 SET
     name = EXCLUDED.name,
     jurisdiction_type = EXCLUDED.jurisdiction_type,
+    state_fips = EXCLUDED.state_fips,
     state = EXCLUDED.state;
 
 INSERT INTO civic.office (

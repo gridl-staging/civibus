@@ -259,7 +259,8 @@ PERSON_PREPROCESSING_SQL = """
         state,
         employer,
         occupation,
-        identifier_key      -- unnested from identifiers JSONB in the view
+        identifier_key,      -- unnested from identifiers JSONB in the view
+        filing_authority_scopes
     FROM core.person_er_view
 """
 
@@ -275,7 +276,8 @@ ORGANIZATION_PREPROCESSING_SQL = """
         org_type,
         identifiers->>'ein' AS ein,
         identifiers->>'fec_committee_id' AS fec_committee_id,
-        registered_agent_name
+        registered_agent_name,
+        filing_authority_scopes
     FROM core.organization_er_view
 """
 
@@ -329,12 +331,30 @@ DETERMINISTIC_PERSON_RULES = [
                                   jsonb_build_array(p.identifiers->>'fec_candidate_id'))
                      ) AS ids(fec_candidate_id)
                 WHERE NULLIF(BTRIM(ids.fec_candidate_id), '') IS NOT NULL
+            ), person_authorities AS (
+                SELECT entity_source.entity_id,
+                       array_agg(DISTINCT data_source.filing_authority_type || ':' ||
+                                data_source.filing_authority_code) AS authority_scopes
+                FROM core.entity_source AS entity_source
+                JOIN core.source_record AS source_record
+                  ON source_record.id = entity_source.source_record_id
+                JOIN core.data_source AS data_source
+                  ON data_source.id = source_record.data_source_id
+                WHERE entity_source.entity_type = 'person'
+                  AND data_source.domain = 'campaign_finance'
+                  AND data_source.filing_authority_type IS NOT NULL
+                GROUP BY entity_source.entity_id
             )
             SELECT DISTINCT a.id AS entity_id_a, b.id AS entity_id_b, 1.0 AS confidence
             FROM person_fec_ids a
             JOIN person_fec_ids b
               ON a.fec_candidate_id = b.fec_candidate_id
              AND a.id < b.id
+            LEFT JOIN person_authorities authority_a ON authority_a.entity_id = a.id
+            LEFT JOIN person_authorities authority_b ON authority_b.entity_id = b.id
+            WHERE authority_a.authority_scopes IS NULL
+               OR authority_b.authority_scopes IS NULL
+               OR authority_a.authority_scopes && authority_b.authority_scopes
         """,
     },
     {
@@ -344,11 +364,32 @@ DETERMINISTIC_PERSON_RULES = [
         # resolve_or_create_person_by_identifier callers); two rows sharing it
         # are the same member of Congress by construction.
         "sql": """
+            WITH person_authorities AS (
+                SELECT entity_source.entity_id,
+                       array_agg(DISTINCT data_source.filing_authority_type || ':' ||
+                                data_source.filing_authority_code) AS authority_scopes
+                FROM core.entity_source AS entity_source
+                JOIN core.source_record AS source_record
+                  ON source_record.id = entity_source.source_record_id
+                JOIN core.data_source AS data_source
+                  ON data_source.id = source_record.data_source_id
+                WHERE entity_source.entity_type = 'person'
+                  AND data_source.domain = 'campaign_finance'
+                  AND data_source.filing_authority_type IS NOT NULL
+                GROUP BY entity_source.entity_id
+            )
             SELECT a.id AS entity_id_a, b.id AS entity_id_b, 1.0 AS confidence
-            FROM core.person a, core.person b
-            WHERE a.id < b.id
-              AND BTRIM(a.identifiers->>'bioguide_id') = BTRIM(b.identifiers->>'bioguide_id')
+            FROM core.person a
+            JOIN core.person b ON a.id < b.id
+            LEFT JOIN person_authorities authority_a ON authority_a.entity_id = a.id
+            LEFT JOIN person_authorities authority_b ON authority_b.entity_id = b.id
+            WHERE BTRIM(a.identifiers->>'bioguide_id') = BTRIM(b.identifiers->>'bioguide_id')
               AND NULLIF(BTRIM(a.identifiers->>'bioguide_id'), '') IS NOT NULL
+              AND (
+                    authority_a.authority_scopes IS NULL
+                 OR authority_b.authority_scopes IS NULL
+                 OR authority_a.authority_scopes && authority_b.authority_scopes
+              )
         """,
     },
 ]
@@ -358,11 +399,32 @@ DETERMINISTIC_ORG_RULES = [
         "name": "fec_committee_match",
         "description": "Same FEC Committee ID",
         "sql": """
+            WITH organization_authorities AS (
+                SELECT entity_source.entity_id,
+                       array_agg(DISTINCT data_source.filing_authority_type || ':' ||
+                                data_source.filing_authority_code) AS authority_scopes
+                FROM core.entity_source AS entity_source
+                JOIN core.source_record AS source_record
+                  ON source_record.id = entity_source.source_record_id
+                JOIN core.data_source AS data_source
+                  ON data_source.id = source_record.data_source_id
+                WHERE entity_source.entity_type = 'organization'
+                  AND data_source.domain = 'campaign_finance'
+                  AND data_source.filing_authority_type IS NOT NULL
+                GROUP BY entity_source.entity_id
+            )
             SELECT a.id AS entity_id_a, b.id AS entity_id_b, 1.0 AS confidence
-            FROM core.organization a, core.organization b
-            WHERE a.id < b.id
-              AND BTRIM(a.identifiers->>'fec_committee_id') = BTRIM(b.identifiers->>'fec_committee_id')
+            FROM core.organization a
+            JOIN core.organization b ON a.id < b.id
+            LEFT JOIN organization_authorities authority_a ON authority_a.entity_id = a.id
+            LEFT JOIN organization_authorities authority_b ON authority_b.entity_id = b.id
+            WHERE BTRIM(a.identifiers->>'fec_committee_id') = BTRIM(b.identifiers->>'fec_committee_id')
               AND NULLIF(BTRIM(a.identifiers->>'fec_committee_id'), '') IS NOT NULL
+              AND (
+                    authority_a.authority_scopes IS NULL
+                 OR authority_b.authority_scopes IS NULL
+                 OR authority_a.authority_scopes && authority_b.authority_scopes
+              )
         """,
     },
 ]

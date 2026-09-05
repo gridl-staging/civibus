@@ -1669,6 +1669,8 @@ def test_nc_registry_insert_and_monotonic_constraint():
             INSERT INTO core.data_source (
                 domain,
                 jurisdiction,
+                filing_authority_type,
+                filing_authority_code,
                 name,
                 source_url,
                 source_format
@@ -1676,12 +1678,20 @@ def test_nc_registry_insert_and_monotonic_constraint():
             VALUES (
                 'campaign_finance',
                 'state/NC',
+                'state',
+                'NC',
                 'NC Registry Schema Monotonic Test Source',
                 'https://cf.ncsbe.gov/CFOrgLkup/',
                 'csv'
             )
-            ON CONFLICT (domain, jurisdiction, name)
+            ON CONFLICT (
+                domain,
+                filing_authority_type,
+                filing_authority_code,
+                name
+            )
             DO UPDATE SET
+                jurisdiction = EXCLUDED.jurisdiction,
                 source_url = EXCLUDED.source_url,
                 source_format = EXCLUDED.source_format
             RETURNING id

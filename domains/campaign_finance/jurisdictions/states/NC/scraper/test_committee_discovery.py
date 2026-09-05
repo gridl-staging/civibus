@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 from pydantic import ValidationError
 import pytest
 
+from domains.campaign_finance.jurisdictions.states.NC.scraper import committee_discovery
 from domains.campaign_finance.jurisdictions.states.NC.scraper.committee_discovery import (
     EXPECTED_STATEWIDE_COMMITTEE_COUNT,
     build_committee_search_buckets,
@@ -144,3 +147,43 @@ def test_build_committee_search_buckets_matches_stage1_recipe() -> None:
 
 def test_expected_statewide_committee_count_matches_stage1_contract() -> None:
     assert EXPECTED_STATEWIDE_COMMITTEE_COUNT == 13612
+
+
+def _client_returning_one_committee() -> MagicMock:
+    response = MagicMock()
+    response.text = _html_with_data(
+        """[
+        {
+            \"OrgName\": \"BETA COMMITTEE\",
+            \"SBoEID\": \"STA-BETA-C-001\",
+            \"OldID\": \"111\",
+            \"CandName\": \"CIVIC\",
+            \"StatusDesc\": \"ACTIVE (EXEMPT)\",
+            \"OrgGroupID\": 111,
+            \"Link\": null
+        }
+    ]"""
+    )
+    client = MagicMock()
+    client.get.return_value = response
+    return client
+
+
+def test_full_httpx_crawl_fails_below_existing_statewide_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(committee_discovery, "build_committee_search_buckets", lambda: ("B",))
+
+    with pytest.raises(ValueError, match="below expected statewide floor"):
+        committee_discovery.crawl_committee_registry_httpx(
+            client=_client_returning_one_committee(),
+            sleep_seconds=0.0,
+        )
+
+
+def test_explicit_httpx_subset_does_not_apply_statewide_floor() -> None:
+    discovered = committee_discovery.crawl_committee_registry_httpx(
+        client=_client_returning_one_committee(),
+        buckets=("B",),
+        sleep_seconds=0.0,
+    )
+
+    assert set(discovered) == {111}

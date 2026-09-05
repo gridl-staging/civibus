@@ -115,6 +115,15 @@ def _record_entity_ids(record: dict[str, Any]) -> tuple[Any, Any]:
     )
 
 
+def _authority_pair_is_permitted(left_row: RowDict, right_row: RowDict) -> bool:
+    """Refuse a cross-authority campaign-finance merge without shared scope."""
+    left_scopes = {str(scope) for scope in left_row.get("filing_authority_scopes", ())}
+    right_scopes = {str(scope) for scope in right_row.get("filing_authority_scopes", ())}
+    if not left_scopes or not right_scopes:
+        return True
+    return bool(left_scopes & right_scopes)
+
+
 def score_with_splink(
     rows: list[RowDict],
     entity_type: str,
@@ -177,6 +186,14 @@ def _score_linker_predictions(
     scored_pairs_by_pair: dict[tuple[Any, Any], ScoredPair] = {}
     for record in prediction_records(predictions):
         if prediction_record_restores_same_entity(record):
+            continue
+        left_row_id, right_row_id = prediction_row_ids_from_record(record)
+        try:
+            left_row = prepared_rows_by_id[str(left_row_id)]
+            right_row = prepared_rows_by_id[str(right_row_id)]
+        except KeyError as exc:
+            raise RuntimeError(f"Splink prediction references unknown prepared row: {exc.args[0]}") from exc
+        if not _authority_pair_is_permitted(left_row, right_row):
             continue
         pair_key = _record_entity_ids(record)
         confidence = float(record["match_probability"])

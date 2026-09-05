@@ -49,6 +49,26 @@ body {
   padding: 2rem 1.25rem 3rem;
 }
 
+.shell__skip-link {
+  position: fixed;
+  top: 0;
+  left: 0.75rem;
+  z-index: 10000;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  border-radius: 0.45rem;
+  background: #0f5d8f;
+  color: #f7fbff;
+  padding: 0.5rem 0.75rem;
+  font-weight: 700;
+  transform: translateY(calc(-100% - 1px));
+}
+
+.shell__skip-link:focus {
+  transform: translateY(0.75rem);
+}
+
 .shell__header {
   border-bottom: 1px solid #bfd0df;
   margin-bottom: 2rem;

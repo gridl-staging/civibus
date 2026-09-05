@@ -33,14 +33,25 @@ def _insert_data_source(
     jurisdiction: str = "federal/fec",
 ) -> UUID:
     data_source_id = uuid4()
+    authority_type, authority_code = jurisdiction.split("/", maxsplit=1)
+    authority_type = {"states": "state", "cities": "municipality"}.get(
+        authority_type,
+        authority_type,
+    )
     db_conn.execute(
         """
         INSERT INTO core.data_source (
-            id, domain, jurisdiction, name, source_url
+            id,
+            domain,
+            jurisdiction,
+            filing_authority_type,
+            filing_authority_code,
+            name,
+            source_url
         )
-        VALUES (%s, 'campaign_finance', %s, %s, 'https://example.test')
+        VALUES (%s, 'campaign_finance', %s, %s, %s, %s, 'https://example.test')
         """,
-        (data_source_id, jurisdiction, name),
+        (data_source_id, jurisdiction, authority_type, authority_code.upper(), name),
     )
     return data_source_id
 

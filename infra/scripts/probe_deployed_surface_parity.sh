@@ -5,10 +5,18 @@ BASE_URL="${CIVIBUS_PUBLIC_BASE_URL:-https://civibus-caddy.fly.dev}"
 EXPECTED_SHA="${CIVIBUS_EXPECTED_SHA:-}"
 FIXTURE_DIR="${CIVIBUS_DEPLOYED_SURFACE_FIXTURE_DIR:-}"
 CIVIBUS_PUBLIC_MONEY_VALUE_FATAL="${CIVIBUS_PUBLIC_MONEY_VALUE_FATAL:-0}"
+RAW_API_OUTPUT="${CIVIBUS_SURFACE_PARITY_RAW_API_OUTPUT:-}"
+CANDIDATE_RECEIPT_SHA256="${CIVIBUS_CANDIDATE_RECEIPT_SHA256:-}"
+CANDIDATE_TREE_GIT_SHA="${CIVIBUS_CANDIDATE_TREE_GIT_SHA:-}"
+QUALIFIED_IMAGE="${CIVIBUS_QUALIFIED_IMAGE:-}"
+PROMOTION_BUNDLE_SHA256="${CIVIBUS_PROMOTION_BUNDLE_SHA256:-}"
+FEDERAL_IDENTITY_SHA256="${CIVIBUS_FEDERAL_IDENTITY_SHA256:-}"
 SITEMAP_LATENCY_BUDGET_SECONDS="30.000"
 PUBLIC_SURFACE_MANIFEST_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../public_surface_probes.tsv"
 PUBLIC_SURFACE_MANIFEST_HEADER=$'surface_id\tkind\tpath\tmarker\tparity_mode\tuptime_mode\towners'
 PUBLIC_SURFACE_RECORDS=()
+RAW_SURFACE_RESULTS=()
+RAW_REGIONAL_ROUTE_EXPECTATIONS=()
 
 manifest_header_has_column() {
   local header="$1"
@@ -572,7 +580,8 @@ resolve_person_surface_specimen() {
 
 warm_up_public_page() {
   local path="$1"
-  local body_path="${TMP_DIR}/warmup_$(page_body_slug "${path}").html"
+  local body_path
+  body_path="${TMP_DIR}/warmup_$(page_body_slug "${path}").html"
 
   # 2026-07-23 cold/warm probe showed donor search can exceed the kill window
   # on first request while a same-URL warm request returns within bounds.
@@ -605,7 +614,9 @@ probe_public_page() {
   local fetch_result
   local latency_seconds
   local status
-  local body_path="${TMP_DIR}/page_body_$(page_body_slug "${path}").html"
+  local body_path
+  local content_sha256
+  body_path="${TMP_DIR}/page_body_$(page_body_slug "${path}").html"
 
   if [[ "${parity_mode}" == "known_red" ]]; then
     probe_known_red_public_page "${path}" "${surface_id}" "${owners}"
@@ -630,6 +641,8 @@ probe_public_page() {
   fi
 
   assert_public_page_body "${path}" "${marker}" "${body_path}" || return 1
+  content_sha256="$(shasum -a 256 "${body_path}" | awk '{print $1}')" || return 1
+  RAW_SURFACE_RESULTS+=("${surface_id}"$'\t'"${path}"$'\t'"${status}"$'\t'"${content_sha256}")
 
   echo "page_status ${path} ${status} marker_ok surface_id=${surface_id} owner=${owners}"
   if [[ "${path}" == "/sitemap.xml" ]]; then
@@ -652,7 +665,8 @@ probe_known_red_public_page() {
   local surface_id="$2"
   local owners="$3"
   local status
-  local body_path="${TMP_DIR}/known_red_body_$(page_body_slug "${path}").html"
+  local body_path
+  body_path="${TMP_DIR}/known_red_body_$(page_body_slug "${path}").html"
 
   if status="$(fetch_public_page_body "${path}" "${body_path}")"; then
     echo "WARN known_red_page ${path} ${status} surface_id=${surface_id} owner=${owners} reason=manifest_known_red"
@@ -672,6 +686,7 @@ probe_person_surface() {
   local specimen_result
   local specimen_path
   local status
+  local content_sha256
 
   specimen_result="$(resolve_person_surface_specimen "${sitemap_path}")" || {
     specimen_path="${specimen_result%%$'\t'*}"
@@ -700,6 +715,8 @@ probe_person_surface() {
     return 1
   fi
 
+  content_sha256="$(shasum -a 256 "${body_path}" | awk '{print $1}')" || return 1
+  RAW_SURFACE_RESULTS+=("${surface_id}"$'\t'"${specimen_path}"$'\t'"${status}"$'\t'"${content_sha256}")
   echo "person_surface ${specimen_path} ok surface_id=${surface_id} owner=${owners}"
 }
 
@@ -776,6 +793,183 @@ probe_public_money_value() {
   return "${money_status}"
 }
 
+probe_raw_parity_dependencies() {
+  local path marker result status body_path route_contract
+  route_contract="$({
+    uv run --extra api python - <<'PY'
+from domains.campaign_finance.coverage.lifecycle import REGIONAL_BROWSER_ROUTE_EXPECTATIONS
+
+for path, heading, status, authority_identity in REGIONAL_BROWSER_ROUTE_EXPECTATIONS:
+    print("\t".join((path, heading, status, authority_identity)))
+PY
+  })" || {
+    echo "raw_parity_route_contract_unavailable" >&2
+    return 1
+  }
+  while IFS= read -r result; do
+    [[ -n "${result}" ]] && RAW_REGIONAL_ROUTE_EXPECTATIONS+=("${result}")
+  done <<< "${route_contract}"
+  [[ "${#RAW_REGIONAL_ROUTE_EXPECTATIONS[@]}" -eq 3 ]] || {
+    echo "raw_parity_route_contract_invalid" >&2
+    return 1
+  }
+  for result in "${RAW_REGIONAL_ROUTE_EXPECTATIONS[@]}"; do
+    IFS=$'\t' read -r path marker _ <<< "${result}"
+    body_path="${TMP_DIR}/raw_route_$(page_body_slug "${path}").html"
+    result="$(fetch_public_page_body "${path}" "${body_path}")" || return 1
+    status="${result%%$'\t'*}"
+    [[ "${status}" == "200" ]] || {
+      echo "raw_parity_route_status path=${path} status=${status}" >&2
+      return 1
+    }
+    grep -Fq -- "${marker}" "${body_path}" || {
+      echo "raw_parity_route_marker_missing path=${path}" >&2
+      return 1
+    }
+  done
+
+  path="/api/health/content"
+  body_path="${TMP_DIR}/raw_content_health.json"
+  result="$(fetch_public_page_body "${path}" "${body_path}")" || return 1
+  status="${result%%$'\t'*}"
+  [[ "${status}" == "200" ]] || {
+    echo "raw_parity_content_health_status status=${status}" >&2
+    return 1
+  }
+  python3 - "${body_path}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+if json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")) != {"healthy": True}:
+    raise SystemExit("raw parity content health is not exactly healthy")
+PY
+}
+
+emit_raw_api_parity_evidence() {
+  [[ -n "${RAW_API_OUTPUT}" ]] || return 0
+  probe_raw_parity_dependencies || return 1
+  python3 - \
+    "${RAW_API_OUTPUT}" "${EXPECTED_SHA}" "${CANDIDATE_RECEIPT_SHA256}" \
+    "${CANDIDATE_TREE_GIT_SHA}" "${QUALIFIED_IMAGE}" "${PROMOTION_BUNDLE_SHA256}" \
+    "${FEDERAL_IDENTITY_SHA256}" "${#RAW_REGIONAL_ROUTE_EXPECTATIONS[@]}" \
+    "${RAW_REGIONAL_ROUTE_EXPECTATIONS[@]}" "${RAW_SURFACE_RESULTS[@]}" <<'PY'
+from datetime import datetime, timezone
+import json
+import os
+import re
+import secrets
+import sys
+from pathlib import Path
+
+(
+    output_text,
+    revision,
+    candidate_receipt_sha256,
+    candidate_tree_git_sha,
+    qualified_image,
+    promotion_bundle_sha256,
+    federal_identity_sha256,
+    route_count_text,
+    *raw_rows,
+) = sys.argv[1:]
+route_count = int(route_count_text)
+route_rows = raw_rows[:route_count]
+rows = raw_rows[route_count:]
+regional_routes = []
+for row in route_rows:
+    fields = row.split("\t")
+    if len(fields) != 4:
+        raise SystemExit("raw API parity regional route expectation is malformed")
+    regional_routes.append(fields[0])
+output = Path(output_text)
+if not output.is_absolute() or not output.parent.is_dir() or output.parent.is_symlink():
+    raise SystemExit("raw API parity output must be an absolute path in an existing regular directory")
+if re.fullmatch(r"[0-9a-f]{40}", revision) is None or re.fullmatch(
+    r"[0-9a-f]{40}", candidate_tree_git_sha
+) is None:
+    raise SystemExit("raw API parity revision identity is invalid")
+for label, value in (
+    ("candidate receipt", candidate_receipt_sha256),
+    ("promotion bundle", promotion_bundle_sha256),
+    ("federal identity", federal_identity_sha256),
+):
+    if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise SystemExit(f"raw API parity {label} digest is invalid")
+if not qualified_image or any(token in qualified_image.lower() for token in ("token", "password", "secret")):
+    raise SystemExit("raw API parity qualified image identity is invalid")
+surfaces = []
+for row in rows:
+    fields = row.split("\t")
+    if len(fields) != 4:
+        raise SystemExit("raw API parity surface result is malformed")
+    surface_id, path, status, content_sha256 = fields
+    if status != "200" or re.fullmatch(r"[0-9a-f]{64}", content_sha256) is None:
+        raise SystemExit("raw API parity surface result is non-green")
+    surfaces.append(
+        {
+            "surface_id": surface_id,
+            "path": path,
+            "http_status": 200,
+            "content_sha256": content_sha256,
+        }
+    )
+expected_ids = (
+    "home_surface", "search_surface", "donor_search_surface", "congress_surface",
+    "methodology_surface", "developers_surface", "candidates_surface", "committees_surface",
+    "committee_detail_surface", "compare_surface", "calendar_surface", "coverage_surface",
+    "data_sources_surface", "about_surface", "contact_surface", "privacy_surface",
+    "sitemap_index_surface", "person_detail_surface",
+)
+if tuple(row["surface_id"] for row in surfaces) != expected_ids:
+    raise SystemExit("raw API parity does not contain exact ordered 18/18 surfaces")
+source_names = (
+    "WA PDC Contributions",
+    "WA PDC Expenditures",
+    "WA PDC Independent Expenditures",
+    "WA PDC Loans",
+)
+payload = {
+    "schema_version": 1,
+    "captured_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "source_revision": revision,
+    "api_revision": revision,
+    "web_revision": revision,
+    "candidate_receipt_file_sha256": candidate_receipt_sha256,
+    "candidate_tree_git_sha": candidate_tree_git_sha,
+    "qualified_image": qualified_image,
+    "promotion_bundle_sha256": promotion_bundle_sha256,
+    "filing_authority": {"kind": "state", "code": "WA"},
+    "source_identities": [f"state/WA:{name}" for name in source_names],
+    "health_status": "healthy",
+    "content_health_status": "healthy",
+    "surface_parity_ok": True,
+    "federal_identity_sha256": federal_identity_sha256,
+    "regional_navigation_routes": regional_routes,
+    "washington_specimens": list(source_names),
+    "surfaces": surfaces,
+}
+data = (json.dumps(payload, ensure_ascii=True, allow_nan=False, separators=(",", ":"), sort_keys=True) + "\n").encode()
+temporary = output.parent / f".{output.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+try:
+    fd = os.open(temporary, flags, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.link(temporary, output, follow_symlinks=False)
+    directory_fd = os.open(output.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+finally:
+    temporary.unlink(missing_ok=True)
+PY
+}
+
 structural_status=0
 money_status=0
 
@@ -800,5 +994,10 @@ if [[ "${structural_status}" -ne 0 || "${money_status}" -ne 0 ]]; then
   echo "deployed_surface_parity_failed structural_status=${structural_status} money_status=${money_status}" >&2
   exit 1
 fi
+
+emit_raw_api_parity_evidence || {
+  echo "deployed_surface_parity_raw_api_evidence_failed" >&2
+  exit 1
+}
 
 echo "surface_parity_ok"

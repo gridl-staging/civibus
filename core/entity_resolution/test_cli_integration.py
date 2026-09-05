@@ -261,7 +261,7 @@ def _seed_persisted_run_fixture(graph_conn: psycopg.Connection) -> _PersistedRun
         auto_merge_person_a: "federal/fec",
         auto_merge_person_b: "federal/fec",
         auto_merge_person_c: "state/CO",
-        auto_merge_person_d: "state/GA",
+        auto_merge_person_d: "state/CO",
     }
     source_records = _seed_person_source_records_by_jurisdiction(
         graph_conn,

@@ -19,6 +19,10 @@ STOP_POLLS_PER_SECOND=10
 DEFAULT_STOP_GRACE_SECONDS=5
 WRAPPER_PGID_ATTEMPTS=40
 STABLE_PROCESS_IDENTITY_ATTEMPTS=5
+# 80 fast polls is a 4.0s approval window, comfortably above start's normal
+# post-ready approval path: 40 wrapper-PGID polls + 5 stable-identity polls
+# consume at most 2.25s before the small adoption metadata writes.
+WRAPPER_LAUNCH_APPROVAL_ATTEMPTS=80
 PID_EXIT_ATTEMPTS=10
 
 observed_process_identity() {
@@ -212,6 +216,128 @@ recorded_process_is_alive() {
 # wrapper is an orphan, not a running job, and belongs to the guard below.
 job_is_alive() {
   recorded_process_is_alive "$1" wrapper
+}
+
+# One wording for every way the start lock is unavailable, because the operator
+# is left the same job in each case: another same-name start owns the job
+# directory right now, so wait for it or retry.
+CONCURRENT_START_REFUSAL_REASON="another start for this job holds the start lock; wait for it to finish or retry"
+
+# The start lock's holder policy: claim the lock, and on failure decide whether
+# the starter recorded in it is still alive. The directory mechanics belong to
+# detached_runner_job_state_lib.sh; only this verdict is process observation,
+# and it is this library's ordinary ownership rule -- a recorded PID is ours
+# only while it still carries its recorded identity -- so a recycled PID number
+# cannot keep a dead starter's lock alive.
+#
+# A lock whose starter is dead is RECLAIMED rather than refused forever. The
+# runner releases the lock from an EXIT trap, so only a starter killed outright
+# can leave one behind; a lock nobody could ever clear would wedge that job name
+# until an operator deleted the directory by hand, which is a worse operator
+# outcome than the interleaved start the lock exists to prevent. A claimant now
+# publishes its PID and identity outside start.lock before mkdir, so an
+# incomplete lock is refused while that claimant is alive and reclaimed after
+# it dies without guessing from absent in-lock metadata.
+#
+# Release is `release_start_lock` in the job-state library, which knows what
+# this process claimed.
+incomplete_start_lock_has_live_claimant() {
+  local directory="$1" ignored_pid="${2:-}" ignored_identity="${3:-}"
+  local claim_path claimant_pid claimant_identity
+  collect_start_lock_claim_paths "${directory}"
+  for claim_path in "${START_LOCK_CLAIM_PATHS[@]}"; do
+    claimant_pid="$(start_lock_claim_starter_pid "${claim_path}")"
+    claimant_identity="$(start_lock_claim_starter_identity "${claim_path}")"
+    if [[ "${claimant_pid}" == "${ignored_pid}" && "${claimant_identity}" == "${ignored_identity}" ]]; then
+      continue
+    fi
+    if [[ -n "${claimant_pid}" ]]; then
+      if [[ -n "${claimant_identity}" ]] && pid_identity_matches "${claimant_pid}" "${claimant_identity}"; then
+        return 0
+      fi
+      # A claimant whose command identity could not be observed retains this
+      # record until release. Bare PID liveness is deliberately fail-closed:
+      # PID reuse may delay recovery, but it cannot displace a live starter.
+      if [[ -z "${claimant_identity}" ]] && kill -0 "${claimant_pid}" 2>/dev/null; then
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+# Claim the reclaim mutex or recover one whose recorded owner is no longer the
+# same live process. The contender's pre-claim record remains visible while it
+# examines an incomplete mutex, so it ignores only its own record and refuses
+# if the killed holder is actually still publishing ownership metadata.
+acquire_start_lock_reclaim() {
+  local directory="$1" starter_pid="$2" starter_identity="$3"
+  local holder_pid holder_identity claim_rc
+  claim_start_lock_reclaim "${directory}" "${starter_pid}" "${starter_identity}" && return 0
+
+  holder_pid="$(start_lock_reclaim_starter_pid "${directory}")"
+  holder_identity="$(start_lock_reclaim_starter_identity "${directory}")"
+  if [[ -z "${holder_pid}" || -z "${holder_identity}" ]]; then
+    if incomplete_start_lock_has_live_claimant "${directory}" "${starter_pid}" "${starter_identity}" ||
+      ! discard_incomplete_start_lock_reclaim "${directory}"; then
+      clear_active_start_lock_claim
+      return 1
+    fi
+  elif pid_identity_matches "${holder_pid}" "${holder_identity}" ||
+    ! discard_start_lock_reclaim_held_by "${directory}" "${holder_pid}" "${holder_identity}"; then
+    clear_active_start_lock_claim
+    return 1
+  fi
+
+  claim_start_lock_reclaim "${directory}" "${starter_pid}" "${starter_identity}"
+  claim_rc=$?
+  clear_active_start_lock_claim
+  return "${claim_rc}"
+}
+
+acquire_start_lock() {
+  local directory="$1" starter_pid="$2" starter_identity claim_rc
+  starter_identity="$(observed_process_identity "${starter_pid}")"
+  claim_start_lock "${directory}" "${starter_pid}" "${starter_identity}" && return 0
+
+  # The lock is held. Deciding whether its holder is stale, and clearing it if
+  # so, runs under the reclaim mutex. Serializing reclaimers is what makes the
+  # clear safe: it guarantees the lock a reclaimer moves aside is still the stale
+  # one it observed, so a reclaimer can never move a live replacement lock aside
+  # (created in the gap after another reclaimer cleared the original) and expose
+  # a claimable vacancy. A contender that finds another reclaimer already
+  # deciding refuses rather than reclaiming.
+  acquire_start_lock_reclaim "${directory}" "${starter_pid}" "${starter_identity}" || return 1
+  if ! reclaim_stale_start_lock "${directory}"; then
+    release_start_lock_reclaim
+    return 1
+  fi
+  # The stale lock is cleared. Re-claim under the still-held reclaim mutex; a
+  # bare fast-path claimer may have taken the freed path first, in which case
+  # this claim fails and we refuse -- one holder, never two.
+  claim_start_lock "${directory}" "${starter_pid}" "${starter_identity}"
+  claim_rc=$?
+  release_start_lock_reclaim
+  return "${claim_rc}"
+}
+
+# Under the reclaim mutex, decide whether the held start lock is stale and clear
+# it if so. Returns 0 when the lock path is now free for the caller to claim, 1
+# when the holder is live (or an incomplete claim's claimant is live) and the
+# start must be refused. The holder observed here cannot change while this runs:
+# the mutex excludes other reclaimers, and a fresh claim needs the path this
+# holder still occupies -- so the lock cleared here is provably the one observed.
+reclaim_stale_start_lock() {
+  local directory="$1" holder_pid holder_identity
+  holder_pid="$(start_lock_starter_pid "${directory}")"
+  holder_identity="$(start_lock_starter_identity "${directory}")"
+  if [[ -z "${holder_pid}" || -z "${holder_identity}" ]]; then
+    incomplete_start_lock_has_live_claimant "${directory}" && return 1
+    discard_incomplete_start_lock "${directory}"
+    return "$?"
+  fi
+  pid_identity_matches "${holder_pid}" "${holder_identity}" && return 1
+  discard_start_lock_held_by "${directory}" "${holder_pid}"
 }
 
 # The duplicate-start guard: `start` refuses while the recorded child of a dead

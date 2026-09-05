@@ -39,6 +39,7 @@ class TestCountGraphEdgesByFamily:
         )
         conn, _ = _mock_conn_with_side_effect([(value,) for value in expected.values()])
         result = count_graph_edges_by_family(conn, ds_id)
+        conn.execute.assert_called_once_with('SET LOCAL search_path = ag_catalog, "$user", public')
         assert isinstance(result, dict)
         assert set(result) == set(EXPECTED_EDGE_FAMILIES)
         assert result == expected
@@ -118,6 +119,9 @@ class TestCountGraphEdgesByFamily:
             assert f"ag_catalog.cypher('{GRAPH_NAME.lower()}'" in sql_lower, (
                 "Graph edge counting must use the configured GRAPH_NAME as a literal "
                 "first argument to ag_catalog.cypher()"
+            )
+            assert "as edge(v ag_catalog.agtype)" in sql_lower, (
+                "AGE result types must be schema-qualified so quality checks do not depend on a session search_path"
             )
             assert GRAPH_NAME.lower() not in params_text, (
                 "GRAPH_NAME must not appear in execute() params; only data_source scoping should be parameterized"

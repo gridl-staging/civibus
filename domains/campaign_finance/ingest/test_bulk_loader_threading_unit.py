@@ -123,7 +123,11 @@ def test_stage4_loaders_forward_limit_and_graph_enabled(
 
     monkeypatch.setattr(bulk_stage4_loader, "read_bulk_file", _read_bulk_file)
     monkeypatch.setattr(bulk_stage4_loader, "map_contribution_fields", _map_contribution_fields)
-    monkeypatch.setattr(bulk_stage4_loader, "find_committee_id_by_fec_id", lambda conn, committee_id: uuid4())
+    monkeypatch.setattr(
+        bulk_stage4_loader,
+        "find_committee_id_by_fec_id",
+        lambda conn, committee_id, **_kwargs: uuid4(),
+    )
     monkeypatch.setattr(bulk_stage4_loader, "load_contribution", _load_contribution)
 
     loader = getattr(bulk_loader, loader_name)

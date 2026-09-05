@@ -114,6 +114,10 @@ _PERSON_BY_NAME_AND_ZIP_QUERY = """
 """
 
 
+class AuthorityScopedIdentityAmbiguityError(ValueError):
+    """A deterministic identifier mapped to multiple entities inside one source."""
+
+
 def _extract_id(row: tuple[UUID] | None) -> UUID | None:
     if row is None:
         return None
@@ -160,6 +164,71 @@ def _find_identifier_match(
 ) -> UUID | None:
     with conn.cursor() as cursor:
         return _select_existing_id(cursor, select_query, (Jsonb({key: value}),))
+
+
+def _find_scoped_identifier_match(
+    conn: psycopg.Connection,
+    *,
+    entity_table: str,
+    entity_type: str,
+    key: str,
+    value: str,
+    data_source_id: UUID,
+) -> UUID | None:
+    if entity_table not in {"person", "organization"}:
+        raise ValueError(f"unsupported scoped identifier entity table {entity_table!r}")
+    query = f"""
+        SELECT DISTINCT entity.id
+        FROM core.{entity_table} AS entity
+        JOIN core.entity_source AS entity_source
+          ON entity_source.entity_type = %s
+         AND entity_source.entity_id = entity.id
+        JOIN core.source_record AS source_record
+          ON source_record.id = entity_source.source_record_id
+        WHERE source_record.data_source_id = %s
+          AND entity.identifiers @> %s
+        ORDER BY entity.id
+        LIMIT 2
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(query, (entity_type, data_source_id, Jsonb({key: value})))
+        rows = cursor.fetchall()
+    if len(rows) > 1:
+        raise AuthorityScopedIdentityAmbiguityError(
+            f"{entity_type} identifier {key!r}={value!r} maps to multiple entities in data source {data_source_id}"
+        )
+    if rows:
+        return rows[0][0]
+
+    # Adopt a legacy entity only while it has no campaign-finance provenance.
+    # Once any source owns it, another source/authority cannot borrow it through
+    # an authority-blind identifier fallback.
+    unscoped_query = f"""
+        SELECT entity.id
+        FROM core.{entity_table} AS entity
+        WHERE entity.identifiers @> %s
+          AND NOT EXISTS (
+              SELECT 1
+              FROM core.entity_source AS entity_source
+              JOIN core.source_record AS source_record
+                ON source_record.id = entity_source.source_record_id
+              JOIN core.data_source AS data_source
+                ON data_source.id = source_record.data_source_id
+              WHERE entity_source.entity_type = %s
+                AND entity_source.entity_id = entity.id
+                AND data_source.domain = 'campaign_finance'
+          )
+        ORDER BY entity.id
+        LIMIT 2
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(unscoped_query, (Jsonb({key: value}), entity_type))
+        unscoped_rows = cursor.fetchall()
+    if len(unscoped_rows) > 1:
+        raise AuthorityScopedIdentityAmbiguityError(
+            f"legacy {entity_type} identifier {key!r}={value!r} maps to multiple unscoped entities"
+        )
+    return None if not unscoped_rows else unscoped_rows[0][0]
 
 
 def _find_person_fec_candidate_identifier_match(conn: psycopg.Connection, value: str) -> UUID | None:
@@ -404,17 +473,18 @@ def _is_setwise_bulk_candidate(record: SourceRecord, key_counts: dict[tuple[UUID
     return key_counts[(record.data_source_id, record.source_record_key)] == 1
 
 
-def _bulk_insert_fresh_source_records(
+def _bulk_resolve_source_records(
     conn: psycopg.Connection,
     records: list[SourceRecord],
-) -> set[int]:
-    """Set-wise insert records with no active row; return the ordinals this statement inserted.
+) -> dict[int, tuple[UUID | None, bool, str | None]]:
+    """Lock existing keys and insert fresh records in one set-wise statement.
 
-    Ordinals absent from the result already had an active row (or lost the insert race)
-    and must go through the locked ``try_insert_source_record()`` owner.
+    Each ordinal maps to ``(resolved_id, inserted, active_record_hash)``. A
+    missing resolved id means an insert race lost visibility in this command's
+    snapshot and must use the locked per-row owner.
     """
     if not records:
-        return set()
+        return {}
 
     ordinals = list(range(len(records)))
     ids = [record.id for record in records]
@@ -446,15 +516,17 @@ def _bulk_insert_fresh_source_records(
                     %s::timestamptz[]
                 )
             ),
-            active AS (
+            active AS MATERIALIZED (
                 SELECT
                     incoming.ordinal,
-                    source_record.id AS active_id
+                    source_record.id AS active_id,
+                    source_record.record_hash AS active_record_hash
                 FROM incoming
                 JOIN core.source_record AS source_record
                   ON source_record.data_source_id = incoming.data_source_id
                  AND source_record.source_record_key = incoming.source_record_key
                  AND source_record.superseded_by IS NULL
+                FOR UPDATE OF source_record
             ),
             inserted AS (
                 INSERT INTO core.source_record (
@@ -479,11 +551,14 @@ def _bulk_insert_fresh_source_records(
                 DO NOTHING
                 RETURNING id
             )
-            SELECT incoming.ordinal
+            SELECT
+                incoming.ordinal,
+                COALESCE(inserted.id, active.active_id) AS resolved_id,
+                inserted.id IS NOT NULL AS inserted,
+                active.active_record_hash
             FROM incoming
-            JOIN inserted ON inserted.id = incoming.id
+            LEFT JOIN inserted ON inserted.id = incoming.id
             LEFT JOIN active ON active.ordinal = incoming.ordinal
-            WHERE active.active_id IS NULL
             """,
             (
                 ordinals,
@@ -497,7 +572,10 @@ def _bulk_insert_fresh_source_records(
                 created_at_values,
             ),
         )
-        return {ordinal for (ordinal,) in cursor}
+        return {
+            ordinal: (resolved_id, inserted, active_record_hash)
+            for ordinal, resolved_id, inserted, active_record_hash in cursor
+        }
 
 
 def try_insert_source_records_bulk(
@@ -524,47 +602,25 @@ def try_insert_source_records_bulk(
                 SourceRecordBulkInsertAttribution.FORCED_PER_ROW,
             )
 
-    active_records = select_active_source_records_by_keys(
-        conn,
-        [
-            (record.data_source_id, record.source_record_key)
-            for record in setwise_records
-            if record.source_record_key is not None
-        ],
-        for_update=True,
-    )
-    fresh_records: list[SourceRecord] = []
-    fresh_ordinals: list[int] = []
+    bulk_outcomes = _bulk_resolve_source_records(conn, setwise_records)
     for ordinal, record in enumerate(setwise_records):
         result_index = setwise_indexes[ordinal]
-        key = (record.data_source_id, record.source_record_key)
-        active_record = active_records.get(key)  # type: ignore[arg-type]
-        if active_record is None:
-            fresh_records.append(record)
-            fresh_ordinals.append(ordinal)
-        elif active_record.record_hash == record.record_hash:
+        resolved_id, inserted, active_record_hash = bulk_outcomes.get(
+            ordinal,
+            (None, False, None),
+        )
+        if inserted:
             results[result_index] = SourceRecordBulkInsertResult(
-                active_record.id,
-                False,
-                SourceRecordBulkInsertAttribution.FAST_PATH_REUSED,
-            )
-        else:
-            inserted_id = try_insert_source_record(conn, record)
-            results[result_index] = SourceRecordBulkInsertResult(
-                inserted_id or _active_source_record_id(conn, record),
-                inserted_id is not None,
-                SourceRecordBulkInsertAttribution.FAST_PATH_FALLBACK,
-            )
-
-    inserted_fresh_ordinals = _bulk_insert_fresh_source_records(conn, fresh_records)
-    for fresh_ordinal, record in enumerate(fresh_records):
-        ordinal = fresh_ordinals[fresh_ordinal]
-        result_index = setwise_indexes[ordinal]
-        if fresh_ordinal in inserted_fresh_ordinals:
-            results[result_index] = SourceRecordBulkInsertResult(
-                record.id,
+                resolved_id,
                 True,
                 SourceRecordBulkInsertAttribution.FAST_PATH_INSERTED,
+            )
+            continue
+        if resolved_id is not None and active_record_hash == record.record_hash:
+            results[result_index] = SourceRecordBulkInsertResult(
+                resolved_id,
+                False,
+                SourceRecordBulkInsertAttribution.FAST_PATH_REUSED,
             )
             continue
         inserted_id = try_insert_source_record(conn, record)
@@ -589,7 +645,37 @@ def _active_source_record_id(conn: psycopg.Connection, record: SourceRecord) -> 
     return active_record.id
 
 
-def find_organization_by_canonical_name(conn: psycopg.Connection, canonical_name: str) -> UUID | None:
+def find_organization_by_canonical_name(
+    conn: psycopg.Connection,
+    canonical_name: str,
+    *,
+    data_source_id: UUID | None = None,
+) -> UUID | None:
+    if data_source_id is not None:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT DISTINCT organization.id
+                FROM core.organization AS organization
+                JOIN core.entity_source AS entity_source
+                  ON entity_source.entity_type = 'organization'
+                 AND entity_source.entity_id = organization.id
+                JOIN core.source_record AS source_record
+                  ON source_record.id = entity_source.source_record_id
+                WHERE organization.canonical_name = %s
+                  AND source_record.data_source_id = %s
+                ORDER BY organization.id
+                """,
+                (canonical_name, data_source_id),
+            )
+            matches = [row[0] for row in cursor.fetchall()]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise AuthorityScopedIdentityAmbiguityError(
+                f"organization canonical name mapped to multiple entities inside data source {data_source_id}"
+            )
+        return matches[0]
     with conn.cursor() as cursor:
         return _select_existing_id(
             cursor,
@@ -598,11 +684,41 @@ def find_organization_by_canonical_name(conn: psycopg.Connection, canonical_name
         )
 
 
-def find_organization_by_identifier(conn: psycopg.Connection, key: str, value: str) -> UUID | None:
+def find_organization_by_identifier(
+    conn: psycopg.Connection,
+    key: str,
+    value: str,
+    *,
+    data_source_id: UUID | None = None,
+) -> UUID | None:
+    if data_source_id is not None:
+        return _find_scoped_identifier_match(
+            conn,
+            entity_table="organization",
+            entity_type="organization",
+            key=key,
+            value=value,
+            data_source_id=data_source_id,
+        )
     return _find_identifier_match(conn, _ORGANIZATION_IDENTIFIER_QUERY, key, value)
 
 
-def find_person_by_identifier(conn: psycopg.Connection, key: str, value: str) -> UUID | None:
+def find_person_by_identifier(
+    conn: psycopg.Connection,
+    key: str,
+    value: str,
+    *,
+    data_source_id: UUID | None = None,
+) -> UUID | None:
+    if data_source_id is not None:
+        return _find_scoped_identifier_match(
+            conn,
+            entity_table="person",
+            entity_type="person",
+            key=key,
+            value=value,
+            data_source_id=data_source_id,
+        )
     if key == "fec_candidate_id":
         return _find_person_fec_candidate_identifier_match(conn, value)
     return _find_identifier_match(conn, _PERSON_IDENTIFIER_QUERY, key, value)
@@ -613,7 +729,51 @@ def find_person_by_name_and_zip(
     last_name: str,
     first_name: str,
     zip5: str | None,
+    *,
+    data_source_id: UUID | None = None,
 ) -> UUID | None:
+    if data_source_id is not None:
+        zip_join = (
+            """
+            JOIN core.entity_address ea
+              ON ea.entity_type = 'person'
+             AND ea.entity_id = p.id
+            JOIN core.address a ON a.id = ea.address_id
+        """
+            if zip5 is not None
+            else ""
+        )
+        zip_predicate = "AND a.zip5 = %s" if zip5 is not None else ""
+        params: tuple[object, ...] = (
+            (last_name, first_name, data_source_id) if zip5 is None else (last_name, first_name, data_source_id, zip5)
+        )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT DISTINCT p.id
+                FROM core.person p
+                JOIN core.entity_source es
+                  ON es.entity_type = 'person'
+                 AND es.entity_id = p.id
+                JOIN core.source_record sr ON sr.id = es.source_record_id
+                {zip_join}
+                WHERE p.last_name = %s
+                  AND p.first_name = %s
+                  AND sr.data_source_id = %s
+                  {zip_predicate}
+                ORDER BY p.id
+                """,
+                params,
+            )
+            matches = [row[0] for row in cursor.fetchall()]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            raise AuthorityScopedIdentityAmbiguityError(
+                f"person name/ZIP identifier mapped to multiple entities inside data source {data_source_id}"
+            )
+        return matches[0]
+
     query = _PERSON_BY_NAME_QUERY if zip5 is None else _PERSON_BY_NAME_AND_ZIP_QUERY
     params: tuple[object, ...] = (last_name, first_name) if zip5 is None else (last_name, first_name, zip5)
 

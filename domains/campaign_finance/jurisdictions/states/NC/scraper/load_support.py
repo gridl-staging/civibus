@@ -59,6 +59,8 @@ def _build_data_source_from_config(data_source_config: DataSourceConfig) -> Data
     return DataSource(
         domain=_NC_DOMAIN,
         jurisdiction=_NC_JURISDICTION,
+        filing_authority_type="state",
+        filing_authority_code="NC",
         name=data_source_config.name,
         source_url=data_source_config.url,
         source_format="csv",

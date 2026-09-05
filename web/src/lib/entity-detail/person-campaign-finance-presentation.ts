@@ -3,7 +3,10 @@ import {
   buildCandidateCommitteeBreakdown,
   buildCommitteeDeferredTransactionRows,
   buildRankedPartyRows,
+  compareSerializedMoney,
   formatCurrency,
+  serializedMoneyMagnitudePercent,
+  sumSerializedMoney,
   type CandidateCommitteeBreakdownRow,
   type CommitteeTransactionRow,
   type OutsideSpendingPresentation,
@@ -33,7 +36,6 @@ import {
   buildPersonMonthlyContributionsPresentation,
   buildPersonReceiptCompositionPresentation,
   buildPersonSizeBucketPresentation,
-  parseSerializedMoney,
   type PersonGeographySharePresentation,
   type PersonMonthlyContributionsPresentation,
   type PersonReceiptCompositionPresentation,
@@ -214,10 +216,6 @@ const PERSON_SUMMARY_SOURCE_LABELS: Record<PersonMoneySummarySource, string> = {
   mixed: "Mixed official FEC and derived summary data"
 };
 
-function parseMoney(value: SerializedMoney): number {
-  return parseSerializedMoney(value);
-}
-
 function formatCoverageLabel(startDate: string, endDate: string | null): string {
   return endDate === null ? `from ${startDate}` : `${startDate} to ${endDate}`;
 }
@@ -354,7 +352,7 @@ function buildDistrictShareSummary(districtShare: ContributionInsightsDistrictSh
   )} out of district`;
   if (
     districtShare.unknown_district_amount === null ||
-    parseMoney(districtShare.unknown_district_amount) === 0
+    compareSerializedMoney(districtShare.unknown_district_amount, "0") === 0
   ) {
     return `${baseSummary}.`;
   }
@@ -367,10 +365,17 @@ function buildDistrictShareSummary(districtShare: ContributionInsightsDistrictSh
 function buildRankedRowsWithBars(
   rows: { name: string; total_amount: SerializedMoney; transaction_count: number }[]
 ): PersonRankedPartyRow[] {
-  const maxAmount = Math.max(0, ...rows.map((row) => Math.abs(parseMoney(row.total_amount))));
+  const magnitudes = rows.map((row) =>
+    row.total_amount.startsWith("-") ? row.total_amount.slice(1) : row.total_amount
+  );
+  const maxAmount = magnitudes.reduce<SerializedMoney>(
+    (maximum, amount) =>
+      compareSerializedMoney(amount, maximum) > 0 ? amount : maximum,
+    "0.00"
+  );
   return buildRankedPartyRows(rows).map((row, index) => ({
     ...row,
-    barPercent: maxAmount === 0 ? 0 : Math.round((Math.abs(parseMoney(rows[index].total_amount)) / maxAmount) * 100)
+    barPercent: serializedMoneyMagnitudePercent(magnitudes[index], maxAmount)
   }));
 }
 
@@ -386,41 +391,38 @@ function buildTopEmployerRowsWithBars(
   );
 }
 
-function parseIndustryRollupCents(value: SerializedMoney): number {
+function parsePlainMoneyCents(value: SerializedMoney, errorMessage: string): bigint {
   if (!/^-?\d+(?:\.\d{1,2})?$/.test(value)) {
-    throw new Error(
-      `Industry rollup money must be a plain amount with at most two decimal places: ${value}`
-    );
+    throw new Error(errorMessage);
   }
 
   const negative = value.startsWith("-");
   const unsignedValue = negative ? value.slice(1) : value;
   const [wholeDollars, fractionalDollars = ""] = unsignedValue.split(".");
-  const cents =
-    Number.parseInt(wholeDollars, 10) * 100 +
-    Number.parseInt(fractionalDollars.padEnd(2, "0") || "0", 10);
-  const signedCents = negative ? -cents : cents;
-
-  if (!Number.isSafeInteger(signedCents)) {
-    throw new Error(`Industry rollup money exceeds the supported range: ${value}`);
-  }
-
-  return signedCents;
+  const cents = BigInt(wholeDollars) * 100n + BigInt(fractionalDollars.padEnd(2, "0") || "0");
+  return negative ? -cents : cents;
 }
 
-function sumIndustryRollupCents(rows: { totalCents: number }[]): number {
-  const totalCents = rows.reduce((total, row) => total + row.totalCents, 0);
-  if (!Number.isSafeInteger(totalCents)) {
-    throw new Error("Industry rollup total exceeds the supported range.");
-  }
-  return totalCents;
+function parseIndustryRollupCents(value: SerializedMoney): bigint {
+  return parsePlainMoneyCents(
+    value,
+    `Industry rollup money must be a plain amount with at most two decimal places: ${value}`
+  );
 }
 
-function formatIndustryRollupCents(cents: number): string {
-  const absoluteCents = Math.abs(cents);
-  const wholeDollars = Math.floor(absoluteCents / 100);
-  const fractionalDollars = String(absoluteCents % 100).padStart(2, "0");
-  return `${cents < 0 ? "-" : ""}$${wholeDollars.toLocaleString("en-US")}.${fractionalDollars}`;
+function sumIndustryRollupCents(rows: { totalCents: bigint }[]): bigint {
+  return rows.reduce((total, row) => total + row.totalCents, 0n);
+}
+
+function formatSerializedMoneyCents(cents: bigint): SerializedMoney {
+  const absoluteCents = cents < 0n ? -cents : cents;
+  const wholeDollars = absoluteCents / 100n;
+  const fractionalDollars = String(absoluteCents % 100n).padStart(2, "0");
+  return `${cents < 0n ? "-" : ""}${wholeDollars}.${fractionalDollars}`;
+}
+
+function formatIndustryRollupCents(cents: bigint): string {
+  return formatCurrency(formatSerializedMoneyCents(cents));
 }
 
 function buildIndustryRollup(
@@ -446,13 +448,13 @@ function buildIndustryRollup(
 
   const totalsByIndustry = new Map<
     string,
-    { label: string; totalCents: number; transactionCount: number }
+    { label: string; totalCents: bigint; transactionCount: number }
   >();
   for (const row of eligibleRows) {
     const current = totalsByIndustry.get(row.label);
     totalsByIndustry.set(row.label, {
       label: row.label,
-      totalCents: (current?.totalCents ?? 0) + row.totalCents,
+      totalCents: (current?.totalCents ?? 0n) + row.totalCents,
       transactionCount: (current?.transactionCount ?? 0) + row.transactionCount
     });
   }
@@ -473,7 +475,11 @@ function buildIndustryRollup(
     rows: industryTotals
       .sort(
         (left, right) =>
-          right.totalCents - left.totalCents ||
+          (right.totalCents > left.totalCents
+            ? 1
+            : right.totalCents < left.totalCents
+              ? -1
+              : 0) ||
           right.transactionCount - left.transactionCount ||
           left.label.localeCompare(right.label)
       )
@@ -585,14 +591,10 @@ function formatOptionalCurrency(value: SerializedMoney | null | undefined): stri
   return value === null || value === undefined ? "Not available" : formatCurrency(value);
 }
 
-function formatMoneyTotal(amount: number): SerializedMoney {
-  return amount.toFixed(2);
-}
-
 function sumMoney(summaries: CandidateFundraisingSummary[], field: PersonMoneyField): SerializedMoney {
-  return formatMoneyTotal(
-    summaries.reduce((total, summary) => total + parseMoney(summary[field]), 0)
-  );
+  return summaries.length === 1
+    ? summaries[0][field]
+    : sumSerializedMoney(summaries.map((summary) => summary[field]));
 }
 
 /**
@@ -611,7 +613,7 @@ function sumOptionalMoney(
     values.push(value);
   }
 
-  return formatMoneyTotal(values.reduce((total, value) => total + parseMoney(value), 0));
+  return values.length === 1 ? values[0] : sumSerializedMoney(values);
 }
 
 function sumCount(summaries: CandidateFundraisingSummary[], field: PersonMoneyCountField): number {
@@ -681,9 +683,10 @@ function buildAggregateReceiptSourceComposition(
       const current = totalsByLabel.get(component.label);
       totalsByLabel.set(component.label, {
         label: component.label,
-        total_amount: formatMoneyTotal(
-          parseMoney(current?.total_amount ?? "0.00") + parseMoney(component.total_amount)
-        ),
+        total_amount:
+          current === undefined
+            ? component.total_amount
+            : sumSerializedMoney([current.total_amount, component.total_amount]),
         source:
           current?.source === "none" || component.source === "none"
             ? "none"
@@ -798,6 +801,9 @@ export function buildPersonContributionInsightsPresentation(
 ): PersonContributionInsightsPresentation {
   const totalSummaryViews = buildTotalSummaryViews(insights);
   const hasDistrictGeography = insights.geography.by_district.length > 0;
+  // Validate and aggregate the exact industry money before the proportional
+  // ranking helpers project any neighboring money into chart numbers.
+  const industryRollup = buildIndustryRollup(personTopEmployers);
 
   return {
     emptyMessage: resolveContributionInsightsEmptyMessage(insights),
@@ -814,7 +820,7 @@ export function buildPersonContributionInsightsPresentation(
       personTopEmployers.length === 0 ? PERSON_TOP_EMPLOYERS_EMPTY_MESSAGE : null,
     topEmployerDisclaimer: PERSON_TOP_EMPLOYER_DISCLAIMER,
     topEmployerMethodologyReference: PERSON_TOP_EMPLOYER_METHODOLOGY_REFERENCE,
-    industryRollup: buildIndustryRollup(personTopEmployers),
+    industryRollup,
     rankingLabels: {
       topDonors: "Top reported contributor names",
       topEmployers: "Top reported employer names"

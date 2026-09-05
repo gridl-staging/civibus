@@ -5,7 +5,7 @@ import {
   fetchPersonTopEmployers,
   type PersonCandidateFinanceSection
 } from "./campaign-finance-detail";
-import type { CandidateFundraisingSummary, PersonContributionInsights } from "$lib/campaign-finance-detail/contract";
+import type { PersonContributionInsights } from "$lib/campaign-finance-detail/contract";
 import {
   buildPersonMoneyAtGlanceSummary,
   type PersonMoneyAtGlanceSummary,
@@ -20,13 +20,11 @@ import type { PersonDetailPageExtensions, PersonMoneyHeadlineState } from "./ent
 
 type ContributionInsightsOutcome =
   | { kind: "loaded"; insights: PersonContributionInsights }
-  | { kind: "unavailable"; insights: PersonContributionInsights };
+  | { kind: "unavailable"; error: unknown };
 
 type LoadPersonMoneyBundleOptions = {
   fallbackWhenBackendSelectedInsightsUnavailable?: boolean;
 };
-
-const DEFAULT_BACKEND_SELECTED_CYCLE = 2026;
 
 function guardUnhandledRejection(promise: Promise<unknown>): void {
   void promise.catch(() => {});
@@ -57,20 +55,20 @@ function fulfilledOutcome<T>(
   return outcome.status === "fulfilled";
 }
 
-function buildMissingSummaryHeadline(selectedCycle: number): PersonMoneyHeadlineState {
-  return {
+function buildMissingSummaryHeadline(selectedCycle?: number): PersonMoneyHeadlineState {
+  const headline = {
     kind: "missing_summary",
-    message: PERSON_MISSING_SUMMARY_MESSAGE,
-    selectedCycle
-  };
+    message: PERSON_MISSING_SUMMARY_MESSAGE
+  } as const;
+  return selectedCycle === undefined ? headline : { ...headline, selectedCycle };
 }
 
-function buildTemporarilyUnavailableHeadline(selectedCycle: number): PersonMoneyHeadlineState {
-  return {
+function buildTemporarilyUnavailableHeadline(selectedCycle?: number): PersonMoneyHeadlineState {
+  const headline = {
     kind: "temporarily_unavailable",
-    message: PERSON_TEMPORARILY_UNAVAILABLE_MESSAGE,
-    selectedCycle
-  };
+    message: PERSON_TEMPORARILY_UNAVAILABLE_MESSAGE
+  } as const;
+  return selectedCycle === undefined ? headline : { ...headline, selectedCycle };
 }
 
 function buildNotLoadedHeadline(
@@ -90,7 +88,7 @@ function buildNotLoadedHeadline(
 
 async function resolvePersonMoneyHeadline(
   sections: PersonCandidateFinanceSection[],
-  selectedCycle: number
+  selectedCycle?: number
 ): Promise<PersonMoneyHeadlineState> {
   if (sections.length === 0) {
     return {
@@ -136,7 +134,7 @@ async function resolvePersonMoneyHeadline(
 
 async function resolvePersonMoneyHeadlineFromSections(
   sections: Promise<PersonCandidateFinanceSection[]>,
-  selectedCycle: number
+  selectedCycle?: number
 ): Promise<PersonMoneyHeadlineState> {
   try {
     return await resolvePersonMoneyHeadline(await sections, selectedCycle);
@@ -145,64 +143,8 @@ async function resolvePersonMoneyHeadlineFromSections(
   }
 }
 
-/**
- */
-function buildUnavailableContributionInsights(
-  personId: string,
-  selectedCycle = DEFAULT_BACKEND_SELECTED_CYCLE
-): PersonContributionInsights {
-  return {
-    person_id: personId,
-    has_data: false,
-    metadata: {
-      selected_cycle: selectedCycle,
-      coverage_start_date: `${selectedCycle - 1}-01-01`,
-      coverage_end_date: `${selectedCycle}-12-31`,
-      available_cycles: [selectedCycle],
-      cycles_included: [],
-      committee_count: 0,
-      approximate_geography: false,
-      excluded_geography: null,
-      caveats: ["temporarily_unavailable"]
-    },
-    monthly_totals: [],
-    itemized_size_buckets: [],
-    dollars_by_size: [],
-    cycle_totals: [],
-    career_totals: {
-      itemized_individual_contribution_amount: "0.00",
-      itemized_transaction_count: 0,
-      unitemized_individual_contribution_amount: "0.00",
-      total_individual_contribution_amount: "0.00",
-      source: "none"
-    },
-    geography: {
-      by_state: [],
-      by_district: [],
-      district_share: {
-        in_district_amount: null,
-        out_of_district_amount: null,
-        unknown_district_amount: null,
-        share: null,
-        available: false
-      },
-      geography_mode: "excluded",
-      classified_amount: "0.00",
-      classified_transaction_count: 0,
-      unknown_amount: "0.00",
-      unknown_transaction_count: 0
-    },
-    small_dollar_share: {
-      small_dollar_amount: null,
-      total_contribution_amount: null,
-      share: null,
-      available: false
-    }
-  };
-}
-
 function shouldSurfaceContributionInsightsError(error: unknown): boolean {
-  return error instanceof ApiResponseError && error.status === 400;
+  return error instanceof ApiResponseError && (error.status === 400 || error.status === 422);
 }
 
 /**
@@ -225,7 +167,7 @@ async function loadContributionInsightsOutcome(
     }
     return {
       kind: "unavailable",
-      insights: buildUnavailableContributionInsights(personId, selectedCycle ?? DEFAULT_BACKEND_SELECTED_CYCLE)
+      error
     };
   }
 }
@@ -242,44 +184,42 @@ function loadBackendSelectedCycleMoney(
     personId,
     options.fallbackWhenBackendSelectedInsightsUnavailable === true
   );
-  const personContributionInsights = contributionInsightsOutcome.then((outcome) => outcome.insights);
+  const personContributionInsights = contributionInsightsOutcome.then((outcome) => {
+    if (outcome.kind === "unavailable") {
+      throw outcome.error;
+    }
+    return outcome.insights;
+  });
 
   function loadAfterContributionInsights<T>(
-    load: (cycle: number) => Promise<T>,
-    fallbackValue: T
+    load: (cycle?: number) => Promise<T>
   ): Promise<T> {
     return contributionInsightsOutcome.then((outcome) => {
       if (outcome.kind === "unavailable") {
-        return fallbackValue;
+        return load();
       }
       return load(outcome.insights.metadata.selected_cycle);
     });
   }
 
   const personFinanceSections = loadAfterContributionInsights<PersonCandidateFinanceSection[]>(
-    (cycle) => fetchPersonCandidateFinanceSections(apiClient, { personId, cycle }),
-    []
+    (cycle) => fetchPersonCandidateFinanceSections(apiClient, { personId, cycle })
   );
 
   return guardMoneyBundle({
     personContributionInsights,
     personMoneyHeadline: contributionInsightsOutcome.then(async (outcome) => {
-      if (outcome.kind === "unavailable") {
-        return buildTemporarilyUnavailableHeadline(outcome.insights.metadata.selected_cycle);
-      }
       return resolvePersonMoneyHeadlineFromSections(
         personFinanceSections,
-        outcome.insights.metadata.selected_cycle
+        outcome.kind === "loaded" ? outcome.insights.metadata.selected_cycle : undefined
       );
     }),
     personFinanceSections,
-    personTopDonors: loadAfterContributionInsights(
-      (cycle) => fetchPersonTopDonors(apiClient, { id: personId, cycle }),
-      []
+    personTopDonors: loadAfterContributionInsights((cycle) =>
+      fetchPersonTopDonors(apiClient, { id: personId, cycle })
     ),
-    personTopEmployers: loadAfterContributionInsights(
-      (cycle) => fetchPersonTopEmployers(apiClient, { id: personId, cycle }),
-      []
+    personTopEmployers: loadAfterContributionInsights((cycle) =>
+      fetchPersonTopEmployers(apiClient, { id: personId, cycle })
     )
   });
 }
@@ -291,7 +231,12 @@ async function loadExplicitCycleMoney(
 ): Promise<PersonDetailPageExtensions> {
   const personFinanceSections = fetchPersonCandidateFinanceSections(apiClient, { personId, cycle });
   const contributionInsightsOutcome = loadContributionInsightsOutcome(apiClient, personId, true, cycle);
-  const personContributionInsights = contributionInsightsOutcome.then((outcome) => outcome.insights);
+  const personContributionInsights = contributionInsightsOutcome.then((outcome) => {
+    if (outcome.kind === "unavailable") {
+      throw outcome.error;
+    }
+    return outcome.insights;
+  });
   const bundle = guardMoneyBundle({
     personMoneyHeadline: resolvePersonMoneyHeadlineFromSections(personFinanceSections, cycle),
     personFinanceSections,
@@ -300,7 +245,7 @@ async function loadExplicitCycleMoney(
     personTopEmployers: fetchPersonTopEmployers(apiClient, { id: personId, cycle })
   });
 
-  await bundle.personContributionInsights;
+  await contributionInsightsOutcome;
   await bundle.personMoneyHeadline;
   return bundle;
 }

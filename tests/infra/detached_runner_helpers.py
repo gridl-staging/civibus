@@ -129,6 +129,34 @@ def _json_stdout(result: subprocess.CompletedProcess[str]) -> dict:
     return json.loads(result.stdout)
 
 
+@dataclasses.dataclass(frozen=True)
+class _StartedJob:
+    """One runner job a test started, as `start` recorded it.
+
+    Job root, job name and wrapper PID are always used together, so they travel
+    as one value rather than as three parallel locals per caller.
+    """
+
+    job_root: Path
+    job_name: str
+    wrapper_pid: int
+
+    @property
+    def job_dir(self) -> Path:
+        return self.job_root / self.job_name
+
+
+def _start_job(job_root: Path, job_name: str, *command: str) -> _StartedJob:
+    """Start `job_name` under `job_root` and return what `start` recorded.
+
+    Asserting `start` succeeded here keeps a failed launch from being read
+    later as the contract under test failing.
+    """
+    start = _run_runner(job_root, "start", job_name, "--", *command)
+    assert start.returncode == 0, start.stderr
+    return _StartedJob(job_root, job_name, _json_stdout(start)["pid"])
+
+
 def _wait_for_file(path: Path, *, timeout_seconds: float = 3.0) -> str:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -212,17 +240,24 @@ def _wait_for_pid_to_exit(pid: int, *, timeout_seconds: float = 5.0) -> None:
 
 
 def _assert_pid_keeps_identity(pid: int, identity: str, *, hold_seconds: float = 1.0) -> None:
-    """Assert `pid` still runs `identity` for the whole of `hold_seconds`.
+    """Observe `pid` running `identity` continuously for `hold_seconds`.
 
-    Process teardown is asynchronous, so a single check taken right after a
-    teardown attempt also passes for a process that is already on its way out.
-    Holding the check open for a window makes "this process was not signalled"
-    an observation rather than an accident of timing.
+    The hold starts after the initial matching observation and ends only after
+    another matching observation at or beyond the deadline. Identity continuity
+    alone does not establish why a process later exits.
     """
-    deadline = time.monotonic() + hold_seconds
-    while time.monotonic() < deadline:
+    assert identity, f"PID {pid}: invalid expected identity"
+    deadline: float | None = None
+    while True:
         observed_identity = _observed_process_identity(pid)
-        assert observed_identity == identity, f"PID {pid} stopped running its recorded command"
+        assert observed_identity, f"PID {pid}: identity unavailable"
+        assert observed_identity == identity, (
+            f"PID {pid}: identity mismatch; expected {identity!r}, observed {observed_identity!r}"
+        )
+        if deadline is None:
+            deadline = time.monotonic() + hold_seconds
+        elif time.monotonic() >= deadline:
+            return
         time.sleep(0.05)
 
 
@@ -321,19 +356,7 @@ def _isolated_path(stub_bin: Path, *command_names: str) -> str:
 
 
 def _runner_path_without_session_launcher(stub_bin: Path) -> str:
-    return _isolated_path(
-        stub_bin,
-        "bash",
-        "chmod",
-        "date",
-        "dirname",
-        "mkdir",
-        "mktemp",
-        "mv",
-        "ps",
-        "rm",
-        "sleep",
-    )
+    return _isolated_path(stub_bin, "bash", "chmod", "date", "dirname", "mkdir", "mktemp", "mv", "ps", "rm", "sleep")
 
 
 def _terminate_recorded_processes(job_dir: Path) -> None:
@@ -444,12 +467,7 @@ def _assert_start_and_wait_report_terminal_contract(
     """
     job_dir = job_root / job_name
     start = _run_runner(
-        job_root,
-        "start",
-        job_name,
-        "--",
-        *_fixture_command(exit_code=7, sleep_seconds="3.0"),
-        extra_env=extra_env,
+        job_root, "start", job_name, "--", *_fixture_command(exit_code=7, sleep_seconds="3.0"), extra_env=extra_env
     )
     try:
         assert start.returncode == 0, start.stderr
@@ -461,14 +479,7 @@ def _assert_start_and_wait_report_terminal_contract(
         _assert_recorded_wrapper_pgid(job_dir, start_payload["pid"])
 
         wait = _run_runner(
-            job_root,
-            "wait",
-            job_name,
-            "--poll-seconds",
-            "1",
-            "--timeout-seconds",
-            "10",
-            timeout_seconds=20,
+            job_root, "wait", job_name, "--poll-seconds", "1", "--timeout-seconds", "10", timeout_seconds=20
         )
         assert wait.returncode == 7, wait.stderr
         assert _json_stdout(wait) == {
@@ -501,10 +512,9 @@ def _assert_control_is_running(control: subprocess.Popen[bytes]) -> None:
 class _StopRefusalExpectation:
     """The fail-closed `stop` refusal one job must produce.
 
-    Bundling the job under test with the refusal it must produce keeps
-    `_assert_stop_refused_without_signaling()` down to a signature a reader can
-    hold in their head, and lets a caller name the whole contract in one
-    expression at the point where the stale state is planted.
+    Naming the whole contract in one expression, at the point where the stale
+    state is planted, keeps `_assert_stop_refused_without_signaling()` down to
+    a signature a reader can hold in their head.
 
     `expect_wrapper_alive` selects which state the recorded wrapper PID must be
     in, and both settings assert positively rather than skipping a check. The
@@ -514,9 +524,7 @@ class _StopRefusalExpectation:
     dead-target precondition the branch under test depends on.
     """
 
-    job_root: Path
-    job_name: str
-    wrapper_pid: int
+    job: _StartedJob
     expected_reason: str
     expect_wrapper_alive: bool = True
 
@@ -541,16 +549,14 @@ def _assert_stop_refused_without_signaling(
     # Scratch files sit beside the job root, which every caller places directly
     # under its own `tmp_path`, so each test gets its own kill log without
     # having to route a scratch directory through this contract.
-    scratch_dir = expectation.job_root.parent
-    kill_log = scratch_dir / f"{expectation.job_name}_stop_kill.log"
-    bash_env = scratch_dir / f"{expectation.job_name}_stop_bash_env"
+    job = expectation.job
+    scratch_dir = job.job_root.parent
+    kill_log = scratch_dir / f"{job.job_name}_stop_kill.log"
+    bash_env = scratch_dir / f"{job.job_name}_stop_bash_env"
     _write_kill_logging_bash_env(bash_env, kill_log)
 
     refused = _run_runner(
-        expectation.job_root,
-        "stop",
-        expectation.job_name,
-        extra_env={"BASH_ENV": str(bash_env), **(extra_env or {})},
+        job.job_root, "stop", job.job_name, extra_env={"BASH_ENV": str(bash_env), **(extra_env or {})}
     )
     assert refused.returncode == 4
     assert expectation.expected_reason in refused.stderr
@@ -559,7 +565,7 @@ def _assert_stop_refused_without_signaling(
     # deterministic half of the proof: it records every `kill` the refusal path
     # invoked, at the moment of the call rather than after its effect lands.
     assert not kill_log.exists(), f"refusal path signalled: {kill_log.read_text(encoding='utf-8')}"
-    wrapper_pid = expectation.wrapper_pid
+    wrapper_pid = job.wrapper_pid
     if expectation.expect_wrapper_alive:
         assert _pid_is_alive(wrapper_pid)
     else:
@@ -624,7 +630,12 @@ def _stop_if_running(job_root: Path, job_name: str) -> None:
         _run_runner(job_root, "wait", job_name, "--poll-seconds", "1", "--timeout-seconds", "5")
 
 
-def _fixture_command(*, exit_code: int, sleep_seconds: str = "0.3") -> list[str]:
+def _fixture_command(*, exit_code: int, sleep_seconds: str = "0.3", release_path: Path | None = None) -> list[str]:
+    completion_wait = (
+        f"while not os.path.exists({str(release_path)!r}):\n    time.sleep(0.05)"
+        if release_path is not None
+        else f"time.sleep({sleep_seconds})"
+    )
     script = f"""
 import json
 import os
@@ -635,7 +646,7 @@ progress_path = os.environ["DETACHED_RUNNER_PROGRESS_FILE"]
 print("fixture stdout start", flush=True)
 with open(progress_path, "a", encoding="utf-8") as handle:
     handle.write(json.dumps({{"phase": "started", "rows": 1}}) + "\\n")
-time.sleep({sleep_seconds})
+{completion_wait}
 with open(progress_path, "a", encoding="utf-8") as handle:
     handle.write(json.dumps({{"phase": "finished", "rows": 2}}) + "\\n")
 print("fixture final log", flush=True)

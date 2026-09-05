@@ -21,8 +21,9 @@ import type {
 const baseFrame = {
   cycle: 2026,
   coverageThrough: "2026-06-30",
-  sources: [{ label: "FEC filings", href: "https://www.fec.gov/data/" }]
-} satisfies Pick<ChartFrameProps, "cycle" | "coverageThrough" | "sources">;
+  sources: [{ label: "FEC filings", href: "https://www.fec.gov/data/" }],
+  disclosureContext: "Jane Doe"
+} satisfies Pick<ChartFrameProps, "cycle" | "coverageThrough" | "sources" | "disclosureContext">;
 
 function expectFigureContract(html: string, testId: string, title: string): void {
   expect(html).toContain("<figure");
@@ -37,6 +38,38 @@ function expectFigureContract(html: string, testId: string, title: string): void
 }
 
 describe("finance chart SSR components", () => {
+  it("keeps visible disclosure copy while naming contextual and legacy controls", () => {
+    const contextual = render(ChartFrame, {
+      props: {
+        ...baseFrame,
+        testId: "chart-frame-contextual-disclosure",
+        title: "Sources of receipts",
+        unit: "dollars",
+        summary: { sentence: "Receipt components are available." },
+        exactRows: [],
+        state: { kind: "ready" }
+      }
+    });
+    const blankContext = render(ChartFrame, {
+      props: {
+        ...baseFrame,
+        disclosureContext: "   ",
+        testId: "chart-frame-blank-disclosure-context",
+        title: "Cash on hand",
+        unit: "dollars",
+        summary: { sentence: "Cash-on-hand facts are available." },
+        exactRows: [],
+        state: { kind: "ready" }
+      }
+    });
+
+    expect(contextual.body).toMatch(
+      /<summary[^>]*aria-label="View chart data: Sources of receipts for Jane Doe, 2026 cycle"[^>]*>View chart data<\/summary>/
+    );
+    expect(blankContext.body).toMatch(/<summary[^>]*>View chart data<\/summary>/);
+    expect(blankContext.body).not.toMatch(/<summary[^>]+aria-label=/);
+  });
+
   it("renders the shared frame as a semantic figure with no-data and exact-table states", () => {
     const rendered = render(ChartFrame, {
       props: {
@@ -205,6 +238,91 @@ describe("finance chart SSR components", () => {
       "Source components do not reconcile cleanly enough for a proportional plot."
     );
     expect(rendered.body).not.toContain('data-testid="receipt-composition-empty-plot"');
+  });
+
+  it("keeps unsafe person-chart money table-only with exact labels", () => {
+    const amountLabel = "$90,999,999,999,999.09";
+    const tableOnlyMessage =
+      "Amounts exceed the safely plottable range; exact values are shown in the chart data table.";
+    const receipt = render(ReceiptCompositionChart, {
+      props: {
+        ...baseFrame,
+        testId: "unsafe-receipt",
+        rows: [
+          {
+            id: "individual",
+            label: "Gross individual contributions",
+            amount: null,
+            amountLabel,
+            denominator: null,
+            denominatorLabel: amountLabel,
+            canPlot: false
+          }
+        ],
+        totalReceipts: null,
+        canPlot: false,
+        caveat: tableOnlyMessage
+      }
+    });
+    const monthly = render(MonthlyContributionsChart, {
+      props: {
+        ...baseFrame,
+        testId: "unsafe-monthly",
+        rows: [
+          {
+            month: "2026-01",
+            amount: null,
+            amountLabel,
+            transactionCount: 1,
+            covered: true
+          }
+        ],
+        coveredMonths: ["2026-01"]
+      }
+    });
+    const horizontal = render(HorizontalBarChart, {
+      props: {
+        ...baseFrame,
+        testId: "unsafe-size",
+        title: "Itemized contribution-size buckets",
+        rows: [
+          {
+            id: "large",
+            label: "$200 and under",
+            amount: null,
+            amountLabel,
+            transactionCount: 1,
+            unit: "dollars",
+            canPlot: false
+          }
+        ]
+      }
+    });
+    const geography = render(GeographyShareChart, {
+      props: {
+        ...baseFrame,
+        testId: "unsafe-geography",
+        rows: [
+          {
+            id: "unknown",
+            label: "Unknown",
+            amount: null,
+            amountLabel,
+            transactionCount: 1,
+            denominator: null,
+            denominatorLabel: `${amountLabel} plus $0.00`,
+            approximate: false
+          }
+        ]
+      }
+    });
+
+    for (const rendered of [receipt, monthly, horizontal, geography]) {
+      expect(rendered.body).toContain(tableOnlyMessage);
+      expect(rendered.body).toContain(amountLabel);
+      expect(rendered.body).not.toContain("$91,000,000,000,000.00");
+      expect(rendered.body).not.toContain("chart-wrapper");
+    }
   });
 
   it("exposes receipt composition share values in the exact disclosure", () => {

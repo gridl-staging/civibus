@@ -58,6 +58,8 @@ def _filing(index: int) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid4(),
         filing_fec_id=f"FILING-{index}",
+        data_source_id=None,
+        native_filing_id=None,
         committee_id=uuid4(),
         candidate_id=None,
         election_id=None,
@@ -79,8 +81,8 @@ def test_upsert_filings_bulk_splits_large_batches_below_parameter_limit() -> Non
     last_filing_id = uuid4()
     connection = _RecordingConnection(
         fetchall_results=[
-            [(first_filing_id, "FILING-0")],
-            [(last_filing_id, "FILING-4369")],
+            [(first_filing_id, "FILING-0", None, None)],
+            [(last_filing_id, "FILING-4369", None, None)],
         ],
     )
 
@@ -89,31 +91,31 @@ def test_upsert_filings_bulk_splits_large_batches_below_parameter_limit() -> Non
         [_filing(index) for index in range(4_370)],
     )
 
-    assert connection.parameter_counts == [65_535, 15]
+    assert connection.parameter_counts == [65_535, 8_755]
     assert filing_ids == {
         "FILING-0": first_filing_id,
         "FILING-4369": last_filing_id,
     }
 
 
-def test_transaction_bulk_upsert_splits_large_batches_below_parameter_limit(
+def test_transaction_bulk_upsert_uses_fixed_width_typed_arrays_below_parameter_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first_transaction_id = uuid4()
     last_transaction_id = uuid4()
     filing_id = uuid4()
     expected_results = [
-        (first_transaction_id, True, 1, filing_id, "TRANSACTION-1"),
-        (last_transaction_id, False, 2, filing_id, "TRANSACTION-2"),
+        (first_transaction_id, True, 1, filing_id, "TRANSACTION-1", None, None),
+        (last_transaction_id, False, 2, filing_id, "TRANSACTION-2", None, None),
     ]
     connection = _RecordingConnection(
         fetchall_results=[
-            [expected_results[0]],
-            [expected_results[1]],
+            expected_results,
         ],
     )
     transactions = [SimpleNamespace(id=uuid4()) for _index in range(2_115)]
-    monkeypatch.setattr(filing_loader_bulk, "_transaction_values", lambda transaction: (None,) * 30)
+    monkeypatch.setattr(filing_loader_bulk, "_transaction_values", lambda transaction: (None,) * 32)
+    monkeypatch.setattr(filing_loader_bulk, "_TRANSACTION_COPY_MIN_ROWS", 10_000)
 
     results = filing_loader_bulk._bulk_upsert_transactions_for_conflict_target(
         connection,
@@ -121,5 +123,5 @@ def test_transaction_bulk_upsert_splits_large_batches_below_parameter_limit(
         conflict_mode="sub_id",
     )
 
-    assert connection.parameter_counts == [65_534, 31]
+    assert connection.parameter_counts == [33]
     assert results == expected_results

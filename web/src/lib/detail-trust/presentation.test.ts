@@ -262,6 +262,23 @@ describe("detail trust presentation helper", () => {
     expect(section.lastPulledSummary).toBe(TRUST_SECTION_LAST_PULLED_UNAVAILABLE);
   });
 
+  it("returns unavailable for an impossible calendar pull date", () => {
+    const section = buildTrustSection([
+      {
+        domain: "campaign_finance",
+        jurisdiction: "federal/fec",
+        data_source_name: "FEC",
+        data_source_url: "https://www.fec.gov",
+        source_record_key: "impossible-date",
+        record_url: "https://example.org/impossible-date",
+        pull_date: "2026-02-30T00:00:00Z"
+      }
+    ]);
+
+    expect(section.lastPulledSummary).toBe(TRUST_SECTION_LAST_PULLED_UNAVAILABLE);
+    expect(section.freshnessSeverity).toBe("unknown");
+  });
+
   it("drops unsafe record URLs and keeps only http/https links", () => {
     const section = buildTrustSection([
       {

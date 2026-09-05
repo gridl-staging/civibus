@@ -89,44 +89,42 @@ describe("/election/[date] +page.server load", () => {
       new ApiResponseError(404, { detail: "Election date not found" })
     );
 
-    const { event } = createLoadEvent();
+    const { event, setHeaders } = createLoadEvent();
 
     await expect(load(event)).rejects.toMatchObject({
       status: 404,
       body: { detail: "Election date not found" }
     });
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
-  it("preserves backend plain-text error payloads for election date lookups", async () => {
+  it("preserves backend 502 plain-text error payloads for election date lookups", async () => {
     fetchElectionDateAggregateMock.mockRejectedValueOnce(
-      new ApiResponseError(503, "Election service unavailable")
+      new ApiResponseError(502, "Election service unavailable")
     );
 
-    const { event } = createLoadEvent();
+    const { event, setHeaders } = createLoadEvent();
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 503,
+      status: 502,
       body: { message: "Election service unavailable" }
     });
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
-  it("forwards malformed date params unchanged so backend validation remains authoritative", async () => {
-    const malformedDate = "2026_11_03";
-    fetchElectionDateAggregateMock.mockRejectedValueOnce(
-      new ApiResponseError(422, {
-        detail: [{ loc: ["path", "date"], msg: "Input should be a valid date string" }]
-      })
-    );
-
-    const { event } = createLoadEvent(malformedDate);
+  it("rejects impossible calendar dates before any backend request", async () => {
+    fetchElectionDateAggregateMock.mockClear();
+    const { event, setHeaders } = createLoadEvent("2024-02-30");
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 422,
-      body: { detail: [{ loc: ["path", "date"], msg: "Input should be a valid date string" }] }
+      status: 400,
+      body: {
+        message: "Invalid election date.",
+        detail: "Election date must be a real calendar date in YYYY-MM-DD format."
+      }
     });
-    expect(fetchElectionDateAggregateMock).toHaveBeenCalledWith(event.locals.api, {
-      date: malformedDate
-    });
+    expect(fetchElectionDateAggregateMock).not.toHaveBeenCalled();
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
   it("passes through an empty election aggregate without coercing zero-count fields", async () => {

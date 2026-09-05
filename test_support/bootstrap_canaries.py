@@ -46,6 +46,7 @@ BOOTSTRAP_CANARIES = (
     "cf.donor_search_rollup.representative_transaction_id",
     "cf.donor_search_rollup_identity_variant",
     "cf.contribution_limit_rules",
+    "core.refresh_run.execution_origin",
 )
 
 _COMMITTEE_SUMMARY_DERIVED_COLUMNS = (
@@ -326,6 +327,10 @@ def _stage1_canary_checks() -> tuple[tuple[str, Callable[[psycopg.Connection], b
         (
             "cf.contribution_limit_rules",
             lambda conn: _relation_exists(conn, "cf", "contribution_limit_rules"),
+        ),
+        (
+            "core.refresh_run.execution_origin",
+            lambda conn: _column_exists(conn, "core", "refresh_run", "execution_origin"),
         ),
     )
 

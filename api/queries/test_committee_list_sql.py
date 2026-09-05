@@ -79,6 +79,15 @@ def test_candidate_list_sql_orders_by_the_requested_sort_only() -> None:
     assert "ORDER BY filtered.total_receipts DESC NULLS LAST, filtered.name ASC, filtered.id ASC" in raised_sql
 
 
+def test_candidate_list_sql_projects_total_receipts_coverage_end_evidence() -> None:
+    """The sortable amount must keep its candidate-specific coverage end date."""
+    normalized_sql = re.sub(r"\s+", " ", _CANDIDATE_LIST_SQL_TEMPLATE)
+
+    assert "c.summary_coverage_end_date" in normalized_sql
+    assert "page.summary_coverage_end_date" in normalized_sql
+    assert "filtered.summary_coverage_end_date" in normalized_sql
+
+
 def test_candidate_list_sql_scopes_identity_suppression_to_default_browse() -> None:
     """The identity predicate filters the browse page and only the browse page."""
     browse_sql = re.sub(r"\s+", " ", _candidate_list_sql_template("name", include_unsafe_identity=False))

@@ -36,6 +36,16 @@ const NOT_LOADED_CANDIDATE_MONEY_COVERAGE = {
   completeness: "unknown" as const,
   basis: "no_authoritative_load_evidence" as const
 };
+const POPULATED_SCHEDULE_E_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "partial" as const,
+  basis: "fec_schedule_e_transactions" as const
+};
+const LOADED_ZERO_SCHEDULE_E_COVERAGE = {
+  activity_state: "loaded_zero" as const,
+  completeness: "partial" as const,
+  basis: "fec_schedule_e_transactions" as const
+};
 
 export function asDeferredValue<T>(value: T): Promise<T> {
   return value as unknown as Promise<T>;
@@ -312,11 +322,13 @@ export const COMMITTEE_CANONICAL_DATA = {
     filings: []
   },
   independentExpendituresMade: asDeferredValue<CommitteeIndependentExpenditureActivity>({
+    ...DEFAULT_SELECTED_CYCLE_FIELDS,
     committee_id: COMMITTEE_ID,
     support_total: "0.00",
     oppose_total: "0.00",
     ie_transaction_count: 0,
     excluded_outlier_count: 0,
+    coverage: LOADED_ZERO_SCHEDULE_E_COVERAGE,
     targets: []
   })
 };
@@ -338,11 +350,13 @@ export const COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS = {
 export const COMMITTEE_CANONICAL_DATA_WITH_IE = {
   ...COMMITTEE_CANONICAL_DATA,
   independentExpendituresMade: asDeferredValue<CommitteeIndependentExpenditureActivity>({
+    ...DEFAULT_SELECTED_CYCLE_FIELDS,
     committee_id: COMMITTEE_ID,
     support_total: "1700.00",
     oppose_total: "250.00",
     ie_transaction_count: 4,
     excluded_outlier_count: 1,
+    coverage: POPULATED_SCHEDULE_E_COVERAGE,
     targets: [
       {
         candidate_id: CANDIDATE_ID,

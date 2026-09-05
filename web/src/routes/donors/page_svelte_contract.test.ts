@@ -44,4 +44,13 @@ describe('/donors page Svelte contract', () => {
     expect(donorPageSource).toContain('data-testid="donor-freshness-stamp"');
     expect(donorPageSource).not.toContain('DonorFreshnessBanner');
   });
+
+  it('routes serialized donor totals through the shared currency owner without numeric coercion', () => {
+    expect(donorPageSource).toContain(
+      "import { formatCandidatePublicName, formatCurrency } from '$lib/campaign-finance-detail/presentation';"
+    );
+    expect(donorPageSource).toContain('formatCurrency(result.total_amount)');
+    expect(donorPageSource).not.toContain('Number(result.total_amount)');
+    expect(donorPageSource).not.toContain('currencyFormatter');
+  });
 });

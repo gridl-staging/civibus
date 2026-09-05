@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import importlib
 import re
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from decimal import Decimal
 from dataclasses import fields
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 from uuid import uuid4
 
 import psycopg
@@ -151,6 +152,31 @@ def test_try_row_without_savepoint_handles_python_error_without_rollback() -> No
     conn.rollback.assert_not_called()
 
 
+def test_try_row_without_savepoint_propagates_typed_fatal_python_error() -> None:
+    class FatalRowError(ValueError):
+        pass
+
+    conn = MagicMock()
+    conn.info.transaction_status = TransactionStatus.INTRANS
+    fatal_error = FatalRowError("lookup drift")
+
+    def _fatal_extraction():
+        raise fatal_error
+
+    with pytest.raises(FatalRowError) as exc_info:
+        try_row_without_savepoint(
+            conn,
+            _fatal_extraction,
+            manages_outer_transaction=True,
+            label="test",
+            fatal_exceptions=(FatalRowError,),
+        )
+
+    assert exc_info.value is fatal_error
+    conn.rollback.assert_not_called()
+    conn.transaction.assert_not_called()
+
+
 def test_try_row_without_savepoint_rolls_back_on_db_error() -> None:
     """DB errors put the connection in error state — must rollback."""
     conn = MagicMock()
@@ -184,6 +210,487 @@ def test_try_row_without_savepoint_skips_begin_when_not_managing() -> None:
     try_row_without_savepoint(conn, lambda: 42, manages_outer_transaction=False, label="test")
 
     conn.execute.assert_not_called()
+
+
+def _shared_loop_rows(count: int) -> list[dict[str, str]]:
+    return [{"position": str(position), "source_key": f"source-{position:04d}"} for position in range(1, count + 1)]
+
+
+def _stateful_connection(
+    *,
+    initial_status: TransactionStatus = TransactionStatus.IDLE,
+    transaction_events: list[tuple[object, ...]] | None = None,
+) -> MagicMock:
+    conn = MagicMock()
+    conn.info.transaction_status = initial_status
+
+    def _execute(statement: str) -> None:
+        assert statement == "BEGIN"
+        assert conn.info.transaction_status == TransactionStatus.IDLE
+        conn.info.transaction_status = TransactionStatus.INTRANS
+
+    def _commit() -> None:
+        assert conn.info.transaction_status == TransactionStatus.INTRANS
+        if transaction_events is not None:
+            transaction_events.append(("commit",))
+        conn.info.transaction_status = TransactionStatus.IDLE
+
+    def _rollback() -> None:
+        assert conn.info.transaction_status == TransactionStatus.INTRANS
+        if transaction_events is not None:
+            transaction_events.append(("rollback",))
+        conn.info.transaction_status = TransactionStatus.IDLE
+
+    conn.execute.side_effect = _execute
+    conn.commit.side_effect = _commit
+    conn.rollback.side_effect = _rollback
+    return conn
+
+
+def _call_shared_relational_loop(
+    conn: MagicMock,
+    rows: Iterable[object],
+    *,
+    resolver: MagicMock,
+    link_row: MagicMock,
+    source_record_key_for_row: MagicMock | None = None,
+    on_db_error_recovery: MagicMock | None = None,
+    on_managed_commit_reset: MagicMock | None = None,
+    caller_owned_rollback_error: MagicMock | None = None,
+    fatal_exceptions: tuple[type[BaseException], ...] = (),
+):
+    if source_record_key_for_row is None:
+        source_record_key_for_row = MagicMock(side_effect=lambda row: row["source_key"])
+
+    return load_utils.load_relational_rows_without_savepoints(
+        conn,
+        rows,
+        source_record_key_for_row=source_record_key_for_row,
+        resolve_source_record_id=resolver,
+        link_row=link_row,
+        batch_size=1_000,
+        label="shared contract row",
+        fatal_exceptions=fatal_exceptions,
+        on_db_error_recovery=on_db_error_recovery,
+        on_managed_commit_reset=on_managed_commit_reset,
+        caller_owned_rollback_error=caller_owned_rollback_error,
+    )
+
+
+def test_shared_relational_loop_missing_source_counts_toward_batch_boundary() -> None:
+    ordered_events: list[tuple[object, ...]] = []
+    conn = _stateful_connection(transaction_events=ordered_events)
+    source_record_ids = {f"source-{position:04d}": uuid4() for position in range(1, 1_002)}
+    source_record_ids["source-1000"] = None
+    managed_commit_reset = MagicMock()
+    rows = _shared_loop_rows(1_001)
+
+    def _source_record_key_for_row(row):
+        ordered_events.append(("source_key", int(row["position"])))
+        return row["source_key"]
+
+    def _resolver(_conn, source_key: str):
+        ordered_events.append(("resolve", int(source_key.rsplit("-", 1)[1])))
+        return source_record_ids[source_key]
+
+    def _link_row(_conn, row, source_record_id):
+        ordered_events.append(("link", int(row["position"])))
+        assert source_record_id == source_record_ids[row["source_key"]]
+        return True
+
+    source_record_key_for_row = MagicMock(side_effect=_source_record_key_for_row)
+    resolver = MagicMock(side_effect=_resolver)
+    link_row = MagicMock(side_effect=_link_row)
+
+    def _managed_commit_reset(*, processed_count: int, reason: str) -> None:
+        ordered_events.append(("reset", processed_count, reason))
+
+    managed_commit_reset.side_effect = _managed_commit_reset
+
+    result = _call_shared_relational_loop(
+        conn,
+        rows,
+        resolver=resolver,
+        link_row=link_row,
+        source_record_key_for_row=source_record_key_for_row,
+        on_managed_commit_reset=managed_commit_reset,
+    )
+
+    assert result.inserted == 1_000
+    assert result.skipped == 1
+    assert result.errors == 0
+    assert source_record_key_for_row.call_count == 1_001
+    assert resolver.call_count == 1_001
+    assert link_row.call_count == 1_000
+    assert ("link", 1_000) not in ordered_events
+    assert ordered_events.index(("source_key", 1_000)) < ordered_events.index(("resolve", 1_000))
+    assert conn.commit.call_count == 2
+    assert managed_commit_reset.call_args_list == [
+        call(processed_count=1_000, reason="batch_boundary"),
+        call(processed_count=1_001, reason="terminal"),
+    ]
+    boundary_reset_index = ordered_events.index(("reset", 1_000, "batch_boundary"))
+    terminal_reset_index = ordered_events.index(("reset", 1_001, "terminal"))
+    assert ordered_events[boundary_reset_index - 1] == ("commit",)
+    assert ordered_events[terminal_reset_index - 1] == ("commit",)
+    assert ordered_events.index(("resolve", 1_000)) < boundary_reset_index - 1
+    assert boundary_reset_index < ordered_events.index(("source_key", 1_001))
+    assert boundary_reset_index < ordered_events.index(("resolve", 1_001))
+    # Final row must be resolved AND linked before the terminal commit/reset, so a
+    # success-only cadence cannot report row 1,001 as inserted while leaving it uncommitted.
+    terminal_commit_index = terminal_reset_index - 1
+    assert ordered_events.index(("resolve", 1_001)) < terminal_commit_index
+    assert ordered_events.index(("link", 1_001)) < terminal_commit_index
+    conn.transaction.assert_not_called()
+
+
+def test_shared_relational_loop_rejects_non_mapping_before_source_key_extraction() -> None:
+    conn = _stateful_connection()
+    source_record_key_for_row = MagicMock()
+    resolver = MagicMock()
+    link_row = MagicMock()
+
+    with pytest.raises(TypeError):
+        _call_shared_relational_loop(
+            conn,
+            ["not-a-mapping"],
+            resolver=resolver,
+            link_row=link_row,
+            source_record_key_for_row=source_record_key_for_row,
+        )
+
+    source_record_key_for_row.assert_not_called()
+    resolver.assert_not_called()
+    link_row.assert_not_called()
+    conn.execute.assert_not_called()
+    conn.rollback.assert_not_called()
+    conn.transaction.assert_not_called()
+
+
+def test_shared_relational_loop_continues_after_ordinary_row_error_at_boundary() -> None:
+    ordered_events: list[tuple[object, ...]] = []
+    conn = _stateful_connection(transaction_events=ordered_events)
+    source_record_ids = {f"source-{position:04d}": uuid4() for position in range(1, 1_002)}
+    link_attempts: list[int] = []
+    managed_commit_reset = MagicMock()
+
+    def _source_record_key_for_row(row):
+        ordered_events.append(("source_key", int(row["position"])))
+        return row["source_key"]
+
+    def _resolver(_conn, source_key: str):
+        ordered_events.append(("resolve", int(source_key.rsplit("-", 1)[1])))
+        return source_record_ids[source_key]
+
+    resolver = MagicMock(side_effect=_resolver)
+
+    def _link_row(_conn, row, source_record_id):
+        position = int(row["position"])
+        link_attempts.append(position)
+        ordered_events.append(("link", position))
+        assert source_record_id == source_record_ids[row["source_key"]]
+        if position == 1_000:
+            raise ValueError("bad row")
+        return True
+
+    source_record_key_for_row = MagicMock(side_effect=_source_record_key_for_row)
+    link_row = MagicMock(side_effect=_link_row)
+
+    def _managed_commit_reset(*, processed_count: int, reason: str) -> None:
+        ordered_events.append(("reset", processed_count, reason))
+
+    managed_commit_reset.side_effect = _managed_commit_reset
+
+    result = _call_shared_relational_loop(
+        conn,
+        _shared_loop_rows(1_001),
+        resolver=resolver,
+        link_row=link_row,
+        source_record_key_for_row=source_record_key_for_row,
+        on_managed_commit_reset=managed_commit_reset,
+    )
+
+    assert result.inserted == 1_000
+    assert result.skipped == 0
+    assert result.errors == 1
+    assert resolver.call_count == 1_001
+    assert link_attempts == list(range(1, 1_002))
+    assert conn.commit.call_count == 2
+    assert managed_commit_reset.call_args_list == [
+        call(processed_count=1_000, reason="batch_boundary"),
+        call(processed_count=1_001, reason="terminal"),
+    ]
+    boundary_reset_index = ordered_events.index(("reset", 1_000, "batch_boundary"))
+    terminal_reset_index = ordered_events.index(("reset", 1_001, "terminal"))
+    assert ordered_events[boundary_reset_index - 1] == ("commit",)
+    assert ordered_events[terminal_reset_index - 1] == ("commit",)
+    assert ordered_events.index(("link", 1_000)) < boundary_reset_index - 1
+    assert boundary_reset_index < ordered_events.index(("source_key", 1_001))
+    assert boundary_reset_index < ordered_events.index(("resolve", 1_001))
+    assert boundary_reset_index < ordered_events.index(("link", 1_001))
+    # Final row must be resolved AND linked before the terminal commit/reset, so a
+    # success-only cadence cannot report row 1,001 as inserted while leaving it uncommitted.
+    terminal_commit_index = terminal_reset_index - 1
+    assert ordered_events.index(("resolve", 1_001)) < terminal_commit_index
+    assert ordered_events.index(("link", 1_001)) < terminal_commit_index
+    conn.rollback.assert_not_called()
+    conn.transaction.assert_not_called()
+
+
+def test_shared_relational_loop_recovers_after_managed_database_error_with_lost_success_accounting() -> None:
+    ordered_events: list[tuple[object, ...]] = []
+    conn = _stateful_connection(transaction_events=ordered_events)
+    source_record_ids = {f"source-{position:04d}": uuid4() for position in range(1, 1_004)}
+    recovery_hook = MagicMock()
+    managed_commit_reset = MagicMock()
+    link_attempts: list[int] = []
+    resolved_rows: list[int] = []
+
+    def _resolver(_conn, source_key: str):
+        position = int(source_key.rsplit("-", 1)[1])
+        resolved_rows.append(position)
+        if position >= 1_002:
+            ordered_events.append(("resolve", position))
+        return source_record_ids[source_key]
+
+    resolver = MagicMock(side_effect=_resolver)
+
+    def _link_row(_conn, row, source_record_id):
+        position = int(row["position"])
+        link_attempts.append(position)
+        if position >= 1_002:
+            ordered_events.append(("link", position))
+        assert source_record_id == source_record_ids[row["source_key"]]
+        if position == 1_002:
+            raise psycopg.errors.UniqueViolation("duplicate transaction")
+        return True
+
+    def _recover(_conn, *, failed_row) -> None:
+        assert _conn is conn
+        assert _conn.info.transaction_status == TransactionStatus.IDLE
+        ordered_events.append(("recover", int(failed_row["position"])))
+
+    recovery_hook.side_effect = _recover
+
+    def _managed_commit_reset(*, processed_count: int, reason: str) -> None:
+        ordered_events.append(("reset", processed_count, reason))
+
+    managed_commit_reset.side_effect = _managed_commit_reset
+
+    result = _call_shared_relational_loop(
+        conn,
+        _shared_loop_rows(1_003),
+        resolver=resolver,
+        link_row=MagicMock(side_effect=_link_row),
+        on_db_error_recovery=recovery_hook,
+        on_managed_commit_reset=managed_commit_reset,
+    )
+
+    assert result.inserted == 1_001
+    assert result.skipped == 0
+    assert result.errors == 2
+    assert resolved_rows == list(range(1, 1_004))
+    assert link_attempts == list(range(1, 1_004))
+    conn.rollback.assert_called_once_with()
+    recovery_hook.assert_called_once_with(conn, failed_row={"position": "1002", "source_key": "source-1002"})
+    assert managed_commit_reset.call_args_list == [
+        call(processed_count=1_000, reason="batch_boundary"),
+        call(processed_count=1_003, reason="terminal"),
+    ]
+    assert conn.commit.call_count == 2
+    assert ordered_events == [
+        ("commit",),
+        ("reset", 1_000, "batch_boundary"),
+        ("resolve", 1_002),
+        ("link", 1_002),
+        ("rollback",),
+        ("recover", 1_002),
+        ("resolve", 1_003),
+        ("link", 1_003),
+        ("commit",),
+        ("reset", 1_003, "terminal"),
+    ]
+    conn.transaction.assert_not_called()
+
+
+def test_shared_relational_loop_does_not_reset_after_managed_commit_failure() -> None:
+    conn = _stateful_connection()
+    commit_error = RuntimeError("managed commit failed")
+    conn.commit.side_effect = commit_error
+    source_record_id = uuid4()
+    resolver = MagicMock(return_value=source_record_id)
+    link_row = MagicMock(return_value=True)
+    managed_commit_reset = MagicMock()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _call_shared_relational_loop(
+            conn,
+            _shared_loop_rows(1),
+            resolver=resolver,
+            link_row=link_row,
+            on_managed_commit_reset=managed_commit_reset,
+        )
+
+    assert exc_info.value is commit_error
+    resolver.assert_called_once_with(conn, "source-0001")
+    link_row.assert_called_once_with(conn, {"position": "1", "source_key": "source-0001"}, source_record_id)
+    conn.commit.assert_called_once_with()
+    managed_commit_reset.assert_not_called()
+    conn.transaction.assert_not_called()
+
+
+def test_shared_relational_loop_raises_caller_owned_rollback_error_without_managed_commits() -> None:
+    class CallerOwnedRollback(RuntimeError):
+        pass
+
+    transaction_events: list[tuple[object, ...]] = []
+    conn = _stateful_connection(
+        initial_status=TransactionStatus.INTRANS,
+        transaction_events=transaction_events,
+    )
+    source_record_ids = {f"source-{position:04d}": uuid4() for position in range(1, 4)}
+    resolver = MagicMock(side_effect=lambda _conn, source_key: source_record_ids[source_key])
+    managed_commit_reset = MagicMock()
+    attempted_rows: list[int] = []
+    rollback_error = CallerOwnedRollback("caller-owned transaction rolled back")
+
+    def _rollback_error_factory(**_kwargs):
+        transaction_events.append(("rollback_error",))
+        return rollback_error
+
+    rollback_error_factory = MagicMock(side_effect=_rollback_error_factory)
+
+    def _link_row(_conn, row, _source_record_id):
+        position = int(row["position"])
+        attempted_rows.append(position)
+        if position == 2:
+            raise psycopg.errors.UniqueViolation("duplicate transaction")
+        return True
+
+    with pytest.raises(CallerOwnedRollback) as exc_info:
+        _call_shared_relational_loop(
+            conn,
+            _shared_loop_rows(3),
+            resolver=resolver,
+            link_row=MagicMock(side_effect=_link_row),
+            on_managed_commit_reset=managed_commit_reset,
+            caller_owned_rollback_error=rollback_error_factory,
+        )
+
+    assert exc_info.value is rollback_error
+    assert attempted_rows == [1, 2]
+    assert resolver.call_args_list == [
+        call(conn, "source-0001"),
+        call(conn, "source-0002"),
+    ]
+    rollback_error_factory.assert_called_once()
+    failed_row = rollback_error_factory.call_args.kwargs["failed_row"]
+    assert failed_row == {"position": "2", "source_key": "source-0002"}
+    conn.rollback.assert_called_once_with()
+    assert transaction_events == [("rollback",), ("rollback_error",)]
+    conn.commit.assert_not_called()
+    managed_commit_reset.assert_not_called()
+    conn.transaction.assert_not_called()
+
+
+def test_shared_relational_loop_propagates_typed_fatal_row_error_without_committing() -> None:
+    """A jurisdiction's typed fatal row error must escape the shared loop untouched.
+
+    Indiana raises INFilingLookupDrift and Texas will raise TXFilingLookupDrift from inside
+    the link callback. The shared loop owns the only seam that carries those types down to
+    try_row_without_savepoint(), so the fatal tuple is part of the loop contract — not just
+    of try_row_without_savepoint() called directly.
+    """
+
+    class RowLookupDrift(ValueError):
+        pass
+
+    transaction_events: list[tuple[object, ...]] = []
+    conn = _stateful_connection(transaction_events=transaction_events)
+    source_record_ids = {f"source-{position:04d}": uuid4() for position in range(1, 4)}
+    resolver = MagicMock(side_effect=lambda _conn, source_key: source_record_ids[source_key])
+    recovery_hook = MagicMock()
+    managed_commit_reset = MagicMock()
+    caller_owned_rollback_error = MagicMock()
+    attempted_rows: list[int] = []
+    drift_error = RowLookupDrift("filing lookup drift")
+
+    def _link_row(_conn, row, _source_record_id):
+        position = int(row["position"])
+        attempted_rows.append(position)
+        if position == 2:
+            raise drift_error
+        return True
+
+    with pytest.raises(RowLookupDrift) as exc_info:
+        _call_shared_relational_loop(
+            conn,
+            _shared_loop_rows(3),
+            resolver=resolver,
+            link_row=MagicMock(side_effect=_link_row),
+            on_db_error_recovery=recovery_hook,
+            on_managed_commit_reset=managed_commit_reset,
+            caller_owned_rollback_error=caller_owned_rollback_error,
+            fatal_exceptions=(RowLookupDrift,),
+        )
+
+    assert exc_info.value is drift_error
+    # Stops before the next row rather than being swallowed into a row-level error outcome.
+    assert attempted_rows == [1, 2]
+    assert resolver.call_args_list == [
+        call(conn, "source-0001"),
+        call(conn, "source-0002"),
+    ]
+    # A fatal row error is not a DB error and not a caller-owned rollback.
+    conn.rollback.assert_not_called()
+    recovery_hook.assert_not_called()
+    caller_owned_rollback_error.assert_not_called()
+    # The terminal commit must not run: row 1 stays uncommitted rather than being
+    # durably half-loaded behind a fatal abort.
+    conn.commit.assert_not_called()
+    managed_commit_reset.assert_not_called()
+    assert transaction_events == []
+    conn.transaction.assert_not_called()
+
+
+def test_shared_relational_loop_never_commits_a_caller_owned_transaction() -> None:
+    """Ownership is decided from the entry transaction status and gates every commit.
+
+    Crosses both the 1,000-row batch boundary and the terminal boundary on the happy path,
+    so an implementation that issues BEGIN or commits unconditionally — silently committing
+    the caller's own uncommitted work — cannot pass.
+    """
+    transaction_events: list[tuple[object, ...]] = []
+    conn = _stateful_connection(
+        initial_status=TransactionStatus.INTRANS,
+        transaction_events=transaction_events,
+    )
+    source_record_ids = {f"source-{position:04d}": uuid4() for position in range(1, 1_002)}
+    source_record_ids["source-1000"] = None
+    resolver = MagicMock(side_effect=lambda _conn, source_key: source_record_ids[source_key])
+    link_row = MagicMock(return_value=True)
+    managed_commit_reset = MagicMock()
+
+    result = _call_shared_relational_loop(
+        conn,
+        _shared_loop_rows(1_001),
+        resolver=resolver,
+        link_row=link_row,
+        on_managed_commit_reset=managed_commit_reset,
+    )
+
+    assert result.inserted == 1_000
+    assert result.skipped == 1
+    assert result.errors == 0
+    assert resolver.call_count == 1_001
+    assert link_row.call_count == 1_000
+    conn.execute.assert_not_called()
+    conn.commit.assert_not_called()
+    conn.rollback.assert_not_called()
+    managed_commit_reset.assert_not_called()
+    assert transaction_events == []
+    assert conn.info.transaction_status == TransactionStatus.INTRANS
+    conn.transaction.assert_not_called()
 
 
 def test_link_entity_source_and_optional_mailing_address_only_links_source_without_address(
@@ -277,18 +784,26 @@ class TestSelectDataSourceId:
         expected_id = uuid4()
         conn, cursor = _mock_conn_with_fetchone((expected_id,))
 
-        result = select_data_source_id(conn, "campaign_finance", "state/NC", "NC SBoE")
+        result = select_data_source_id(
+            conn,
+            "campaign_finance",
+            "state/NC",
+            "NC SBoE",
+            filing_authority_type="state",
+            filing_authority_code="NC",
+        )
 
         assert result == expected_id
         cursor.execute.assert_called_once()
-        # Verify the query uses the three lookup columns
+        # Geography remains separate from the typed filing-authority identity.
         sql = cursor.execute.call_args[0][0]
         assert "domain" in sql
-        assert "jurisdiction" in sql
+        assert "filing_authority_type" in sql
+        assert "filing_authority_code" in sql
+        assert "jurisdiction" not in sql
         assert "name" in sql
-        # Verify params passed correctly
         params = cursor.execute.call_args[0][1]
-        assert params == ("campaign_finance", "state/NC", "NC SBoE")
+        assert params == ("campaign_finance", "state", "NC", "NC SBoE")
 
     def test_returns_none_when_no_row(self) -> None:
         conn, _ = _mock_conn_with_fetchone(None)
@@ -297,7 +812,7 @@ class TestSelectDataSourceId:
 
         assert result is None
 
-    def test_uses_null_safe_jurisdiction_comparison(self) -> None:
+    def test_uses_null_safe_filing_authority_comparison(self) -> None:
         expected_id = uuid4()
         conn, cursor = _mock_conn_with_fetchone((expected_id,))
 
@@ -305,8 +820,10 @@ class TestSelectDataSourceId:
 
         assert result == expected_id
         query, params = cursor.execute.call_args.args
-        assert "jurisdiction IS NOT DISTINCT FROM %s" in query
-        assert params == ("campaign_finance", None, "National Feed")
+        assert "filing_authority_type IS NOT DISTINCT FROM %s" in query
+        assert "filing_authority_code IS NOT DISTINCT FROM %s" in query
+        assert "jurisdiction" not in query
+        assert params == ("campaign_finance", None, None, "National Feed")
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +975,14 @@ class TestEnsureDataSource:
         result = ensure_data_source(connection, civics_source)
 
         assert result == inserted_id
-        select_mock.assert_called_once_with(connection, "civics", "city/NC/Durham", "Durham City Council Roster")
+        select_mock.assert_called_once_with(
+            connection,
+            "civics",
+            "city/NC/Durham",
+            "Durham City Council Roster",
+            filing_authority_type=None,
+            filing_authority_code=None,
+        )
         try_insert_mock.assert_called_once()
 
 

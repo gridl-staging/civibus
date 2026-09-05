@@ -912,6 +912,7 @@ test.describe("sitemap.xml fixture detail URLs", () => {
       "/about",
       "/contact",
       "/privacy",
+      "/methodology",
       // Race pages. The contest shard is what makes them crawlable at all;
       // before it existed the sitemap carried no contest URL of any kind.
       `/contest/${SMOKE_CONTEST_ID}`,
@@ -973,6 +974,7 @@ test.describe("sitemap.xml fixture detail URLs", () => {
         "/about",
         "/contact",
         "/privacy",
+        "/methodology",
         SMOKE_ELECTION_ROUTE_PATH
       ])
     );

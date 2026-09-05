@@ -136,7 +136,8 @@
             <h3>Outside Spending</h3>
             {#if outsideSpending.emptyMessage}
               <p>{outsideSpending.emptyMessage}</p>
-            {:else}
+            {/if}
+            {#if outsideSpending.showFigures}
               <dl class="detail__rows">
                 <div class="detail__row">
                   <dt>Support spending</dt>

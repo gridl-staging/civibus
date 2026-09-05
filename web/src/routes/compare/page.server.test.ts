@@ -3,7 +3,17 @@ import type { EntityDetailResponse } from "$lib/entity-detail/contract";
 import { describe, expect, it, vi } from "vitest";
 import { actions, load } from "./+page.server";
 
-const PERSON_IDS = ["a", "b", "c", "d", "e"] as const;
+const PERSON_IDS = [
+  "11111111-1111-4111-8111-111111111111",
+  "22222222-2222-4222-8222-222222222222",
+  "33333333-3333-4333-8333-333333333333",
+  "44444444-4444-4444-8444-444444444444",
+  "55555555-5555-4555-8555-555555555555"
+] as const;
+const [PERSON_A, PERSON_B, PERSON_C, PERSON_D, PERSON_E] = PERSON_IDS;
+const UNKNOWN_PERSON_ID = "99999999-9999-4999-8999-999999999999";
+const CAPPED_UNKNOWN_PERSON_ID = "00000000-0000-4000-8000-000000000099";
+const UNAVAILABLE_PERSON_ID = "88888888-8888-4888-8888-888888888888";
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -179,29 +189,89 @@ async function loadCompare(url: string, requestJson = createRouteApi()) {
 }
 
 describe("/compare +page.server load", () => {
-  it("trims empty tokens, deduplicates, and redirects populated input to lexical order", async () => {
-    const requestJson = createRouteApi(["a", "b"]);
+  it("never sends malformed people tokens to the backend or labels them as unknown people", async () => {
+    const requestJson = vi.fn((path: string): Promise<unknown> => {
+      if (path === `/v1/person/${PERSON_A}`) {
+        return Promise.resolve(buildPersonDetail(PERSON_A));
+      }
+      if (path === `/v1/person/${UNKNOWN_PERSON_ID}`) {
+        return Promise.reject(new ApiResponseError(404, { detail: "Person not found" }));
+      }
+      if (path === "/v1/person/not-a-uuid") {
+        return Promise.reject(
+          new ApiResponseError(422, { detail: "Input should be a valid UUID" })
+        );
+      }
+      return Promise.reject(new Error(`Unexpected path: ${path}`));
+    });
 
     await expect(
-      loadCompare("https://example.test/compare?people=%20b%20,%20,%20a%20,a", requestJson)
+      loadCompare(
+        `https://example.test/compare?people=${PERSON_A},not-a-uuid,${UNKNOWN_PERSON_ID}`,
+        requestJson
+      )
     ).rejects.toMatchObject({
       status: 301,
-      location: "/compare?people=a,b"
+      location: `/compare?people=${PERSON_A}&notice=unknown-people-dropped`
     });
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
-      "/v1/person/a",
-      "/v1/person/b"
+      `/v1/person/${PERSON_A}`,
+      `/v1/person/${UNKNOWN_PERSON_ID}`
+    ]);
+  });
+
+  it("canonicalizes all-malformed input to the rendered empty recovery state without requests", async () => {
+    const requestJson = vi.fn().mockRejectedValue(
+      new ApiResponseError(422, { detail: "Input should be a valid UUID" })
+    );
+
+    await expect(
+      loadCompare("https://example.test/compare?people=not-a-uuid,still-bad", requestJson)
+    ).rejects.toMatchObject({
+      status: 301,
+      location: "/compare"
+    });
+    expect(requestJson).not.toHaveBeenCalled();
+
+    const data = await loadCompare("https://example.test/compare", requestJson);
+    expect(data).toMatchObject({
+      columns: [],
+      notices: [],
+      canonicalComparison: null,
+      prompt: { kind: "add-officeholder" }
+    });
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
+  it("trims empty tokens, deduplicates, and redirects populated input to lexical order", async () => {
+    const requestJson = createRouteApi([PERSON_A, PERSON_B]);
+
+    await expect(
+      loadCompare(
+        `https://example.test/compare?people=%20${PERSON_B}%20,%20,%20${PERSON_A}%20,${PERSON_A}`,
+        requestJson
+      )
+    ).rejects.toMatchObject({
+      status: 301,
+      location: `/compare?people=${PERSON_A},${PERSON_B}`
+    });
+    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
+      `/v1/person/${PERSON_A}`,
+      `/v1/person/${PERSON_B}`
     ]);
   });
 
   it("redirects a duplicated single id instead of treating it as already canonical", async () => {
-    const requestJson = createRouteApi(["a"]);
+    const requestJson = createRouteApi([PERSON_A]);
 
     await expect(
-      loadCompare("https://example.test/compare?people=a,a", requestJson)
+      loadCompare(
+        `https://example.test/compare?people=${PERSON_A},${PERSON_A}`,
+        requestJson
+      )
     ).rejects.toMatchObject({
       status: 301,
-      location: "/compare?people=a"
+      location: `/compare?people=${PERSON_A}`
     });
   });
 
@@ -215,20 +285,20 @@ describe("/compare +page.server load", () => {
     });
 
     const onePersonData = await loadCompare(
-      "https://example.test/compare?people=a",
-      createRouteApi(["a"])
+      `https://example.test/compare?people=${PERSON_A}`,
+      createRouteApi([PERSON_A])
     );
-    expect(onePersonData.columns.map((column) => column.personId)).toEqual(["a"]);
+    expect(onePersonData.columns.map((column) => column.personId)).toEqual([PERSON_A]);
     expect(onePersonData.canonicalComparison).toBeNull();
     expect(onePersonData.prompt).toEqual({ kind: "add-officeholder" });
     await expect(onePersonData.columns[0].money).resolves.toMatchObject({
-      personContributionInsights: { person_id: "a" }
+      personContributionInsights: { person_id: PERSON_A }
     });
   });
 
   it.each([
-    ["two", ["a", "b"]],
-    ["four", ["a", "b", "c", "d"]]
+    ["two", [PERSON_A, PERSON_B]],
+    ["four", [PERSON_A, PERSON_B, PERSON_C, PERSON_D]]
   ])("loads an already-canonical %s-person comparison", async (_label, people) => {
     const peopleKey = people.join(",");
     const data = await loadCompare(
@@ -254,16 +324,16 @@ describe("/compare +page.server load", () => {
       return detail?.promise ?? Promise.reject(new Error(`Unexpected path: ${path}`));
     });
     const loadPromise = loadCompare(
-      "https://example.test/compare?people=e,d,c,b,a",
+      `https://example.test/compare?people=${PERSON_E},${PERSON_D},${PERSON_C},${PERSON_B},${PERSON_A}`,
       requestJson
     );
 
     await Promise.resolve();
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
-      "/v1/person/a",
-      "/v1/person/b",
-      "/v1/person/c",
-      "/v1/person/d"
+      `/v1/person/${PERSON_A}`,
+      `/v1/person/${PERSON_B}`,
+      `/v1/person/${PERSON_C}`,
+      `/v1/person/${PERSON_D}`
     ]);
 
     for (const [personId, detail] of details) {
@@ -271,54 +341,62 @@ describe("/compare +page.server load", () => {
     }
     await expect(loadPromise).rejects.toMatchObject({
       status: 301,
-      location: "/compare?people=a,b,c,d&notice=max-4"
+      location: `/compare?people=${PERSON_A},${PERSON_B},${PERSON_C},${PERSON_D}&notice=max-4`
     });
     expect(requestJson.mock.calls.some(([path]) => path.includes("contribution-insights"))).toBe(false);
   });
 
   it("preserves cap and unknown notices for one redirect, then returns a clean canonical link", async () => {
-    const requestJson = createRouteApi(["a", "b", "c"]);
-    const initialUrl = "https://example.test/compare?people=z,missing,c,b,a";
-    const redirectedUrl =
-      "https://example.test/compare?people=a,b,c&notice=max-4,unknown-people-dropped";
+    const requestJson = createRouteApi([PERSON_A, PERSON_B, PERSON_C]);
+    const peopleKey = [PERSON_A, PERSON_B, PERSON_C].join(",");
+    const initialUrl = `https://example.test/compare?people=${PERSON_E},${CAPPED_UNKNOWN_PERSON_ID},${PERSON_C},${PERSON_B},${PERSON_A}`;
+    const redirectedUrl = `https://example.test/compare?people=${peopleKey}&notice=max-4,unknown-people-dropped`;
 
     await expect(loadCompare(initialUrl, requestJson)).rejects.toMatchObject({
       status: 301,
-      location: "/compare?people=a,b,c&notice=max-4,unknown-people-dropped"
+      location: `/compare?people=${peopleKey}&notice=max-4,unknown-people-dropped`
     });
-    expect(requestJson.mock.calls.map(([path]) => path)).not.toContain("/v1/person/z");
+    expect(requestJson.mock.calls.map(([path]) => path)).not.toContain(
+      `/v1/person/${PERSON_E}`
+    );
 
     requestJson.mockClear();
     const data = await loadCompare(redirectedUrl, requestJson);
     expect(data.notices).toEqual(["max-4", "unknown-people-dropped"]);
     expect(data.canonicalComparison).toEqual({
-      people: "a,b,c",
-      href: "/compare?people=a,b,c"
+      people: peopleKey,
+      href: `/compare?people=${peopleKey}`
     });
   });
 
   it("drops only 404 details and maps other API failures through the route error owner", async () => {
     const requestJson = vi.fn((path: string): Promise<unknown> => {
-      if (path === "/v1/person/a") {
-        return Promise.resolve(buildPersonDetail("a"));
+      if (path === `/v1/person/${PERSON_A}`) {
+        return Promise.resolve(buildPersonDetail(PERSON_A));
       }
-      if (path === "/v1/person/missing") {
+      if (path === `/v1/person/${UNKNOWN_PERSON_ID}`) {
         return Promise.reject(new ApiResponseError(404, { detail: "missing" }));
       }
-      if (path === "/v1/person/unavailable") {
+      if (path === `/v1/person/${UNAVAILABLE_PERSON_ID}`) {
         return Promise.reject(new ApiResponseError(503, { detail: "unavailable" }));
       }
       return Promise.reject(new Error(`Unexpected path: ${path}`));
     });
 
     await expect(
-      loadCompare("https://example.test/compare?people=a,missing", requestJson)
+      loadCompare(
+        `https://example.test/compare?people=${PERSON_A},${UNKNOWN_PERSON_ID}`,
+        requestJson
+      )
     ).rejects.toMatchObject({
       status: 301,
-      location: "/compare?people=a&notice=unknown-people-dropped"
+      location: `/compare?people=${PERSON_A}&notice=unknown-people-dropped`
     });
     await expect(
-      loadCompare("https://example.test/compare?people=a,unavailable", requestJson)
+      loadCompare(
+        `https://example.test/compare?people=${PERSON_A},${UNAVAILABLE_PERSON_ID}`,
+        requestJson
+      )
     ).rejects.toMatchObject({
       status: 503,
       body: { detail: "unavailable" }
@@ -326,10 +404,12 @@ describe("/compare +page.server load", () => {
   });
 
   it("does not reinterpret malformed person detail as an unknown id", async () => {
-    const requestJson = vi.fn().mockResolvedValue({ id: "a", canonical_name: "Malformed" });
+    const requestJson = vi
+      .fn()
+      .mockResolvedValue({ id: PERSON_A, canonical_name: "Malformed" });
 
     await expect(
-      loadCompare("https://example.test/compare?people=a", requestJson)
+      loadCompare(`https://example.test/compare?people=${PERSON_A}`, requestJson)
     ).rejects.toThrow("Person payload missing required bio keys");
   });
 
@@ -338,52 +418,62 @@ describe("/compare +page.server load", () => {
       a: createDeferred<unknown>(),
       b: createDeferred<unknown>()
     };
-    const baseApi = createRouteApi(["a", "b"], { a: 2024, b: 2026 }, true);
+    const baseApi = createRouteApi(
+      [PERSON_A, PERSON_B],
+      { [PERSON_A]: 2024, [PERSON_B]: 2026 },
+      true
+    );
     const requestJson = vi.fn((path: string): Promise<unknown> => {
-      if (path === "/v1/person/a/contribution-insights") {
+      if (path === `/v1/person/${PERSON_A}/contribution-insights`) {
         return insightsByPerson.a.promise;
       }
-      if (path === "/v1/person/b/contribution-insights") {
+      if (path === `/v1/person/${PERSON_B}/contribution-insights`) {
         return insightsByPerson.b.promise;
       }
       return baseApi(path);
     });
-    const data = await loadCompare("https://example.test/compare?people=a,b", requestJson);
+    const data = await loadCompare(
+      `https://example.test/compare?people=${PERSON_A},${PERSON_B}`,
+      requestJson
+    );
 
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
-      "/v1/person/a",
-      "/v1/person/b",
-      "/v1/person/a/contribution-insights",
-      "/v1/person/b/contribution-insights"
+      `/v1/person/${PERSON_A}`,
+      `/v1/person/${PERSON_B}`,
+      `/v1/person/${PERSON_A}/contribution-insights`,
+      `/v1/person/${PERSON_B}/contribution-insights`
     ]);
 
-    insightsByPerson.a.resolve(buildContributionInsights("a", 2024));
-    insightsByPerson.b.resolve(buildContributionInsights("b", 2026));
+    insightsByPerson.a.resolve(buildContributionInsights(PERSON_A, 2024));
+    insightsByPerson.b.resolve(buildContributionInsights(PERSON_B, 2026));
     await Promise.all(data.columns.map((column) => column.money));
     const paths = requestJson.mock.calls.map(([path]) => path);
-    expect(paths).toContain("/v1/candidates/candidate-a/summary?cycle=2024");
-    expect(paths).toContain("/v1/person/a/top-donors?cycle=2024");
-    expect(paths).toContain("/v1/person/a/top-employers?cycle=2024");
-    expect(paths).toContain("/v1/candidates/candidate-b/summary?cycle=2026");
-    expect(paths).toContain("/v1/person/b/top-donors?cycle=2026");
-    expect(paths).toContain("/v1/person/b/top-employers?cycle=2026");
+    expect(paths).toContain(`/v1/candidates/candidate-${PERSON_A}/summary?cycle=2024`);
+    expect(paths).toContain(`/v1/person/${PERSON_A}/top-donors?cycle=2024`);
+    expect(paths).toContain(`/v1/person/${PERSON_A}/top-employers?cycle=2024`);
+    expect(paths).toContain(`/v1/candidates/candidate-${PERSON_B}/summary?cycle=2026`);
+    expect(paths).toContain(`/v1/person/${PERSON_B}/top-donors?cycle=2026`);
+    expect(paths).toContain(`/v1/person/${PERSON_B}/top-employers?cycle=2026`);
   });
 
   it("keeps money failures isolated while sibling promises wait for all four fields", async () => {
     const siblingEmployers = createDeferred<unknown>();
     const moneyFailure = new ApiResponseError(503, { detail: "donors unavailable" });
-    const baseApi = createRouteApi(["a", "b"]);
+    const baseApi = createRouteApi([PERSON_A, PERSON_B]);
     const requestJson = vi.fn((path: string): Promise<unknown> => {
-      if (path === "/v1/person/a/top-donors?cycle=2026") {
+      if (path === `/v1/person/${PERSON_A}/top-donors?cycle=2026`) {
         return Promise.reject(moneyFailure);
       }
-      if (path === "/v1/person/b/top-employers?cycle=2026") {
+      if (path === `/v1/person/${PERSON_B}/top-employers?cycle=2026`) {
         return siblingEmployers.promise;
       }
       return baseApi(path);
     });
 
-    const data = await loadCompare("https://example.test/compare?people=a,b", requestJson);
+    const data = await loadCompare(
+      `https://example.test/compare?people=${PERSON_A},${PERSON_B}`,
+      requestJson
+    );
     const failedColumn = data.columns[0].money;
     const siblingColumn = data.columns[1].money;
     let siblingResolved = false;
@@ -397,7 +487,7 @@ describe("/compare +page.server load", () => {
 
     siblingEmployers.resolve([]);
     await expect(siblingColumn).resolves.toMatchObject({
-      personContributionInsights: { person_id: "b" },
+      personContributionInsights: { person_id: PERSON_B },
       personFinanceSections: [],
       personTopDonors: [],
       personTopEmployers: []

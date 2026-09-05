@@ -16,16 +16,28 @@ def _insert_jurisdiction(
     name: str,
     jurisdiction_type: str,
     fips: str | None = None,
+    state_fips: str | None = None,
+    county_geoid: str | None = None,
+    place_geoid: str | None = None,
     parent_id: UUID | None = None,
     state: str | None = None,
 ) -> UUID:
     return db_conn.execute(
         """
-        INSERT INTO core.jurisdiction (name, jurisdiction_type, fips, parent_id, state)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO core.jurisdiction (
+            name,
+            jurisdiction_type,
+            fips,
+            state_fips,
+            county_geoid,
+            place_geoid,
+            parent_id,
+            state
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
-        (name, jurisdiction_type, fips, parent_id, state),
+        (name, jurisdiction_type, fips, state_fips, county_geoid, place_geoid, parent_id, state),
     ).fetchone()[0]
 
 
@@ -107,6 +119,91 @@ def test_jurisdiction_fips_unique_when_non_null(db_conn: psycopg.Connection) -> 
             name="Duplicate NC",
             jurisdiction_type="state",
             fips="37",
+        )
+
+
+@pytest.mark.parametrize(
+    ("jurisdiction_type", "field_name", "value"),
+    (
+        ("state", "state_fips", "37"),
+        ("county", "county_geoid", "37063"),
+        ("municipality", "place_geoid", "0644000"),
+        ("municipality", "county_geoid", "06075"),
+    ),
+)
+def test_jurisdiction_accepts_typed_geography_for_compatible_types(
+    db_conn: psycopg.Connection,
+    jurisdiction_type: str,
+    field_name: str,
+    value: str,
+) -> None:
+    inserted_id = _insert_jurisdiction(
+        db_conn,
+        name=f"Typed {field_name}",
+        jurisdiction_type=jurisdiction_type,
+        fips=value,
+        **{field_name: value},
+    )
+
+    assert isinstance(inserted_id, UUID)
+
+
+@pytest.mark.parametrize(
+    ("jurisdiction_type", "field_name", "value"),
+    (
+        ("county", "state_fips", "37"),
+        ("state", "county_geoid", "37063"),
+        ("county", "place_geoid", "0644000"),
+        ("state", "state_fips", "٣٧"),
+        ("county", "county_geoid", "3706A"),
+        ("municipality", "place_geoid", "064400"),
+    ),
+)
+def test_jurisdiction_rejects_invalid_typed_geography_or_type_pairing(
+    db_conn: psycopg.Connection,
+    jurisdiction_type: str,
+    field_name: str,
+    value: str,
+) -> None:
+    with pytest.raises(psycopg.errors.CheckViolation):
+        _insert_jurisdiction(
+            db_conn,
+            name=f"Invalid {field_name}",
+            jurisdiction_type=jurisdiction_type,
+            fips=value,
+            **{field_name: value},
+        )
+
+
+@pytest.mark.parametrize(
+    ("jurisdiction_type", "field_name", "value"),
+    (
+        ("state", "state_fips", "37"),
+        ("county", "county_geoid", "37063"),
+        ("municipality", "place_geoid", "0644000"),
+    ),
+)
+def test_jurisdiction_typed_geography_is_unique_when_non_null(
+    db_conn: psycopg.Connection,
+    jurisdiction_type: str,
+    field_name: str,
+    value: str,
+) -> None:
+    _insert_jurisdiction(
+        db_conn,
+        name=f"First {field_name}",
+        jurisdiction_type=jurisdiction_type,
+        fips=value,
+        **{field_name: value},
+    )
+
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        _insert_jurisdiction(
+            db_conn,
+            name=f"Duplicate {field_name}",
+            jurisdiction_type=jurisdiction_type,
+            fips=f"9{value}",
+            **{field_name: value},
         )
 
 

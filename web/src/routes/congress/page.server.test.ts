@@ -52,15 +52,65 @@ function createLoadEvent(url: string, requestJson: ReturnType<typeof vi.fn>) {
 type CongressLoadData = {
   members: typeof CONGRESS_MEMBERS_RESPONSE;
   moneySummaries: unknown[];
+  moneySummariesUnavailable: boolean;
 };
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolver) => {
+    resolve = resolver;
+  });
+
+  return { promise, resolve };
+}
+
 function assertCongressLoadData(data: Awaited<ReturnType<typeof load>>): asserts data is CongressLoadData {
-  if (data === undefined || !("members" in data) || !("moneySummaries" in data)) {
+  if (
+    data === undefined ||
+    !("members" in data) ||
+    !("moneySummaries" in data) ||
+    !("moneySummariesUnavailable" in data)
+  ) {
     throw new Error("Expected Congress load data.");
   }
 }
 
 describe("/congress +page.server load", () => {
+  it("starts the required member and optional money requests in one request wave", async () => {
+    const members = createDeferred<typeof CONGRESS_MEMBERS_RESPONSE>();
+    const moneySummaries = createDeferred<typeof CONGRESS_MONEY_SUMMARIES_RESPONSE>();
+    const requestJson = vi.fn((path: string) => {
+      if (path === "/v1/congress/members") {
+        return members.promise;
+      }
+      if (path === "/v1/congress/money-summaries") {
+        return moneySummaries.promise;
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    });
+
+    const loadPromise = load(
+      createLoadEvent("https://web.civibus.local/congress", requestJson)
+    );
+    await Promise.resolve();
+
+    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
+      "/v1/congress/members",
+      "/v1/congress/money-summaries"
+    ]);
+
+    members.resolve(CONGRESS_MEMBERS_RESPONSE);
+    moneySummaries.resolve(CONGRESS_MONEY_SUMMARIES_RESPONSE);
+    const data = await loadPromise;
+
+    assertCongressLoadData(data);
+    expect(data).toEqual({
+      members: CONGRESS_MEMBERS_RESPONSE,
+      moneySummaries: CONGRESS_MONEY_SUMMARIES_RESPONSE,
+      moneySummariesUnavailable: false
+    });
+  });
+
   it("returns the exact Congress member and money arrays from the backend without forwarding filter params", async () => {
     const requestJson = vi
       .fn()
@@ -72,13 +122,17 @@ describe("/congress +page.server load", () => {
     );
 
     assertCongressLoadData(data);
-    expect(data).toEqual({ members: CONGRESS_MEMBERS_RESPONSE, moneySummaries: CONGRESS_MONEY_SUMMARIES_RESPONSE });
+    expect(data).toEqual({
+      members: CONGRESS_MEMBERS_RESPONSE,
+      moneySummaries: CONGRESS_MONEY_SUMMARIES_RESPONSE,
+      moneySummariesUnavailable: false
+    });
     expect(requestJson).toHaveBeenCalledTimes(2);
     expect(requestJson).toHaveBeenNthCalledWith(1, "/v1/congress/members");
     expect(requestJson).toHaveBeenNthCalledWith(2, "/v1/congress/money-summaries");
   });
 
-  it("keeps visible members available when the optional money request fails", async () => {
+  it("keeps visible members available and marks summaries unavailable when the optional money request fails", async () => {
     const requestJson = vi
       .fn()
       .mockResolvedValueOnce(CONGRESS_MEMBERS_RESPONSE)
@@ -87,12 +141,33 @@ describe("/congress +page.server load", () => {
     const data = await load(createLoadEvent("https://web.civibus.local/congress", requestJson));
 
     assertCongressLoadData(data);
-    expect(data).toEqual({ members: CONGRESS_MEMBERS_RESPONSE, moneySummaries: [] });
+    expect(data).toEqual({
+      members: CONGRESS_MEMBERS_RESPONSE,
+      moneySummaries: [],
+      moneySummariesUnavailable: true
+    });
+    expect(JSON.stringify(data)).not.toContain("money unavailable");
     expect(data.members).toHaveLength(1);
     expect(data.members[0]?.person_name).toBe("Jane Representative");
     expect(requestJson).toHaveBeenCalledTimes(2);
     expect(requestJson).toHaveBeenNthCalledWith(1, "/v1/congress/members");
     expect(requestJson).toHaveBeenNthCalledWith(2, "/v1/congress/money-summaries");
+  });
+
+  it("keeps a successful empty summary response distinct from unavailability", async () => {
+    const requestJson = vi
+      .fn()
+      .mockResolvedValueOnce(CONGRESS_MEMBERS_RESPONSE)
+      .mockResolvedValueOnce([]);
+
+    const data = await load(createLoadEvent("https://web.civibus.local/congress", requestJson));
+
+    assertCongressLoadData(data);
+    expect(data).toEqual({
+      members: CONGRESS_MEMBERS_RESPONSE,
+      moneySummaries: [],
+      moneySummariesUnavailable: false
+    });
   });
 
   it("preserves backend error payloads via withApiResponseErrorHandling", async () => {

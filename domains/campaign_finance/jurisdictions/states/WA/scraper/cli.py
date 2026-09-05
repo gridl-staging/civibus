@@ -3,23 +3,146 @@ from __future__ import annotations
 import argparse
 import sys
 import tempfile
+import time
+from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
+from typing import Callable
 
 import psycopg
 
 from core.db import get_connection
 
-from .download import download_wa_csv
+from .download import (
+    WA_PAGE_ROWS,
+    download_wa_csv,
+    download_wa_csv_page,
+    fetch_wa_source_change_count,
+    fetch_wa_source_snapshot,
+)
 from .load import (
     LoadResult,
+    count_active_wa_source_records,
+    filter_wa_contribution_page_changes,
     load_wa_contributions_with_filings,
     load_wa_expenditures_with_filings,
     load_wa_independent_expenditures_with_filings,
     load_wa_loans_with_filings,
+    select_wa_contributions_refresh_baseline,
 )
 from .parse import parse_contributions, parse_expenditures, parse_independent_expenditures, parse_loans
 
 _SUPPORTED_DATA_TYPES = ("contributions", "expenditures", "independent_expenditures", "loans")
+_CONTRIBUTIONS_BUDGET_SECONDS = 25 * 60
+_CONTRIBUTIONS_CURSOR_OVERLAP = timedelta(days=1)
+
+
+class WAContributionsIncompleteError(RuntimeError):
+    """A bounded pass persisted safe progress but did not prove complete freshness."""
+
+
+@dataclass(slots=True)
+class WACompleteContributionsResult(LoadResult):
+    source_complete: bool
+    source_row_count: int
+
+
+def _empty_complete_result(
+    *, started_at: float, monotonic: Callable[[], float], row_count: int
+) -> WACompleteContributionsResult:
+    return WACompleteContributionsResult(
+        inserted=0,
+        skipped=0,
+        quarantined=0,
+        superseded=0,
+        errors=0,
+        elapsed_seconds=monotonic() - started_at,
+        source_complete=True,
+        source_row_count=row_count,
+    )
+
+
+def _run_complete_contributions_refresh(
+    connection: psycopg.Connection,
+    download_dir: Path,
+    *,
+    monotonic: Callable[[], float] = time.monotonic,
+    budget_seconds: float = _CONTRIBUTIONS_BUDGET_SECONDS,
+) -> WACompleteContributionsResult:
+    """Load a stable Socrata delta and refuse freshness without exact count proof.
+
+    A complete existing source scans only rows changed inside a one-day overlap. An
+    incomplete source takes bounded full-source pages. Each existing WA loader page owns
+    its commit boundary, so interruption leaves deduplicated progress that a later pass
+    can safely revisit; only the final stable snapshot/count equality returns success.
+    """
+    if budget_seconds <= 0:
+        raise ValueError("WA contributions budget_seconds must be positive")
+    started_at = monotonic()
+    baseline = select_wa_contributions_refresh_baseline(connection)
+    connection.commit()
+    source_snapshot = fetch_wa_source_snapshot("contributions")
+    updated_after = None
+    if baseline.active_source_records == source_snapshot.row_count and baseline.last_pull_at is not None:
+        updated_after = baseline.last_pull_at - _CONTRIBUTIONS_CURSOR_OVERLAP
+    rows_to_download = fetch_wa_source_change_count(
+        "contributions",
+        updated_after=updated_after,
+        updated_through=source_snapshot.max_updated_at,
+    )
+    totals = _empty_complete_result(
+        started_at=started_at, monotonic=lambda: started_at, row_count=source_snapshot.row_count
+    )
+
+    for offset in range(0, rows_to_download, WA_PAGE_ROWS):
+        if monotonic() - started_at >= budget_seconds:
+            raise WAContributionsIncompleteError(
+                f"WA contributions bounded pass stopped before offset {offset}; committed pages are safe to resume"
+            )
+        page_rows = min(WA_PAGE_ROWS, rows_to_download - offset)
+        page_path = download_wa_csv_page(
+            "contributions",
+            download_dir,
+            offset=offset,
+            limit=page_rows,
+            updated_after=updated_after,
+            updated_through=source_snapshot.max_updated_at,
+        )
+        page_changes = filter_wa_contribution_page_changes(
+            connection,
+            page_path,
+            download_dir / f"wa_contributions_changed_offset_{offset}.csv",
+        )
+        connection.commit()
+        if page_changes.source_rows != page_rows:
+            raise WAContributionsIncompleteError(
+                f"WA contributions page at offset {offset} returned {page_changes.source_rows} of {page_rows} rows"
+            )
+        if page_changes.path is None:
+            continue
+        page_result = load_wa_contributions_with_filings(connection, page_changes.path, limit=None)
+        totals.inserted += page_result.inserted
+        totals.skipped += page_result.skipped
+        totals.quarantined += page_result.quarantined
+        totals.superseded += page_result.superseded
+        totals.errors += page_result.errors
+        if offset + page_rows < rows_to_download and monotonic() - started_at >= budget_seconds:
+            raise WAContributionsIncompleteError(
+                f"WA contributions bounded pass stopped after offset {offset}; committed pages are safe to resume"
+            )
+
+    active_source_records = count_active_wa_source_records(connection, data_type="contributions")
+    verification_snapshot = fetch_wa_source_snapshot("contributions")
+    if verification_snapshot != source_snapshot:
+        raise WAContributionsIncompleteError(
+            "WA contributions source changed during the bounded snapshot; resume required"
+        )
+    if active_source_records != source_snapshot.row_count:
+        raise WAContributionsIncompleteError(
+            "WA contributions active source count does not match the complete Socrata snapshot; resume required"
+        )
+    totals.elapsed_seconds = monotonic() - started_at
+    return totals
 
 
 def _non_negative_int(raw_value: str) -> int:
@@ -131,6 +254,12 @@ def run_wa_refresh(
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
     connection: psycopg.Connection | None = None
     try:
+        if data_type == "contributions" and download and limit is None:
+            temp_dir = tempfile.TemporaryDirectory(prefix="wa-contributions-")
+            connection = get_connection()
+            load_result = _run_complete_contributions_refresh(connection, Path(temp_dir.name))
+            connection.commit()
+            return load_result
         input_path, temp_dir = _resolve_input_path(args)
         connection = get_connection()
         load_result = _load_path(connection, input_path, data_type=data_type, limit=limit)

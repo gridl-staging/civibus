@@ -179,7 +179,7 @@ def test_stage3_wisconsin_contract_gate_uses_live_sunshine_exports() -> None:
 
     wi_row = next(row for row in registry.rows if row.jurisdiction_code == "WI")
 
-    # runner_wired=True after Stage 7 reseed (WI is in _SUPPORTED_STATE_CODES)
+    # runner_wired=True after Stage 7 reseed (WI is registered for refresh)
     assert wi_row.runner_wired is True
     assert wi_row.tier == "launch-support candidate"
     assert wi_row.best_update_frequency == "daily"
@@ -206,7 +206,7 @@ def test_stage3_washington_ie_receipt_is_recorded_as_bounded_degraded_coverage()
     registry = _load_coverage_registry()
 
     wa_row = next(row for row in registry.rows if row.jurisdiction_code == "WA")
-    inherited_municipal_rows = [row for row in registry.rows if row.parent_jurisdiction_code == "WA"]
+    compatibility_municipal_rows = [row for row in registry.rows if row.parent_jurisdiction_code == "WA"]
 
     assert wa_row.evidence_date is not None
     assert wa_row.evidence_date.isoformat() == "2026-08-23"
@@ -223,19 +223,28 @@ def test_stage3_washington_ie_receipt_is_recorded_as_bounded_degraded_coverage()
     assert "decide independent expenditures" not in wa_row.next_action
     assert "full-history" not in wa_row.next_action
     assert "recurring/unattended" in wa_row.next_action
-    assert {row.jurisdiction_code for row in inherited_municipal_rows} == {
+    assert {row.jurisdiction_code for row in compatibility_municipal_rows} == {
         "WA_SEATTLE",
         "WA_SPOKANE",
     }
-    for municipal_row in inherited_municipal_rows:
-        assert municipal_row.evidence_date is not None
-        assert municipal_row.evidence_date.isoformat() == "2026-08-23"
-        assert municipal_row.operational_reason is not None
-        assert "bounded 2026-08-23 independent-expenditures disposition" in municipal_row.operational_reason
-        assert "qualifying recurring/unattended production refresh evidence" in municipal_row.operational_reason
-        assert municipal_row.next_action is not None
-        assert "bounded 2026-08-23 independent-expenditures receipt" in municipal_row.next_action
-        assert "decide whether independent expenditures" not in municipal_row.next_action
+    municipal_rows = {row.jurisdiction_code: row for row in compatibility_municipal_rows}
+    spokane = municipal_rows["WA_SPOKANE"]
+    assert spokane.evidence_date is not None
+    assert spokane.evidence_date.isoformat() == "2026-08-23"
+    assert spokane.operational_reason is not None
+    assert "bounded 2026-08-23 independent-expenditures disposition" in spokane.operational_reason
+    assert "qualifying recurring/unattended production refresh evidence" in spokane.operational_reason
+    assert spokane.next_action is not None
+    assert "bounded 2026-08-23 independent-expenditures receipt" in spokane.next_action
+
+    seattle = municipal_rows["WA_SEATTLE"]
+    assert seattle.evidence_date is not None
+    assert seattle.evidence_date.isoformat() == "2026-08-28"
+    assert seattle.authority_relation.relation == "partitioned_overlapping"
+    assert seattle.operational_reason is not None
+    assert "no official PDC-to-SEEC report/amendment crosswalk" in seattle.operational_reason
+    assert seattle.next_action is not None
+    assert "Keep PDC and Seattle authority families isolated" in seattle.next_action
 
 
 def test_stage4_new_jersey_contract_gate_uses_verified_export_and_api_paths() -> None:
@@ -243,7 +252,7 @@ def test_stage4_new_jersey_contract_gate_uses_verified_export_and_api_paths() ->
 
     nj_row = next(row for row in registry.rows if row.jurisdiction_code == "NJ")
 
-    # runner_wired=True after Stage 7 reseed (NJ is in _SUPPORTED_STATE_CODES)
+    # runner_wired=True after Stage 7 reseed (NJ is registered for refresh)
     assert nj_row.runner_wired is True
     assert nj_row.tier == "freshness-limited"
     assert nj_row.best_update_frequency == "quarterly"
@@ -534,7 +543,9 @@ def test_rendered_queue_and_matrix_headers_reference_registry_authority() -> Non
         implemented_jurisdiction_codes=derive_implemented_jurisdiction_codes(),
     )
 
-    expected_authority_note = "Authoritative source: `docs/reference/research/coverage-registry.json`."
+    expected_authority_note = (
+        "Filing-authority decision source of truth: `docs/reference/research/coverage-registry.json`."
+    )
     assert expected_authority_note in publication.summary_markdown
     assert expected_authority_note in publication.queue_markdown
     assert expected_authority_note in publication.matrix_markdown

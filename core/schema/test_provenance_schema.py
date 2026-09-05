@@ -16,7 +16,7 @@ pytestmark = pytest.mark.integration
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORE_ENTITIES_SQL = REPO_ROOT / "core" / "schema" / "entities.sql"
 CORE_PROVENANCE_SQL = REPO_ROOT / "core" / "schema" / "provenance.sql"
-TEST_DATABASE = os.getenv("PROVENANCE_SCHEMA_TEST_DATABASE", "civibus")
+TEST_DATABASE = os.getenv("PROVENANCE_SCHEMA_TEST_DATABASE", "civibus_provenance_test")
 _PROTECTED_DATABASE_NAMES = frozenset({"civibus", "civibus_prod", "civibus_staging"})
 
 ALLOWED_ENTITY_TYPES = (
@@ -70,8 +70,22 @@ def _prepared_schema() -> None:
 def _insert_data_source_and_source_record_sql() -> str:
     return """
         WITH inserted_source AS (
-            INSERT INTO core.data_source (domain, jurisdiction, name, source_url)
-            VALUES ('campaign_finance', 'states/nc', 'provenance-test-' || md5(random()::text), 'https://example.com/source')
+            INSERT INTO core.data_source (
+                domain,
+                jurisdiction,
+                filing_authority_type,
+                filing_authority_code,
+                name,
+                source_url
+            )
+            VALUES (
+                'campaign_finance',
+                'state/NC',
+                'state',
+                'NC',
+                'provenance-test-' || md5(random()::text),
+                'https://example.com/source'
+            )
             RETURNING id
         ), inserted_record AS (
             INSERT INTO core.source_record (data_source_id, source_record_key, raw_fields, pull_date)
@@ -194,5 +208,67 @@ def test_field_provenance_current_row_uniqueness_constraint_rejects_two_current_
             FROM inserted_record
             CROSS JOIN inserted_entity
             CROSS JOIN (VALUES ('scheduled'), ('certified')) AS value_payload(field_value);
+            """,
+        )
+
+
+def test_source_record_bulk_autovacuum_thresholds_are_explicit() -> None:
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT option
+        FROM pg_class
+        CROSS JOIN LATERAL unnest(reloptions) AS option
+        WHERE oid = 'core.source_record'::regclass
+        ORDER BY option;
+        """,
+    )
+
+    assert rows == [
+        "autovacuum_analyze_scale_factor=0.05",
+        "autovacuum_analyze_threshold=250000",
+        "autovacuum_vacuum_insert_scale_factor=0.05",
+        "autovacuum_vacuum_insert_threshold=250000",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("jurisdiction", "expected_type", "expected_code"),
+    (("federal", "federal", "FEC"), ("state/WA", "state", "WA")),
+)
+def test_legacy_campaign_finance_jurisdiction_materializes_typed_authority(
+    jurisdiction: str,
+    expected_type: str,
+    expected_code: str,
+) -> None:
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        f"""
+        INSERT INTO core.data_source (domain, jurisdiction, name, source_url)
+        VALUES (
+            'campaign_finance',
+            '{jurisdiction}',
+            'legacy-authority-' || md5(random()::text),
+            'https://example.com/source'
+        )
+        RETURNING filing_authority_type || ':' || filing_authority_code;
+        """,
+    )
+
+    assert rows == [f"{expected_type}:{expected_code}"]
+
+
+def test_unrecognized_campaign_finance_jurisdiction_without_typed_authority_is_refused() -> None:
+    with pytest.raises(RuntimeError, match="violates check constraint"):
+        _run_psql_command(
+            TEST_DATABASE,
+            """
+            INSERT INTO core.data_source (domain, jurisdiction, name, source_url)
+            VALUES (
+                'campaign_finance',
+                'legacy_unknown',
+                'unknown-authority-' || md5(random()::text),
+                'https://example.com/source'
+            );
             """,
         )

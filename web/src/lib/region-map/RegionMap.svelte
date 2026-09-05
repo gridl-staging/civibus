@@ -14,12 +14,12 @@
     type MapLayerVisibility,
     type MapPageLevel
   } from "$lib/config/app";
-  import { buildCountyDetailPathFromDivisionName } from "$lib/region-map/county-slug";
   import type { CivicGeometryFeature } from "$lib/server/api/civic-geometry";
   import type {
     GeometryFeatureCollection,
     StateSummaryItem
   } from "$lib/server/api/state-pages-contract";
+  import type { RegionalFeatureLink } from "$lib/regional-navigation/presentation";
   import { DEFAULT_US_VIEWPORT, geometryFeatureToSvgPath } from "./projection";
 
   export let geometry: GeometryFeatureCollection | null = null;
@@ -32,6 +32,7 @@
   export let geometryByLevel: RegionMapGeometryByLevel = {};
   export let stateCode: string | null = null;
   export let highlightedFeatureId: string | null = null;
+  export let featureLinks: Record<string, RegionalFeatureLink> = {};
 
   type StateRow = {
     code: string;
@@ -63,12 +64,9 @@
     return geometryByLevel[layer.level]?.features ?? [];
   }
 
-  function getCountyDetailPath(layer: MapLayer, divisionName: string): string | null {
-    if (layer.level !== "county" || stateCode === null) {
-      return null;
-    }
-
-    return buildCountyDetailPathFromDivisionName(divisionName, stateCode);
+  function getFeatureLink(layer: MapLayer, feature: CivicGeometryFeature): RegionalFeatureLink | null {
+    if (layer.level !== "county") return null;
+    return featureLinks[feature.properties.id] ?? null;
   }
 
   function isHighlightedFeature(feature: CivicGeometryFeature): boolean {
@@ -112,7 +110,10 @@
       : getMapLayersForLevel(pageLevel).filter((layer) => layer.alwaysOn || layerVisibility[layer.id]);
 </script>
 
-<section class="region-map" aria-label={geometry !== null ? title : "Region map"}>
+<section
+  class="region-map"
+  aria-label={geometry !== null ? title : stateCode === null ? "Region map" : `${stateCode} region map`}
+>
   {#if geometry !== null}
     <svg
       class="region-map__svg"
@@ -175,6 +176,7 @@
             </li>
           {:else}
             {#each features as feature (feature.properties.id)}
+              {@const featureLink = getFeatureLink(layer, feature)}
               <li
                 data-layer-id={layer.id}
                 data-feature-id={feature.properties.id}
@@ -183,9 +185,8 @@
                 class:region-map__feature--deemphasized={shouldDeemphasizeFeature(layer, feature)}
               >
                 <strong>{layer.label}:</strong>
-                {#if getCountyDetailPath(layer, feature.properties.name) !== null}
-                  {@const countyDetailPath = getCountyDetailPath(layer, feature.properties.name)}
-                  <a href={countyDetailPath}>{feature.properties.name}</a>
+                {#if featureLink !== null}
+                  <a href={featureLink.href}>{featureLink.label}</a>
                 {:else}
                   {feature.properties.name}
                 {/if}

@@ -1,3 +1,5 @@
+import { isUuid } from "$lib/search/contract";
+
 const MAX_COMPARE_PEOPLE = 4;
 const PEOPLE_QUERY_KEY = "people";
 const NOTICE_QUERY_KEY = "notice";
@@ -40,14 +42,12 @@ export function mergeCompareNotices(
 export function normalizePeopleQuery(searchParams: URLSearchParams): NormalizedPeopleQuery {
   const rawValues = searchParams.getAll(PEOPLE_QUERY_KEY);
   const rawPeopleKey = rawValues.length === 1 ? rawValues[0] : null;
-  const normalizedIds = [
-    ...new Set(
-      rawValues
-        .flatMap((value) => value.split(","))
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0)
-    )
-  ].sort();
+  const populatedTokens = rawValues
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const validPersonIds = populatedTokens.filter(isUuid);
+  const normalizedIds = [...new Set(validPersonIds)].sort();
 
   return {
     peopleIds: normalizedIds.slice(0, MAX_COMPARE_PEOPLE),

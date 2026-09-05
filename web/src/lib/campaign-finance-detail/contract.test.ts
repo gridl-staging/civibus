@@ -89,6 +89,9 @@ describe("campaign-finance detail contract", () => {
     expect(buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)).toBe(
       `/v1/committees/${COMMITTEE_ID}/independent-expenditures-made`
     );
+    expect(buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID, { cycle: 2024 })).toBe(
+      `/v1/committees/${COMMITTEE_ID}/independent-expenditures-made?cycle=2024`
+    );
   });
 
   it("builds filing table page hrefs by replacing only filings_offset", () => {
@@ -612,7 +615,8 @@ describe("campaign-finance list item and envelope types", () => {
     slug: "jane-smith",
     slug_is_unique: true,
     identity_is_safe: true,
-    has_official_total: true
+    has_official_total: true,
+    summary_coverage_end_date: "2026-03-31"
   };
 
   const committeeListItem: CommitteeListItem = {
@@ -630,7 +634,8 @@ describe("campaign-finance list item and envelope types", () => {
     expect(candidateListItem).toMatchObject({
       slug: "jane-smith",
       slug_is_unique: true,
-      has_official_total: true
+      has_official_total: true,
+      summary_coverage_end_date: "2026-03-31"
     });
   });
 
@@ -916,6 +921,19 @@ describe("Stage 5 contract fields", () => {
     expectType<{} extends Pick<CandidateFundraisingSummary, "available_cycles"> ? false : true>();
     expectType<{} extends Pick<IndependentExpenditureSummary, "selected_cycle"> ? false : true>();
     expectType<{} extends Pick<IndependentExpenditureSummary, "available_cycles"> ? false : true>();
+    expectType<
+      {} extends Pick<CommitteeIndependentExpenditureActivity, "selected_cycle"> ? false : true
+    >();
+    expectType<
+      {} extends Pick<CommitteeIndependentExpenditureActivity, "coverage_start_date"> ? false : true
+    >();
+    expectType<
+      {} extends Pick<CommitteeIndependentExpenditureActivity, "coverage_end_date"> ? false : true
+    >();
+    expectType<
+      {} extends Pick<CommitteeIndependentExpenditureActivity, "available_cycles"> ? false : true
+    >();
+    expectType<{} extends Pick<CommitteeIndependentExpenditureActivity, "coverage"> ? false : true>();
     expectType<{} extends Pick<CommitteeDetailResponse, "linked_candidates"> ? false : true>();
     expectType<
       {} extends Pick<CommitteeFundraisingSummary, "itemized_transaction_count"> ? false : true
@@ -1119,11 +1137,17 @@ describe("Stage 5 contract fields", () => {
 
   it("CommitteeIndependentExpenditureActivity mirrors the Stage 1 committee-made IE payload", () => {
     const activity: CommitteeIndependentExpenditureActivity = {
+      ...SELECTED_CYCLE_FIELDS,
       committee_id: COMMITTEE_ID,
       support_total: "1500.00",
       oppose_total: "250.00",
       ie_transaction_count: 3,
       excluded_outlier_count: 1,
+      coverage: {
+        activity_state: "populated",
+        completeness: "partial",
+        basis: "fec_schedule_e_transactions"
+      },
       targets: [
         {
           candidate_id: CANDIDATE_ID,

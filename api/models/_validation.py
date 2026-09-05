@@ -4,6 +4,9 @@ from datetime import date
 from decimal import Decimal
 
 
+POSTGRES_SIGNED_BIGINT_MAX = (1 << 63) - 1
+
+
 def validate_inclusive_bounds(
     min_value: date | Decimal | float | None,
     max_value: date | Decimal | float | None,

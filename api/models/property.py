@@ -11,7 +11,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from api.models._validation import validate_inclusive_bounds
+from api.models._validation import POSTGRES_SIGNED_BIGINT_MAX, validate_inclusive_bounds
 from api.models.provenance import SourceInfo
 
 DatePrecision = Literal["day", "month", "quarter", "year", "approximate"]
@@ -78,7 +78,7 @@ class ParcelListParams(BaseModel):
     min_acreage: Decimal | None = None
     max_acreage: Decimal | None = None
     limit: int = Field(default=50, ge=1, le=200)
-    offset: int = Field(default=0, ge=0)
+    offset: int = Field(default=0, ge=0, le=POSTGRES_SIGNED_BIGINT_MAX)
 
     @model_validator(mode="after")
     def validate_range_bounds(self) -> ParcelListParams:

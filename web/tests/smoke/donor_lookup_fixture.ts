@@ -40,7 +40,7 @@ export const SMOKE_DONOR_LOOKUP_NOT_COMBINED_CONTRIBUTOR = "JANET SMYTHE NOT COM
  * The rebuild also restores a valid rollup provenance fingerprint, which is why
  * this single call replaces the narrower fingerprint-only restore it grew from:
  * the journey deliberately corrupts that fingerprint mid-test to prove the
- * unavailable state renders, and a rebuild is a superset of undoing it.
+ * unavailable 503 renders, and a rebuild is a superset of undoing it.
  */
 async function cleanUpLiveDonorLookupSmoke(): Promise<void> {
   await runSmokeSeedCommand("uv", [

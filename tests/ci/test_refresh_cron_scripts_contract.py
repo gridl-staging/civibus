@@ -458,6 +458,43 @@ def test_refresh_runbook_matches_production_cron_wrapper_contract() -> None:
     assert "/var/lib/civibus/fec/bulk/${FEC_BULK_CYCLE}" in runbook_text
     assert "/var/log/civibus/backup.log" in runbook_text
     assert "/var/log/civibus/check-cert.log" in runbook_text
+
+
+def test_refresh_runbook_documents_only_the_guarded_historical_attempt_recovery_owner() -> None:
+    runbook_text = _read_text(REFRESH_RUNBOOK_PATH)
+    normalized_runbook_text = " ".join(runbook_text.split())
+
+    assert "### Historical orphaned refresh-attempt recovery" in runbook_text
+    assert "python -m core.refresh.runner" in runbook_text
+    for required_option in (
+        "--recover-refresh-run-id",
+        "--recover-job-key",
+        "--recover-domain",
+        "--recover-jurisdiction",
+        "--recover-filing-authority-type",
+        "--recover-filing-authority-code",
+        "--recover-data-source-name",
+        "--recover-execution-origin",
+        "--recover-started-at",
+        "--recover-app",
+        "--recover-machine-id",
+        "--recover-authority",
+        "--recover-execution-plan",
+        "--recover-database-host",
+        "--recover-database-port",
+        "--recover-database-name",
+        "--recover-postcondition-json",
+    ):
+        assert required_option in runbook_text
+    assert "Do not call `_fail_started_attempt`, issue a manual `UPDATE`" in runbook_text
+    assert "`FOR UPDATE NOWAIT`" in runbook_text
+    assert "`metadata_updates=0`" in runbook_text
+    assert "`running_refresh_rows=0`" in runbook_text
+    assert "`active_refresh_backends=0`" in runbook_text
+    assert '--refresh-postcondition-json "$RECOVERY_POSTCONDITION_JSON"' in runbook_text
+    assert '--expected-refresh-run-id "$RECOVERY_REFRESH_RUN_ID"' in runbook_text
+    assert "publishes only the missing mode-0600" in runbook_text
+    assert "cannot authorize recurring provisioning" in normalized_runbook_text
     assert "FEC_BULK_DIR" in runbook_text
     assert "make refresh-cf-priority" in runbook_text
     assert "make gate-L5" in runbook_text
@@ -466,6 +503,48 @@ def test_refresh_runbook_matches_production_cron_wrapper_contract() -> None:
     assert "make ingest-fec-bulk" in runbook_text
     assert "_priority_source_names()" in runbook_text
     assert "## Priority membership (config-sourced)" not in runbook_text
+
+
+def test_refresh_runbook_documents_regional_unattended_observation_receipt_owner() -> None:
+    runbook_text = _read_text(REFRESH_RUNBOOK_PATH)
+    normalized_runbook_text = " ".join(runbook_text.split())
+
+    assert "### Regional unattended scheduler observation" in runbook_text
+    assert "Do not call `start-once`" in runbook_text
+    for required_option in (
+        "--raw-fly-app-status-json",
+        "--raw-fly-machine-status-json",
+        "--raw-database-observation-json",
+        "--observation-output-json",
+        "--candidate-receipt-json",
+        "--proof-output-json",
+        "--receipt-output-json",
+    ):
+        assert required_option in runbook_text
+    assert "requires all four profile-ordered results to be `success`" in runbook_text
+    assert "cadence skips do not qualify" in normalized_runbook_text
+    assert "scheduler/host-originated start" in runbook_text
+    assert "parses—not merely hashes—the three raw owner-format JSON" in normalized_runbook_text
+    assert "correctly rehashed foreign capture" in normalized_runbook_text
+    assert "created atomically at distinct mode-`0600` paths without overwriting" in normalized_runbook_text
+    assert "CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON" in runbook_text
+    assert "exact ordered freshness, scheduled recurrence, provenance, Keel" in normalized_runbook_text
+    assert "does not combine state/county/municipal totals" in normalized_runbook_text
+    assert "### Stage promotion evidence in the serving API image" in runbook_text
+    assert "authority-promotion-bundle.tar" in runbook_text
+    assert "authority_promotion_artifact_run_id" in runbook_text
+    assert "authority_promotion_artifact_name" in runbook_text
+    assert "authority_promotion_evidence_run_id" in runbook_text
+    assert "authority_promotion_evidence_artifact_name" in runbook_text
+    assert "authority_promotion_bundle_artifact_name" in runbook_text
+    assert "authority-promotion-bundle-build-receipt.json" in runbook_text
+    assert "non-production `promotion_bundle` job" in runbook_text
+    assert "exact ordered path/SHA-256/mode tuple" in normalized_runbook_text
+    assert "/app/private/civibus/authority-promotion/authority-promotion-receipt.json" in runbook_text
+    assert "mode `0600`" in runbook_text
+    assert "mode `0444`" in runbook_text
+    assert "prior API image's prior evidence bundle" in normalized_runbook_text
+    assert "never pass receipt or artifact bytes in argv" in normalized_runbook_text
 
 
 @pytest.mark.dev_repo_only(

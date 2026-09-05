@@ -19,6 +19,23 @@ from api.queries.civics import fetch_candidacies_for_person, fetch_current_offic
 
 router = APIRouter()
 
+_ENTITY_DETAIL_ERROR_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {"detail": {"type": "string"}},
+    "required": ["detail"],
+    "additionalProperties": False,
+}
+_ENTITY_DETAIL_OPENAPI_ERROR_RESPONSES = {
+    404: {
+        "description": "No entity matches the requested identifier.",
+        "content": {"application/json": {"schema": _ENTITY_DETAIL_ERROR_RESPONSE_SCHEMA}},
+    },
+    502: {
+        "description": "The stored entity record violates the response contract and cannot be served.",
+        "content": {"application/json": {"schema": _ENTITY_DETAIL_ERROR_RESPONSE_SCHEMA}},
+    },
+}
+
 _PERSON_SELECT_SQL = """
     SELECT
         p.id,
@@ -143,7 +160,11 @@ def get_person_by_slug(slug: str, conn: psycopg.Connection = Depends(get_db)) ->
     return [PersonSlugResult.model_validate(person_row) for person_row in person_rows]
 
 
-@router.get("/person/{person_id}", response_model=PersonResponse)
+@router.get(
+    "/person/{person_id}",
+    response_model=PersonResponse,
+    responses=_ENTITY_DETAIL_OPENAPI_ERROR_RESPONSES,
+)
 def get_person(person_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> PersonResponse:
     return _build_entity_response(
         conn,
@@ -155,7 +176,11 @@ def get_person(person_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> P
     )
 
 
-@router.get("/org/{organization_id}", response_model=OrgResponse)
+@router.get(
+    "/org/{organization_id}",
+    response_model=OrgResponse,
+    responses=_ENTITY_DETAIL_OPENAPI_ERROR_RESPONSES,
+)
 def get_organization(organization_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> OrgResponse:
     return _build_entity_response(
         conn,

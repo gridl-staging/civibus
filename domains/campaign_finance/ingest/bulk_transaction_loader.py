@@ -73,12 +73,17 @@ def build_filing_from_contribution(
     *,
     committee_id: UUID | None = None,
     source_record_id: UUID | None = None,
+    data_source_id: UUID | None = None,
 ) -> Filing:
     """Build a Filing model from an already-mapped contribution record."""
     resolved_committee_id = committee_id
     if resolved_committee_id is None:
         committee_fec_id = _require_text(record, "committee_id")
-        resolved_committee_id = find_committee_id_by_fec_id(conn, committee_fec_id)
+        resolved_committee_id = find_committee_id_by_fec_id(
+            conn,
+            committee_fec_id,
+            data_source_id=data_source_id,
+        )
         if resolved_committee_id is None:
             raise ValueError(f"committee not found for fec_id={committee_fec_id}")
 
@@ -88,6 +93,8 @@ def build_filing_from_contribution(
 
     return Filing(
         filing_fec_id=filing_fec_id,
+        data_source_id=data_source_id,
+        native_filing_id=filing_fec_id if data_source_id is not None else None,
         committee_id=resolved_committee_id,
         amendment_indicator=amendment_indicator,
         report_type=report_type,
@@ -102,6 +109,7 @@ def build_transaction_from_contribution(
     filing_id: UUID,
     committee_id: UUID,
     source_record_id: UUID | None = None,
+    data_source_id: UUID | None = None,
     resolve_counterparty: bool = True,
     recipient_committee_id_by_fec_id: Mapping[str, UUID | None] | None = None,
 ) -> Transaction:
@@ -118,22 +126,40 @@ def build_transaction_from_contribution(
     recipient_candidate_id = None
     candidate_fec_id = _optional_text(record.get("candidate_fec_id"))
     if candidate_fec_id:
-        recipient_candidate_id = find_candidate_id_by_fec_id(conn, candidate_fec_id)
+        recipient_candidate_id = find_candidate_id_by_fec_id(
+            conn,
+            candidate_fec_id,
+            data_source_id=data_source_id,
+        )
 
     recipient_committee_id = None
     other_id = _optional_text(record.get("other_id"))
     if other_id:
         if recipient_committee_id_by_fec_id is None:
-            recipient_committee_id = find_committee_id_by_fec_id(conn, other_id)
+            recipient_committee_id = find_committee_id_by_fec_id(
+                conn,
+                other_id,
+                data_source_id=data_source_id,
+            )
         else:
             recipient_committee_id = recipient_committee_id_by_fec_id.get(other_id)
+
+    sub_id = _parse_sub_id(record.get("sub_id"))
+    transaction_identifier = _optional_text(record.get("transaction_identifier"))
+    native_transaction_id = None
+    if data_source_id is not None:
+        native_transaction_id = str(sub_id) if sub_id is not None else transaction_identifier
+        if native_transaction_id is None:
+            raise ValueError("authority-scoped FEC transaction requires sub_id or transaction_identifier")
 
     return Transaction(
         filing_id=filing_id,
         committee_id=committee_id,
+        data_source_id=data_source_id,
+        native_transaction_id=native_transaction_id,
         transaction_type=_require_text(record, "transaction_type"),
-        transaction_identifier=_optional_text(record.get("transaction_identifier")),
-        sub_id=_parse_sub_id(record.get("sub_id")),
+        transaction_identifier=transaction_identifier,
+        sub_id=sub_id,
         transaction_date=_parse_date(record.get("contribution_receipt_date")),
         amount=_parse_amount(record.get("contribution_receipt_amount")),
         contributor_name_raw=_optional_text(record.get("contributor_name")),

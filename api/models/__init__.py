@@ -1,4 +1,6 @@
 from api.models.campaign_finance import (
+    CAMPAIGN_FINANCE_DETAIL_UNAVAILABLE,
+    CampaignFinanceDetailErrorResponse,
     CandidateFundraisingSummary,
     CandidateMoneyCoverage,
     CountyCampaignFinanceSummary,
@@ -108,6 +110,8 @@ from api.models.search import SearchParams, SearchResponse, SearchResult
 
 __all__ = [
     "AGE_LABEL_TO_NEIGHBOR_TYPE",
+    "CAMPAIGN_FINANCE_DETAIL_UNAVAILABLE",
+    "CampaignFinanceDetailErrorResponse",
     "CandidacyResponse",
     "CandidacySummary",
     "ContactSummary",

@@ -6,13 +6,22 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from api.models._validation import validate_inclusive_bounds
+from api.models._validation import POSTGRES_SIGNED_BIGINT_MAX, validate_inclusive_bounds
 from api.models.provenance import SourceInfo
 from domains.campaign_finance.constants import FILING_BREAKDOWN_STORE_LIMIT
 
 _MONEY_QUANTUM = Decimal("0.01")
+CAMPAIGN_FINANCE_DETAIL_UNAVAILABLE = "Campaign-finance detail unavailable"
+
+
+class CampaignFinanceDetailErrorResponse(BaseModel):
+    """Sanitized response for a stored detail row that violates its public contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    detail: Literal[CAMPAIGN_FINANCE_DETAIL_UNAVAILABLE]
 
 
 class CommitteeResponse(BaseModel):
@@ -273,11 +282,16 @@ class CommitteeIndependentExpenditureTarget(BaseModel):
 
 class CommitteeIndependentExpenditureActivity(BaseModel):
     committee_id: UUID
+    selected_cycle: int
+    coverage_start_date: date
+    coverage_end_date: date
+    available_cycles: list[int] = Field(default_factory=list)
     support_total: Decimal
     oppose_total: Decimal
     ie_transaction_count: int
     excluded_outlier_count: int = 0
     targets: list[CommitteeIndependentExpenditureTarget] = Field(default_factory=list)
+    coverage: CandidateMoneyCoverage
 
 
 class ContributionInsightsMonthlyTotal(BaseModel):
@@ -398,7 +412,7 @@ class TransactionListParams(BaseModel):
     min_amount: float | None = None
     max_amount: float | None = None
     limit: int = Field(default=50, ge=1, le=200)
-    offset: int = Field(default=0, ge=0)
+    offset: int = Field(default=0, ge=0, le=POSTGRES_SIGNED_BIGINT_MAX)
 
     @model_validator(mode="after")
     def validate_range_bounds(self) -> TransactionListParams:
@@ -437,6 +451,10 @@ class CandidateListItem(BaseModel):
     # by-slug row shapes) do not select this column at all, which is also an
     # unknown, not a zero.
     total_receipts: Decimal | None = None
+    # Coverage end from the same official FEC summary row as the totals above.
+    # Nullable because older/partial producers may not carry it; callers must
+    # not infer a cycle, start date, or freshness timestamp when it is absent.
+    summary_coverage_end_date: date | None = None
 
 
 class CommitteeListItem(BaseModel):
@@ -476,7 +494,7 @@ class CandidateListParams(BaseModel):
     # never hides a linked candidate's money.
     include_unsafe_identity: bool = False
     limit: int = Field(default=50, ge=1, le=200)
-    offset: int = Field(default=0, ge=0)
+    offset: int = Field(default=0, ge=0, le=POSTGRES_SIGNED_BIGINT_MAX)
 
     @field_validator("sort", mode="before")
     @classmethod
@@ -499,7 +517,7 @@ class CommitteeListParams(BaseModel):
     state: str | None = None
     committee_type: str | None = None
     limit: int = Field(default=50, ge=1, le=200)
-    offset: int = Field(default=0, ge=0)
+    offset: int = Field(default=0, ge=0, le=POSTGRES_SIGNED_BIGINT_MAX)
 
 
 class CandidateListResponse(BaseModel):
@@ -557,7 +575,13 @@ class ReceiptSourceComponent(BaseModel):
     @field_validator("total_amount")
     @classmethod
     def validate_money_scale(cls, value: Decimal) -> Decimal:
-        if value != value.quantize(_MONEY_QUANTUM):
+        # Inspect only digits beyond cents; quantize would impose the ambient
+        # Decimal context's unrelated 28-digit magnitude ceiling.
+        _sign, digits, exponent = value.as_tuple()
+        if not isinstance(exponent, int):
+            raise ValueError("total_amount must be finite")
+        excess_fractional_digits = max(0, _MONEY_QUANTUM.as_tuple().exponent - exponent)
+        if excess_fractional_digits and any(digits[-excess_fractional_digits:]):
             raise ValueError("total_amount must be quantized to cents")
         return value
 

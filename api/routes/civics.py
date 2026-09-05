@@ -40,6 +40,7 @@ from api.models.civics import (
 )
 from api.queries._common import fetch_entity_provenance
 from api.queries.campaign_finance import (
+    SUPPORTED_COMMITTEE_SUMMARY_CYCLES,
     SelectedCycle,
     fetch_candidate_ie_summaries,
     fetch_candidate_public_money_summaries,
@@ -68,7 +69,12 @@ from api.queries.civics import (
     fetch_state_geometry,
     fetch_upcoming_election_contests,
 )
-from api.routes.public_federal import build_public_federal_money_rows, public_ie_totals, public_money_totals
+from api.routes.public_federal import (
+    CANDIDATE_SUMMARY_UNAVAILABLE_OPENAPI_RESPONSE,
+    build_public_federal_money_rows,
+    public_ie_totals,
+    public_money_totals,
+)
 
 router = APIRouter()
 _WINNER_CANDIDACY_STATUSES = {"elected", "won", "winner"}
@@ -159,7 +165,10 @@ def get_contest(contest_id: UUID, conn: psycopg.Connection = Depends(get_db)) ->
 @router.get("/contests/{contest_id}/candidate-money", response_model=ContestCandidateMoneyResponse)
 def get_contest_candidate_money(
     contest_id: UUID,
-    cycle: int | None = Query(default=None),
+    cycle: int | None = Query(
+        default=None,
+        json_schema_extra={"enum": SUPPORTED_COMMITTEE_SUMMARY_CYCLES},
+    ),
     conn: psycopg.Connection = Depends(get_db),
 ) -> ContestCandidateMoneyResponse:
     """Return the money scoreboard for every candidacy in one contest.
@@ -297,7 +306,11 @@ def get_congress_members(conn: psycopg.Connection = Depends(get_db)) -> list[Con
     return [CongressMemberSummary.model_validate(row) for row in rows]
 
 
-@router.get("/congress/money-summaries", response_model=list[PublicMemberMoneySummary])
+@router.get(
+    "/congress/money-summaries",
+    response_model=list[PublicMemberMoneySummary],
+    responses=CANDIDATE_SUMMARY_UNAVAILABLE_OPENAPI_RESPONSE,
+)
 def get_congress_member_money_summaries(
     conn: psycopg.Connection = Depends(get_db),
 ) -> list[PublicMemberMoneySummary]:
@@ -377,13 +390,33 @@ def get_geometry(
     return {"type": "FeatureCollection", "features": [_as_geojson_feature(row)]}
 
 
-@router.get("/civics/geometry", response_model=CivicGeometryFeatureCollection)
+@router.get(
+    "/civics/geometry",
+    response_model=CivicGeometryFeatureCollection,
+    responses={
+        404: {
+            "description": "No geometry is available for the requested level and state.",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {"detail": {"type": "string"}},
+                        "required": ["detail"],
+                        "additionalProperties": False,
+                    }
+                }
+            },
+        }
+    },
+)
 def get_civics_geometry(
     level: GeometryLevelLiteral = Query(...),
     state: str = Query(..., min_length=2, max_length=2, pattern="^[A-Za-z]{2}$"),
     conn: psycopg.Connection = Depends(get_db),
 ) -> CivicGeometryFeatureCollection:
     rows = fetch_electoral_division_geometries(conn, level=level, state=state.upper())
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Geometry not found for {level} in state {state.upper()}")
     features: list[CivicGeometryFeature] = []
     for row in rows:
         geometry_payload = row["geometry"]

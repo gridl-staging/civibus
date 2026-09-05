@@ -30,6 +30,8 @@ _C65_ORIGIN = "C6.5 - Funding Sources"
 
 def _row(**overrides: str | None) -> dict[str, str | None]:
     row = {
+        "id": "ie-test-id",
+        "report_number": "ie-test-report",
         "origin": _C62_ORIGIN,
         "report_type": "Independent Expenditure",
         "expenditure_amount": "500.00",
@@ -41,6 +43,8 @@ def _row(**overrides: str | None) -> dict[str, str | None]:
         "for_or_against": "For",
     }
     row.update(overrides)
+    if "id" not in overrides:
+        row["id"] = f"ie-test-{row['origin']}"
     return row
 
 
@@ -190,6 +194,23 @@ class _FakeTxn:
         return False
 
 
+class _FakeCursor:
+    def __enter__(self) -> _FakeCursor:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def execute(self, *args: object, **kwargs: object) -> None:
+        return None
+
+    def fetchone(self) -> None:
+        return None
+
+    def fetchall(self) -> list[object]:
+        return []
+
+
 class _FakeConn:
     class _Info:
         transaction_status = psycopg.pq.TransactionStatus.INTRANS
@@ -198,6 +219,9 @@ class _FakeConn:
 
     def transaction(self) -> _FakeTxn:
         return _FakeTxn()
+
+    def cursor(self, **kwargs: object) -> _FakeCursor:
+        return _FakeCursor()
 
 
 def test_filing_committee_extractor_uses_record_class(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,19 +235,21 @@ def test_filing_committee_extractor_uses_record_class(monkeypatch: pytest.Monkey
     record_class = replace(default_record_class, extract_fn=_extract_with_sentinel_committee)
     captured_committee: Organization | None = None
 
-    def _capture_committee(conn: object, committee: Organization) -> object:
+    def _capture_committee(conn: object, committee: Organization, *, data_source_id: object) -> object:
+        del data_source_id
         nonlocal captured_committee
         captured_committee = committee
         return uuid4()
 
     monkeypatch.setattr(wa_load, "_resolve_wa_committee_id", _capture_committee)
-    monkeypatch.setattr(wa_load, "ensure_state_committee", lambda *args, **kwargs: uuid4())
+    monkeypatch.setattr(wa_load, "ensure_authority_committee", lambda *args, **kwargs: uuid4())
     monkeypatch.setattr(wa_load, "upsert_filing", lambda *args, **kwargs: uuid4())
 
     wa_load._upsert_wa_filing(
         _FakeConn(),
         _row(sponsor_id="12345"),
         source_record_id=uuid4(),
+        data_source_id=uuid4(),
         data_type="independent_expenditures",
         filing_lookup={},
         record_class=record_class,
@@ -236,7 +262,13 @@ def test_filing_committee_extractor_uses_record_class(monkeypatch: pytest.Monkey
 def test_relational_pass_isolates_a_single_bad_origin_row(monkeypatch: pytest.MonkeyPatch) -> None:
     landed: list[str | None] = []
 
-    def _fake_source_id(conn: object, *, data_source_id: object, source_record_key: str) -> object:
+    def _fake_source_id(
+        conn: object,
+        *,
+        data_source_id: object,
+        source_record_key: str,
+        record_hash: str,
+    ) -> object:
         return uuid4()
 
     def _fake_upsert_filing(conn: object, row: dict, **kwargs: object) -> _WAFilingLookupEntry:
@@ -301,7 +333,14 @@ class _FakeSourceRecordStore:
         self.record_ids[key] = uuid4()
         return self.record_ids[key]
 
-    def select(self, conn: object, *, data_source_id: object, source_record_key: str) -> object | None:
+    def select(
+        self,
+        conn: object,
+        *,
+        data_source_id: object,
+        source_record_key: str,
+        record_hash: str,
+    ) -> object | None:
         return self.record_ids.get(source_record_key)
 
 
@@ -351,7 +390,7 @@ def test_with_filings_counts_bad_origin_once_even_with_preexisting_source_record
     store = _FakeSourceRecordStore()
     bad_row = _row(origin="IE")
     # Seed a stale source record for the bad row, as an earlier all-origins-accepted load left.
-    store.record_ids[wa_load._wa_source_record_key(bad_row)] = uuid4()
+    store.record_ids[wa_load._wa_source_record_key(bad_row, data_type="independent_expenditures")] = uuid4()
     rows = [
         _row(origin=_C62_ORIGIN),
         bad_row,  # unknown origin: raises in the source-record pass, but its record pre-exists
@@ -391,7 +430,10 @@ def test_with_filings_links_duplicate_key_row_when_multiple_attempts_fail(
     landed: list[str | None] = []
     store = _FakeSourceRecordStore()
     duplicate_row = _row(origin=_C62_ORIGIN)
-    duplicate_key = wa_load._wa_source_record_key(duplicate_row)
+    duplicate_key = wa_load._wa_source_record_key(
+        duplicate_row,
+        data_type="independent_expenditures",
+    )
     rows = [duplicate_row, dict(duplicate_row), dict(duplicate_row)]
     failed_attempts = 0
 

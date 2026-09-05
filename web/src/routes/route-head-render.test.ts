@@ -277,7 +277,14 @@ function extractMethodologyDisclosureRegions(body: string): string[] {
     const end = nextMarker === undefined ? body.length : body.indexOf(`data-testid="${nextMarker}"`);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
+    const headingId = `${marker}-heading`;
+    const sectionStart = body.lastIndexOf("<section", start);
+    const sectionEnd = body.indexOf(">", start) + 1;
+    expect(sectionStart).toBeGreaterThanOrEqual(0);
+    expect(sectionEnd).toBeGreaterThan(start);
+    expect(body.slice(sectionStart, sectionEnd)).toContain(`aria-labelledby="${headingId}"`);
     const html = body.slice(start, end);
+    expect(html).toMatch(new RegExp(`<h3[^>]*id="${escapeRegExp(headingId)}"`));
     const headings = [...html.matchAll(/<h[2-6][^>]*>(.*?)<\/h[2-6]>/gs)].map((match) =>
       methodologyTextContent(match[1])
     );
@@ -945,13 +952,51 @@ describe("route head rendering", () => {
     );
   });
 
+  it("distinguishes a true-empty committee search from an empty later page", () => {
+    currentPageUrl = new URL(
+      "https://preview.internal:5173/committees?state=NC&committee_type=Q&limit=25"
+    );
+    const firstPage = render(CommitteesPage, {
+      props: {
+        data: { items: [], offset: 0, limit: 25, has_next: false }
+      }
+    });
+
+    expect(firstPage.body).toContain("No committees found for the selected filters.");
+    expect(firstPage.body).not.toContain("No committees are shown on this page.");
+    expect(firstPage.body).not.toContain('data-testid="committee-result-row"');
+    expect(firstPage.body).not.toContain(">Previous</a>");
+    expect(firstPage.body).not.toContain(">Next</a>");
+
+    currentPageUrl = new URL(
+      "https://preview.internal:5173/committees?state=NC&committee_type=Q&offset=50&limit=25"
+    );
+    const laterPage = render(CommitteesPage, {
+      props: {
+        data: { items: [], offset: 50, limit: 25, has_next: false }
+      }
+    });
+
+    expect(laterPage.body).toContain("No committees are shown on this page.");
+    expect(laterPage.body).not.toContain("No committees found for the selected filters.");
+    expect(laterPage.body).not.toContain('data-testid="committee-result-row"');
+    expect(laterPage.body).toContain('aria-label="Committees pagination"');
+    expect(laterPage.body).toContain("Showing 0–0");
+    expect(laterPage.body).toContain(
+      'href="/committees?state=NC&amp;committee_type=Q&amp;offset=25&amp;limit=25"'
+    );
+    expect(laterPage.body).toContain(">Previous</a>");
+    expect(laterPage.body).not.toContain(">Next</a>");
+  });
+
   it("renders Congress directory with shared canonical/OG/Twitter tags and no route-level JSON-LD", () => {
     currentPageUrl = new URL("https://preview.internal:5173/congress?search=jane");
     const rendered = render(CongressPage, {
       props: {
         data: {
           members: [CONGRESS_MEMBER],
-          moneySummaries: []
+          moneySummaries: [],
+          moneySummariesUnavailable: false
         }
       }
     });

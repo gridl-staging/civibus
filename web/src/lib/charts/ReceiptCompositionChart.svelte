@@ -1,9 +1,10 @@
 <script lang="ts">
   import ChartFrame from "./ChartFrame.svelte";
-  import { formatCurrency, formatPercent } from "./finance";
+  import { formatChartMoneyValue, formatPercent } from "./finance";
   import type { ChartHeadingLevel, ChartFrameProps, ExactDisclosureRow, ReceiptCompositionRow } from "./types";
 
   export let testId: string;
+  export let disclosureContext: string;
   export let cycle: number;
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
@@ -12,12 +13,16 @@
   export let headingLevel: ChartHeadingLevel = 3;
   void headingLevel;
   export let rows: ReceiptCompositionRow[] = [];
-  export let totalReceipts: number;
+  export let totalReceipts: number | null;
   export let canPlot: boolean;
   export let caveat = "";
 
   $: hasRows = rows.length > 0;
-  $: canRenderPlot = hasRows && canPlot && rows.every((row) => row.canPlot);
+  $: canRenderPlot =
+    hasRows &&
+    canPlot &&
+    totalReceipts !== null &&
+    rows.every((row) => row.canPlot && row.amount !== null && row.denominator !== null);
   $: state = !hasRows
     ? { kind: "no-data" as const, message: "Receipt source components are not loaded yet." }
     : canRenderPlot
@@ -28,16 +33,32 @@
         };
   $: exactRows = buildExactRows(rows);
   $: summary = {
-    sentence: `Receipt components disclose ${formatCurrency(totalReceipts)} in total receipts for the ${cycle} cycle.`
+    sentence: `Receipt components disclose ${formatChartMoneyValue(
+      totalReceipts,
+      rows[0]?.denominatorLabel
+    )} in total receipts for the ${cycle} cycle.`
   };
+
+  function rowShare(row: ReceiptCompositionRow): number | null {
+    if (row.amount === null || row.denominator === null) {
+      return null;
+    }
+    return row.denominator === 0 ? 0 : row.amount / row.denominator;
+  }
 
   function buildExactRows(inputRows: ReceiptCompositionRow[]): ExactDisclosureRow[] {
     return inputRows.map((row) => ({
       label: row.label,
       values: [
-        { label: "Dollars", value: formatCurrency(row.amount) },
-        { label: "Share", value: formatPercent(row.denominator === 0 ? 0 : row.amount / row.denominator) },
-        { label: "Denominator", value: formatCurrency(totalReceipts) }
+        { label: "Dollars", value: formatChartMoneyValue(row.amount, row.amountLabel) },
+        {
+          label: "Share",
+          value: rowShare(row) === null ? "Not safely plottable" : formatPercent(rowShare(row) ?? 0)
+        },
+        {
+          label: "Denominator",
+          value: formatChartMoneyValue(row.denominator, row.denominatorLabel)
+        }
       ]
     }));
   }
@@ -46,6 +67,7 @@
 
 <ChartFrame
   {testId}
+  {disclosureContext}
   title="Sources of receipts"
   unit="dollars"
   {cycle}
@@ -57,12 +79,13 @@
 >
   <div class="receipt-composition" data-testid="{testId}-plot">
     {#each rows as row (row.id)}
+      {@const share = rowShare(row) ?? 0}
       <div class="receipt-composition__row">
         <span>{row.label}</span>
-        <span>{formatCurrency(row.amount)} ({formatPercent(row.denominator === 0 ? 0 : row.amount / row.denominator)})</span>
+        <span>{formatChartMoneyValue(row.amount, row.amountLabel)} ({formatPercent(share)})</span>
         <span
           class="receipt-composition__bar"
-          style:--finance-share={`${row.denominator === 0 ? 0 : (row.amount / row.denominator) * 100}%`}
+          style:--finance-share={`${share * 100}%`}
         ></span>
       </div>
     {/each}

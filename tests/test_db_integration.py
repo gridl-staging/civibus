@@ -315,6 +315,7 @@ def test_refresh_run_round_trip(db_conn: psycopg.Connection) -> None:
         domain="campaign_finance",
         jurisdiction="state/CO",
         data_source_names=["TRACER Bulk Download - Contributions"],
+        execution_origin="scheduled",
         pull_status="success",
         started_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
         completed_at=datetime(2026, 4, 24, 12, 3, tzinfo=timezone.utc),
@@ -337,6 +338,7 @@ def test_refresh_run_round_trip(db_conn: psycopg.Connection) -> None:
         domain="campaign_finance",
         jurisdiction="state/CO",
         data_source_names=["TRACER Bulk Download - Contributions"],
+        execution_origin="scheduled",
         pull_status="running",
         started_at=datetime(2026, 4, 24, 13, 0, tzinfo=timezone.utc),
         completed_at=None,
@@ -370,6 +372,7 @@ def test_refresh_run_round_trip(db_conn: psycopg.Connection) -> None:
         "domain": "rewritten_domain",
         "jurisdiction": "state/ZZ",
         "data_source_names": ["Rewritten Source"],
+        "execution_origin": "operator_attended",
         "started_at": datetime(2020, 1, 1, 0, 0, tzinfo=timezone.utc),
         "created_at": datetime(2020, 1, 2, 0, 0, tzinfo=timezone.utc),
     }
@@ -409,6 +412,8 @@ def test_minimal_fields_round_trip_for_all_models(db_conn: psycopg.Connection) -
     address = Address(raw_address="1 Minimal St, Durham, NC 27701")
     data_source = DataSource(
         domain="campaign_finance",
+        filing_authority_type="state",
+        filing_authority_code="NC",
         name="Minimal Source",
         source_url="https://example.gov/source/minimal",
     )
@@ -1451,10 +1456,21 @@ def test_select_active_roster_portrait_for_person_prefers_roster_sourced_active_
     assert selected.id == roster_portrait_id
     assert selected.source_image_url == "https://example.org/roster.jpg"
 
+    # Supersession stays within the roster source; the legacy civics source
+    # remains a separate provenance chain.
+    successor_record = SourceRecord(
+        data_source_id=roster_source.id,
+        source_record_key=f"roster-successor-{uuid4()}",
+        source_url="https://example.org/roster/successor",
+        raw_fields={"record_type": "roster_portrait_successor"},
+        pull_date=datetime(2026, 4, 29, 1, 10, tzinfo=timezone.utc),
+        record_hash=compute_record_hash({"record_type": "roster_portrait_successor"}),
+    )
+    insert_source_record(db_conn, successor_record)
     with db_conn.cursor() as cursor:
         cursor.execute(
             "UPDATE core.source_record SET superseded_by = %s WHERE id = %s",
-            (legacy_civics_record.id, roster_record.id),
+            (successor_record.id, roster_record.id),
         )
 
     assert select_active_roster_portrait_for_person(db_conn, person_id=person.id) is None

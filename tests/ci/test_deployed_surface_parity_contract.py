@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+import stat
 from pathlib import Path
 
 import pytest
@@ -52,6 +54,27 @@ def test_committed_public_surface_manifest_contract() -> None:
     parsed_rows = read_public_surface_manifest()
     assert_manifest_row_schema(parsed_rows)
     assert_manifest_surface_topology(parsed_rows)
+
+
+def test_production_washington_browser_oracle_requires_fresh_available_status() -> None:
+    state_detail_spec = Path(__file__).resolve().parents[2] / "web/tests/smoke/state_detail.spec.ts"
+    source = state_detail_spec.read_text(encoding="utf-8")
+
+    assert "Campaign finance (available|degraded|stale)" not in source
+    assert '? "Campaign finance available"' in source
+    for contract in (
+        "CIVIBUS_SURFACE_PARITY_RAW_BROWSER_OUTPUT",
+        "CIVIBUS_CANDIDATE_RECEIPT_SHA256",
+        "CIVIBUS_CANDIDATE_TREE_GIT_SHA",
+        "CIVIBUS_QUALIFIED_IMAGE",
+        "CIVIBUS_PROMOTION_BUNDLE_SHA256",
+        "CIVIBUS_FEDERAL_IDENTITY_SHA256",
+        "publishRawBrowserEvidence(routes)",
+        "constants.O_EXCL",
+        "linkSync(temporary, rawBrowserEvidenceOutput)",
+        "fchmodSync(descriptor, 0o600)",
+    ):
+        assert contract in source
 
 
 @pytest.mark.parametrize(
@@ -423,6 +446,54 @@ def test_deployed_surface_parity_probe_accepts_matching_fixture_surface(tmp_path
         assert expected_line in result.stdout
     assert "/api/v1/" not in result.stdout
     assert "surface_parity_ok" in result.stdout
+
+
+def test_deployed_surface_parity_probe_atomically_publishes_bound_raw_api_evidence(
+    tmp_path: Path,
+) -> None:
+    fixture_dir = tmp_path / "raw-api"
+    regional_bodies = {
+        "/state/WA": "<h1>Washington</h1>",
+        "/state/WA/municipality/seattle": "<h1>Seattle</h1>",
+        "/state/NY/municipality/new-york-city": "<h1>New York City</h1>",
+        "/api/health/content": '{"healthy": true}',
+    }
+    write_fixture(
+        fixture_dir,
+        repo_paths={"/health", "/public/v1/federal/officials", "/v1/candidates"},
+        deployed_paths={"/health", "/public/v1/federal/officials", "/v1/candidates"},
+        page_statuses={path: 200 for path in DEFAULT_PAGE_BODIES} | {path: 200 for path in regional_bodies},
+        page_bodies=regional_bodies,
+        helper_export_payload=helper_export_rows(denominator=539, fec_rows=537),
+    )
+    output = tmp_path / "raw-api.json"
+    identity = {
+        "CIVIBUS_SURFACE_PARITY_RAW_API_OUTPUT": str(output),
+        "CIVIBUS_CANDIDATE_RECEIPT_SHA256": "a" * 64,
+        "CIVIBUS_CANDIDATE_TREE_GIT_SHA": EXPECTED_SHA,
+        "CIVIBUS_QUALIFIED_IMAGE": "registry.fly.io/civibus-refresh@sha256:" + "b" * 64,
+        "CIVIBUS_PROMOTION_BUNDLE_SHA256": "c" * 64,
+        "CIVIBUS_FEDERAL_IDENTITY_SHA256": "d" * 64,
+        "CIVIBUS_PUBLIC_MONEY_VALUE_FATAL": "1",
+    }
+
+    result = run_probe(fixture_dir, extra_env=identity)
+
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["source_revision"] == EXPECTED_SHA
+    assert payload["candidate_receipt_file_sha256"] == "a" * 64
+    assert payload["surface_parity_ok"] is True
+    assert payload["regional_navigation_routes"] == list(regional_bodies)[:3]
+    assert len(payload["surfaces"]) == 18
+    original = output.read_bytes()
+
+    replay = run_probe(fixture_dir, extra_env=identity)
+
+    assert replay.returncode != 0
+    assert output.read_bytes() == original
+    assert "deployed_surface_parity_raw_api_evidence_failed" in replay.stderr
 
 
 def test_deployed_surface_parity_probe_fails_loud_on_sha_drift(tmp_path: Path) -> None:

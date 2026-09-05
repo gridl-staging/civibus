@@ -4,7 +4,13 @@ import type {
   IndependentExpenditureSummary,
   SerializedMoney
 } from "$lib/campaign-finance-detail/contract";
-import { formatCurrency, type OutsideSpendingPresentation } from "$lib/campaign-finance-detail/presentation";
+import {
+  compareSerializedMoney,
+  formatCurrency,
+  formatSerializedMoneyRatioPercentage,
+  sumSerializedMoney,
+  type OutsideSpendingPresentation
+} from "$lib/campaign-finance-detail/presentation";
 import type { OutsideSpendingRow } from "$lib/charts/types";
 import type { SourceInfo } from "$lib/entity-detail/contract";
 import {
@@ -16,7 +22,6 @@ import {
   type PersonMoneyAtGlancePresentation,
   type PersonMoneyAtGlanceSummary
 } from "$lib/entity-detail/person-campaign-finance-presentation";
-import { parseSerializedMoney } from "$lib/entity-detail/person-contribution-chart-presentation";
 import type { CompareColumn, ResolvedPersonMoneyBundle } from "./+page.server";
 
 type CompareMetricUnit = "money" | "percent";
@@ -24,7 +29,7 @@ type CompareColumnStatus = "ready" | "error";
 type CompareCellState = "available" | "unavailable";
 
 type CompareMetricValue = {
-  value: number | null;
+  value: SerializedMoney | null;
   label: string;
   state: CompareCellState;
 };
@@ -45,13 +50,14 @@ export type CompareProvenanceLink = {
 
 export type CompareMetricCell = CompareMetricValue & {
   personId: string;
+  widthPercentage: string | null;
 };
 
 export type CompareMetricRow = {
   id: string;
   label: string;
   unit: CompareMetricUnit;
-  scaleMax: number;
+  scaleMax: SerializedMoney;
   scaleMaxLabel: string;
   cells: CompareMetricCell[];
 };
@@ -92,8 +98,8 @@ type FulfilledColumnPresentation = {
   moneyAtGlance: PersonMoneyAtGlancePresentation | null;
   contributionInsights: PersonContributionInsightsPresentation;
   outsideSpending: CompareOutsideSpendingChart | null;
-  outsideSupport: number | null;
-  outsideOppose: number | null;
+  outsideSupport: SerializedMoney | null;
+  outsideOppose: SerializedMoney | null;
 };
 
 type ColumnPresentationResult =
@@ -138,8 +144,12 @@ function isIndependentExpenditureSummary(
   return value !== null;
 }
 
-function formatPercent(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
+function trimDecimalFraction(value: string): string {
+  return value.includes(".") ? value.replace(/\.?0+$/, "") : value;
+}
+
+function formatPercentValue(value: SerializedMoney): string {
+  return `${formatSerializedMoneyRatioPercentage(value, "100", 1)}%`;
 }
 
 function moneyValue(value: SerializedMoney | null | undefined): CompareMetricValue {
@@ -148,20 +158,33 @@ function moneyValue(value: SerializedMoney | null | undefined): CompareMetricVal
   }
 
   return {
-    value: parseSerializedMoney(value),
+    value,
     label: formatCurrency(value),
     state: "available"
   };
 }
 
-function percentValue(value: number | null): CompareMetricValue {
-  if (value === null || !Number.isFinite(value)) {
+function percentValue(
+  numerator: SerializedMoney | null,
+  denominator: SerializedMoney
+): CompareMetricValue {
+  if (numerator === null || compareSerializedMoney(denominator, "0") === 0) {
     return UNAVAILABLE_VALUE;
   }
 
+  const roundedValue = trimDecimalFraction(
+    formatSerializedMoneyRatioPercentage(numerator, denominator, 18)
+  );
+  const value =
+    roundedValue === "0" &&
+    compareSerializedMoney(numerator, "0") > 0 &&
+    compareSerializedMoney(denominator, "0") > 0
+      ? "0.000000000000000001"
+      : roundedValue;
+
   return {
     value,
-    label: formatPercent(value),
+    label: `${formatSerializedMoneyRatioPercentage(numerator, denominator, 1)}%`,
     state: "available"
   };
 }
@@ -271,7 +294,7 @@ async function resolveColumnPresentation(
   const completeSummaries = summaries.filter(isCandidateSummary);
   const summary =
     allSummariesAvailable && completeSummaries.length === summaries.length && completeSummaries.length > 0
-      ? buildPersonMoneyAtGlanceSummary(completeSummaries)
+      ? buildExactPersonMoneyAtGlanceSummary(completeSummaries)
       : null;
 
   const outsideSpending = await Promise.all(
@@ -304,20 +327,54 @@ async function resolveColumnPresentation(
       outsideSpendingSummaries,
       outsideSpending
     ),
-    outsideSupport: sumOutsideSpending(outsideSpending.map((section) => section.chartRows), "support"),
-    outsideOppose: sumOutsideSpending(outsideSpending.map((section) => section.chartRows), "oppose")
+    outsideSupport: sumOutsideSpending(outsideSpendingSummaries, "support_total"),
+    outsideOppose: sumOutsideSpending(outsideSpendingSummaries, "oppose_total")
+  };
+}
+
+function buildExactPersonMoneyAtGlanceSummary(
+  summaries: CandidateFundraisingSummary[]
+): PersonMoneyAtGlanceSummary {
+  const summary = buildPersonMoneyAtGlanceSummary(summaries);
+  const sumRequired = (
+    field: "total_raised" | "total_spent" | "net"
+  ): SerializedMoney =>
+    summaries.length === 1
+      ? summaries[0][field]
+      : sumSerializedMoney(summaries.map((candidateSummary) => candidateSummary[field]));
+  const sumOptional = (
+    field: "cash_on_hand" | "debts_owed_by_committee" | "net_self_funding"
+  ): SerializedMoney | null => {
+    const values = summaries.map((candidateSummary) => candidateSummary[field]);
+    if (values.some((value) => value === null || value === undefined)) {
+      return null;
+    }
+    return summaries.length === 1
+      ? values[0] as SerializedMoney
+      : sumSerializedMoney(values as SerializedMoney[]);
+  };
+
+  return {
+    ...summary,
+    total_raised: sumRequired("total_raised"),
+    total_spent: sumRequired("total_spent"),
+    net: sumRequired("net"),
+    cash_on_hand: sumOptional("cash_on_hand"),
+    debts_owed_by_committee: sumOptional("debts_owed_by_committee"),
+    net_self_funding: sumOptional("net_self_funding")
   };
 }
 
 function sumOutsideSpending(
-  rowsBySection: OutsideSpendingRow[][],
-  stance: "support" | "oppose"
-): number | null {
-  const rows = rowsBySection.flat().filter((row) => row.stance === stance);
-  if (rows.length === 0) {
+  summaries: IndependentExpenditureSummary[],
+  field: "support_total" | "oppose_total"
+): SerializedMoney | null {
+  if (summaries.length === 0) {
     return null;
   }
-  return rows.reduce((total, row) => total + row.amount, 0);
+  return summaries.length === 1
+    ? summaries[0][field]
+    : sumSerializedMoney(summaries.map((summary) => summary[field]));
 }
 
 function buildSelfFundingShare(summary: PersonMoneyAtGlanceSummary | null): CompareMetricValue {
@@ -325,12 +382,11 @@ function buildSelfFundingShare(summary: PersonMoneyAtGlanceSummary | null): Comp
     return UNAVAILABLE_VALUE;
   }
 
-  const totalRaised = parseSerializedMoney(summary.total_raised);
-  if (totalRaised <= 0) {
+  if (compareSerializedMoney(summary.total_raised, "0") <= 0) {
     return UNAVAILABLE_VALUE;
   }
 
-  return percentValue(parseSerializedMoney(summary.net_self_funding) / totalRaised);
+  return percentValue(summary.net_self_funding, summary.total_raised);
 }
 
 function buildSmallDollarShare(
@@ -342,23 +398,56 @@ function buildSmallDollarShare(
   }
 
   const share = bundle.personContributionInsights.small_dollar_share.share;
-  return share === null ? UNAVAILABLE_VALUE : percentValue(Number(share));
+  return share === null ? UNAVAILABLE_VALUE : percentValue(share, "1");
 }
 
-function maxReportedValue(values: readonly number[]): number {
-  const reported = values.filter((value) => Number.isFinite(value));
+function maxReportedChartValue(values: readonly (number | null)[]): number {
+  const reported = values.filter(
+    (value): value is number => value !== null && Number.isFinite(value)
+  );
   return reported.length === 0 ? 0 : Math.max(...reported);
 }
 
-function scaleMaxFor(cells: CompareMetricCell[]): number {
+function maxReportedValue(values: readonly SerializedMoney[]): SerializedMoney {
+  if (values.length === 0) {
+    return "0";
+  }
+  return values.reduce((maximum, value) =>
+    compareSerializedMoney(value, maximum) > 0 ? value : maximum
+  );
+}
+
+function scaleMaxFor(cells: CompareMetricValue[]): SerializedMoney {
   return maxReportedValue(
     cells.flatMap((cell) => (cell.state === "available" && cell.value !== null ? [cell.value] : []))
   );
 }
 
-function buildChartScale(values: readonly number[]): CompareChartScale {
-  const max = maxReportedValue(values);
-  return { max, maxLabel: formatScaleMax(max, "money") };
+function widthPercentage(value: SerializedMoney | null, scaleMax: SerializedMoney): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (compareSerializedMoney(value, "0") <= 0 || compareSerializedMoney(scaleMax, "0") <= 0) {
+    return "0%";
+  }
+  if (compareSerializedMoney(value, scaleMax) >= 0) {
+    return "100%";
+  }
+
+  const percentage = trimDecimalFraction(
+    formatSerializedMoneyRatioPercentage(value, scaleMax, 18)
+  );
+  return `${percentage === "0" ? "0.000000000000000001" : percentage}%`;
+}
+
+function buildChartScale(values: readonly (number | null)[]): CompareChartScale {
+  const max = maxReportedChartValue(values);
+  return {
+    max,
+    maxLabel: values.some((value) => value === null)
+      ? "Exact values are table-only"
+      : formatScaleMax(max, "money")
+  };
 }
 
 /**
@@ -375,9 +464,9 @@ function buildChartScales(charts: readonly CompareColumnCharts[]): CompareChartS
     ),
     sizeBucketDollars: buildChartScale(
       charts.flatMap((chart) =>
-        (chart.contributionInsights?.sizeBuckets.rowsByUnit.dollars ?? [])
-          .filter((row) => row.canPlot)
-          .map((row) => row.amount)
+        (chart.contributionInsights?.sizeBuckets.rowsByUnit.dollars ?? []).map(
+          (row) => row.amount
+        )
       )
     ),
     outsideSpending: buildChartScale(
@@ -386,8 +475,8 @@ function buildChartScales(charts: readonly CompareColumnCharts[]): CompareChartS
   };
 }
 
-function formatScaleMax(value: number, unit: CompareMetricUnit): string {
-  return unit === "money" ? formatCurrency(value) : formatPercent(value);
+function formatScaleMax(value: SerializedMoney | number, unit: CompareMetricUnit): string {
+  return unit === "money" ? formatCurrency(value) : formatPercentValue(String(value));
 }
 
 /**
@@ -401,7 +490,8 @@ function buildRow(
 ): CompareMetricRow {
   const cells = columns.map((column, index) => ({
     personId: column.personId,
-    ...values[index]
+    ...values[index],
+    widthPercentage: null
   }));
   const scaleMax = scaleMaxFor(cells);
   return {
@@ -410,7 +500,10 @@ function buildRow(
     unit,
     scaleMax,
     scaleMaxLabel: formatScaleMax(scaleMax, unit),
-    cells
+    cells: cells.map((cell) => ({
+      ...cell,
+      widthPercentage: widthPercentage(cell.value, scaleMax)
+    }))
   };
 }
 
@@ -504,7 +597,9 @@ function findLeader(
   const ranked = row.cells
     .map((cell, index) => ({ cell, column: columns[index] }))
     .filter(({ cell }) => cell.state === "available" && cell.value !== null)
-    .sort((left, right) => (right.cell.value ?? 0) - (left.cell.value ?? 0));
+    .sort((left, right) =>
+      compareSerializedMoney(right.cell.value ?? "0", left.cell.value ?? "0")
+    );
   const leader = ranked[0];
   return leader === undefined ? null : { name: leader.column.name, label: leader.cell.label };
 }

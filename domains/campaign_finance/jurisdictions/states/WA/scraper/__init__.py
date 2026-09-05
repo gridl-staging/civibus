@@ -9,6 +9,7 @@ from domains.campaign_finance.jurisdictions.states.WA.scraper.wa_officeholder_lo
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlparse
 
 from domains.campaign_finance.jurisdictions.config_schema import JurisdictionConfig, load_jurisdiction_config
 
@@ -93,6 +94,17 @@ def _load_bulk_download_url_for_data_type(data_type: str) -> str:
     if data_source.bulk_download_url is None:
         raise RuntimeError(f"WA config missing bulk_download_url for data type {data_type!r}")
     return data_source.bulk_download_url
+
+
+@lru_cache(maxsize=None)
+def _load_dataset_id_for_data_type(data_type: str) -> str:
+    """Return the Socrata dataset identity owned by the configured bulk URL."""
+    bulk_download_url = _load_bulk_download_url_for_data_type(data_type)
+    dataset_filename = Path(urlparse(bulk_download_url).path).name
+    dataset_id, suffix = Path(dataset_filename).stem, Path(dataset_filename).suffix
+    if suffix != ".csv" or not dataset_id:
+        raise RuntimeError(f"WA bulk_download_url does not identify a CSV dataset for data type {data_type!r}")
+    return dataset_id
 
 
 def _load_api_base_url_for_data_type(data_type: str) -> str:

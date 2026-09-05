@@ -14,6 +14,10 @@ const CANDIDATE_ID = "22222222-2222-4222-8222-222222222222";
 const GEOMETRY_PATH = "/v1/civics/geometry?level=county&state=NC";
 const CONTEST_PATH = `/v1/contests/${CONTEST_ID}`;
 const MONEY_PATH_2026 = `/v1/contests/${CONTEST_ID}/candidate-money?cycle=2026`;
+const INVALID_CYCLE_ERROR = {
+  message: "Invalid cycle query parameter.",
+  detail: "The cycle query parameter must be a single four-digit election cycle."
+};
 
 type LoadResult = {
   contest: ContestDetailResponse;
@@ -171,8 +175,14 @@ describe("/contest/[id] +page.server load", () => {
       }
       throw new Error(`unexpected path: ${path}`);
     });
+    const setHeaders = vi.fn();
 
-    await expect(load(createLoadEvent(requestJson))).rejects.toThrowError();
+    await expect(load(createLoadEvent(requestJson, { setHeaders }))).rejects.toMatchObject({
+      status: 500,
+      body: { message: "boom" }
+    });
+    expect(requestJson).toHaveBeenCalledTimes(3);
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
   it("uses the cycle query override when the reader pins one", async () => {
@@ -192,6 +202,60 @@ describe("/contest/[id] +page.server load", () => {
     )) as LoadResult;
 
     expect(data.contestSelectedCycle).toBe(2024);
+  });
+
+  it.each([
+    ["blank", `https://example.test/contest/${CONTEST_ID}?cycle=`],
+    ["whitespace-only", `https://example.test/contest/${CONTEST_ID}?cycle=%20%20`],
+    ["non-numeric", `https://example.test/contest/${CONTEST_ID}?cycle=abcd`],
+    ["decimal", `https://example.test/contest/${CONTEST_ID}?cycle=2024.5`],
+    ["numeric alias", `https://example.test/contest/${CONTEST_ID}?cycle=2024.0`],
+    ["too short", `https://example.test/contest/${CONTEST_ID}?cycle=24`],
+    ["duplicated", `https://example.test/contest/${CONTEST_ID}?cycle=2024&cycle=2026`]
+  ])("rejects malformed cycle query values before fetch: %s", async (_label, href) => {
+    const requestJson = vi.fn();
+    const setHeaders = vi.fn();
+
+    await expect(
+      load(createLoadEvent(requestJson, { url: new URL(href), setHeaders }))
+    ).rejects.toMatchObject({
+      status: 400,
+      body: INVALID_CYCLE_ERROR
+    });
+    expect(requestJson).not.toHaveBeenCalled();
+    expect(setHeaders).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a well-formed unsupported cycle as a backend-owned route error", async () => {
+    const backendCycleError = {
+      detail: "Unsupported cycle 2030; supported cycles: 2022, 2024, 2026"
+    };
+    const moneyPath = `/v1/contests/${CONTEST_ID}/candidate-money?cycle=2030`;
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === CONTEST_PATH) return contestDetail();
+      if (path === GEOMETRY_PATH) return { type: "FeatureCollection", features: [] };
+      if (path === moneyPath) throw new ApiResponseError(422, backendCycleError);
+      throw new Error(`unexpected path: ${path}`);
+    });
+    const setHeaders = vi.fn();
+
+    await expect(
+      load(
+        createLoadEvent(requestJson, {
+          url: new URL(`https://example.test/contest/${CONTEST_ID}?cycle=2030`),
+          setHeaders
+        })
+      )
+    ).rejects.toMatchObject({
+      status: 422,
+      body: backendCycleError
+    });
+    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
+      CONTEST_PATH,
+      GEOMETRY_PATH,
+      moneyPath
+    ]);
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
   it("omits the cycle parameter when the contest has no usable election date", async () => {
@@ -230,18 +294,27 @@ describe("/contest/[id] +page.server load", () => {
     const requestJson = vi.fn(async () => {
       throw new ApiResponseError(404, "Contest not found");
     });
+    const setHeaders = vi.fn();
 
-    await expect(load(createLoadEvent(requestJson))).rejects.toMatchObject({ status: 404 });
+    await expect(load(createLoadEvent(requestJson, { setHeaders }))).rejects.toMatchObject({
+      status: 404,
+      body: { message: "Contest not found" }
+    });
+    expect(requestJson).toHaveBeenCalledTimes(1);
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
   it("preserves backend malformed UUID 422 semantics", async () => {
     const requestJson = vi.fn(async () => {
       throw new ApiResponseError(422, "bad uuid");
     });
+    const setHeaders = vi.fn();
 
     await expect(
-      load(createLoadEvent(requestJson, { id: "not-a-uuid" }))
-    ).rejects.toMatchObject({ status: 422 });
+      load(createLoadEvent(requestJson, { id: "not-a-uuid", setHeaders }))
+    ).rejects.toMatchObject({ status: 422, body: { message: "bad uuid" } });
+    expect(requestJson).toHaveBeenCalledTimes(1);
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
   it("falls back to empty contest geometry when civic geometry returns backend-owned 404", async () => {
@@ -253,14 +326,18 @@ describe("/contest/[id] +page.server load", () => {
       }
       throw new Error(`unexpected path: ${path}`);
     });
+    const setHeaders = vi.fn();
 
-    const data = (await load(createLoadEvent(requestJson))) as LoadResult;
+    const data = (await load(createLoadEvent(requestJson, { setHeaders }))) as LoadResult;
 
     // The record is pre-seeded with empty feature collections, so a missing
     // geometry leaves the level empty rather than absent.
     expect(data.geometryByLevel.county.features).toEqual([]);
     // A missing map must not take the money down with it.
     expect(data.contestCandidateMoney?.rows).toHaveLength(1);
+    expect(setHeaders).toHaveBeenCalledWith({
+      "cache-control": "public, max-age=120, s-maxage=120, stale-while-revalidate=60"
+    });
   });
 
   it("falls back cleanly to an empty geometry map when the division type is unsupported", async () => {

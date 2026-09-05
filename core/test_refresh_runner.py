@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import signal
 import threading
 import zipfile
 from dataclasses import replace
@@ -54,34 +56,455 @@ def _job_for_tests(
     )
 
 
-def _download_job_call(
-    state_code: str,
-    data_types: tuple[str, ...],
-    refresh_callable: object,
-    **refresh_kwargs: object,
-) -> dict[str, object]:
-    return {
-        "jurisdiction": f"state/{state_code}",
-        "key_prefix": f"state-{state_code.lower()}",
-        "data_types": data_types,
-        "refresh_callable": refresh_callable,
-        **refresh_kwargs,
+_HISTORICAL_RECOVERY_STARTED_AT = datetime(2026, 8, 29, 23, 39, 28, tzinfo=timezone.utc)
+
+
+def _historical_recovery_identity(
+    **overrides: object,
+) -> runner.HistoricalRefreshRecoveryIdentity:
+    values: dict[str, object] = {
+        "refresh_run_id": UUID("e00cb630-7024-4c5d-8c10-ef2a87e83db7"),
+        "job_key": "state-wa-contributions",
+        "domain": "campaign_finance",
+        "jurisdiction": "state/WA",
+        "filing_authority_type": "state",
+        "filing_authority_code": "WA",
+        "data_source_names": ("WA PDC Contributions",),
+        "execution_origin": "operator_attended",
+        "started_at": _HISTORICAL_RECOVERY_STARTED_AT,
+        "app": "civibus-regional-refresh",
+        "machine_id": "080d391a2ed098",
+        "authority": "state/WA",
+        "execution_plan": "regional-wa-scheduled",
+        "database_host": "civibus-db.internal",
+        "database_port": 5432,
+        "database_name": "civibus",
     }
+    values.update(overrides)
+    return runner.HistoricalRefreshRecoveryIdentity(**values)
+
+
+def _historical_running_attempt(
+    identity: runner.HistoricalRefreshRecoveryIdentity,
+    **overrides: object,
+) -> RefreshRun:
+    values: dict[str, object] = {
+        "id": identity.refresh_run_id,
+        "job_key": identity.job_key,
+        "domain": identity.domain,
+        "jurisdiction": identity.jurisdiction,
+        "data_source_names": list(identity.data_source_names),
+        "execution_origin": identity.execution_origin,
+        "pull_status": "running",
+        "started_at": identity.started_at,
+        "completed_at": None,
+        "metadata_updates": 0,
+        "message": "Refresh job started",
+    }
+    values.update(overrides)
+    return RefreshRun(**values)
+
+
+def test_historical_recovery_classifies_only_exact_running_or_its_own_terminal_outcome() -> None:
+    identity = _historical_recovery_identity()
+    running = _historical_running_attempt(identity)
+
+    assert runner._classify_historical_recovery_attempt(running, identity) == "running"
+
+    completed_at = datetime(2026, 8, 30, 2, 0, tzinfo=timezone.utc)
+    recovered = running.model_copy(
+        update={
+            "pull_status": "failed",
+            "completed_at": completed_at,
+            "message": runner._HISTORICAL_RECOVERY_MESSAGE,
+            "error": runner._HISTORICAL_RECOVERY_ERROR,
+        }
+    )
+    assert runner._classify_historical_recovery_attempt(recovered, identity) == "already_recovered"
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected_error"),
+    [
+        (None, "missing"),
+        (
+            _historical_running_attempt(
+                _historical_recovery_identity(),
+                id=UUID("a00cb630-7024-4c5d-8c10-ef2a87e83db7"),
+            ),
+            "identity mismatch",
+        ),
+        (_historical_running_attempt(_historical_recovery_identity(), job_key="state-wa-loans"), "job identity"),
+        (_historical_running_attempt(_historical_recovery_identity(), domain="civics"), "job identity"),
+        (_historical_running_attempt(_historical_recovery_identity(), jurisdiction="state/OR"), "job identity"),
+        (
+            _historical_running_attempt(
+                _historical_recovery_identity(),
+                data_source_names=["WA PDC Expenditures"],
+            ),
+            "job identity",
+        ),
+        (
+            _historical_running_attempt(_historical_recovery_identity(), execution_origin="scheduled"),
+            "execution origin",
+        ),
+        (
+            _historical_running_attempt(
+                _historical_recovery_identity(),
+                started_at=_HISTORICAL_RECOVERY_STARTED_AT + timedelta(seconds=1),
+            ),
+            "started_at",
+        ),
+        (
+            _historical_running_attempt(
+                _historical_recovery_identity(),
+                pull_status="success",
+                completed_at=datetime(2026, 8, 30, 2, 0, tzinfo=timezone.utc),
+            ),
+            "already terminal",
+        ),
+        (
+            _historical_running_attempt(
+                _historical_recovery_identity(),
+                pull_status="failed",
+                completed_at=datetime(2026, 8, 30, 2, 0, tzinfo=timezone.utc),
+                message="some other failure",
+                error="foreign terminal owner",
+            ),
+            "already terminal",
+        ),
+    ],
+)
+def test_historical_recovery_refuses_missing_foreign_mismatched_or_terminal_rows(
+    stored: RefreshRun | None,
+    expected_error: str,
+) -> None:
+    with pytest.raises(RuntimeError, match=expected_error):
+        runner._classify_historical_recovery_attempt(stored, _historical_recovery_identity())
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected_error"),
+    [
+        ([], "missing"),
+        (
+            [("WA PDC Contributions", "state", "OR")],
+            "filing authority identity mismatch",
+        ),
+        (
+            [
+                ("WA PDC Contributions", "state", "WA"),
+                ("WA PDC Contributions", "named_other", "WA-PDC"),
+            ],
+            "ambiguous",
+        ),
+        (
+            [("WA PDC Expenditures", "state", "WA")],
+            "data-source identity mismatch",
+        ),
+    ],
+)
+def test_historical_recovery_requires_exact_unambiguous_typed_data_source_identity(
+    rows: list[tuple[str, str | None, str | None]],
+    expected_error: str,
+) -> None:
+    with pytest.raises(RuntimeError, match=expected_error):
+        runner._require_historical_recovery_data_source_identity(rows, _historical_recovery_identity())
+
+
+def test_historical_recovery_builds_exact_existing_lifecycle_postcondition_shape() -> None:
+    identity = _historical_recovery_identity()
+    completed_at = datetime(2026, 8, 30, 2, 0, tzinfo=timezone.utc)
+    attempt = _historical_running_attempt(identity).model_copy(
+        update={
+            "pull_status": "failed",
+            "completed_at": completed_at,
+            "message": runner._HISTORICAL_RECOVERY_MESSAGE,
+            "error": runner._HISTORICAL_RECOVERY_ERROR,
+        }
+    )
+
+    postcondition = runner.build_historical_recovery_postcondition(
+        identity,
+        attempt,
+        running_refresh_rows=0,
+        active_refresh_backends=0,
+        long_idle_transactions=0,
+        ungranted_locks=0,
+    )
+
+    assert postcondition == {
+        "schema_version": 1,
+        "app": "civibus-regional-refresh",
+        "machine_id": "080d391a2ed098",
+        "authority": "state/WA",
+        "execution_plan": "regional-wa-scheduled",
+        "refresh_run_id": "e00cb630-7024-4c5d-8c10-ef2a87e83db7",
+        "job_key": "state-wa-contributions",
+        "execution_origin": "operator_attended",
+        "pull_status": "failed",
+        "completed_at": "2026-08-30T02:00:00Z",
+        "metadata_updates": 0,
+        "running_refresh_rows": 0,
+        "active_refresh_backends": 0,
+        "long_idle_transactions": 0,
+        "ungranted_locks": 0,
+        "database": {"host": "civibus-db.internal", "port": 5432, "name": "civibus"},
+    }
+    assert json.dumps(postcondition, sort_keys=True) + "\n" == runner._serialize_refresh_postcondition(postcondition)
+
+
+def test_historical_recovery_orders_preflight_advisory_row_lock_reproof_commit_and_postcondition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _historical_recovery_identity()
+    running = _historical_running_attempt(identity)
+    terminal = running.model_copy(
+        update={
+            "pull_status": "failed",
+            "completed_at": datetime(2026, 8, 30, 2, 0, tzinfo=timezone.utc),
+            "message": runner._HISTORICAL_RECOVERY_MESSAGE,
+            "error": runner._HISTORICAL_RECOVERY_ERROR,
+        }
+    )
+    running_proof = runner._HistoricalRecoveryQuiescence(0, 0, 1, 0, 0)
+    terminal_proof = runner._HistoricalRecoveryQuiescence(0, 0, 0, 0, 0)
+    events: list[str] = []
+    connection = MagicMock()
+    connection.commit.side_effect = lambda: events.append("commit")
+    connection.rollback.side_effect = lambda: events.append("rollback")
+    attempts = iter((running, terminal))
+    quiescence = iter((running_proof, running_proof, terminal_proof))
+
+    monkeypatch.setattr(
+        runner,
+        "_require_historical_recovery_database_identity",
+        lambda *args: events.append("database"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "select_refresh_run",
+        lambda *args: events.append("select") or next(attempts),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_select_historical_recovery_data_source_rows",
+        lambda *args: events.append("data_sources") or [("WA PDC Contributions", "state", "WA")],
+    )
+    monkeypatch.setattr(
+        runner,
+        "_read_historical_recovery_quiescence",
+        lambda *args: events.append("quiescence") or next(quiescence),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_try_acquire_historical_recovery_advisory_lock",
+        lambda *args: events.append("advisory_lock") or True,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_select_historical_recovery_attempt_for_update",
+        lambda *args: events.append("row_lock") or running,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_finish_refresh_run",
+        lambda *args, **kwargs: events.append("finish"),
+    )
+
+    outcome = runner.recover_historical_refresh_attempt(connection, identity)
+
+    assert outcome.already_terminal is False
+    assert outcome.postcondition["pull_status"] == "failed"
+    assert events == [
+        "database",
+        "select",
+        "data_sources",
+        "quiescence",
+        "advisory_lock",
+        "row_lock",
+        "data_sources",
+        "quiescence",
+        "finish",
+        "commit",
+        "select",
+        "data_sources",
+        "quiescence",
+        "rollback",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("proof", "expected_error"),
+    [
+        (runner._HistoricalRecoveryQuiescence(1, 1, 1, 0, 0), "exact historical refresh job"),
+        (runner._HistoricalRecoveryQuiescence(0, 1, 1, 0, 0), "conflicting refresh backend"),
+        (runner._HistoricalRecoveryQuiescence(0, 0, 2, 0, 0), "running-row quiescence mismatch"),
+        (runner._HistoricalRecoveryQuiescence(0, 0, 1, 1, 0), "long-idle"),
+        (runner._HistoricalRecoveryQuiescence(0, 0, 1, 0, 1), "ungranted"),
+    ],
+)
+def test_historical_recovery_refuses_nonquiescent_backend_row_transaction_or_lock_state(
+    proof: runner._HistoricalRecoveryQuiescence,
+    expected_error: str,
+) -> None:
+    with pytest.raises(RuntimeError, match=expected_error):
+        runner._require_historical_recovery_quiescence(proof, expected_running_refresh_rows=1)
+
+
+def test_historical_recovery_rolls_back_when_attempt_changes_after_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = _historical_recovery_identity()
+    running = _historical_running_attempt(identity)
+    changed = running.model_copy(update={"message": "changed after preflight"})
+    connection = MagicMock()
+    finish_refresh_run = MagicMock()
+    monkeypatch.setattr(runner, "_require_historical_recovery_database_identity", lambda *args: None)
+    monkeypatch.setattr(runner, "select_refresh_run", lambda *args: running)
+    monkeypatch.setattr(
+        runner,
+        "_select_historical_recovery_data_source_rows",
+        lambda *args: [("WA PDC Contributions", "state", "WA")],
+    )
+    monkeypatch.setattr(
+        runner,
+        "_read_historical_recovery_quiescence",
+        lambda *args: runner._HistoricalRecoveryQuiescence(0, 0, 1, 0, 0),
+    )
+    monkeypatch.setattr(runner, "_try_acquire_historical_recovery_advisory_lock", lambda *args: True)
+    monkeypatch.setattr(runner, "_select_historical_recovery_attempt_for_update", lambda *args: changed)
+    monkeypatch.setattr(runner, "_finish_refresh_run", finish_refresh_run)
+
+    with pytest.raises(RuntimeError, match="changed after preflight|outcome identity mismatch"):
+        runner.recover_historical_refresh_attempt(connection, identity)
+
+    connection.rollback.assert_called_once_with()
+    connection.commit.assert_not_called()
+    finish_refresh_run.assert_not_called()
+
+
+def test_historical_recovery_postcondition_persistence_is_exact_idempotent_and_no_overwrite(
+    tmp_path: Path,
+) -> None:
+    identity = _historical_recovery_identity()
+    terminal = _historical_running_attempt(identity).model_copy(
+        update={
+            "pull_status": "failed",
+            "completed_at": datetime(2026, 8, 30, 2, 0, tzinfo=timezone.utc),
+            "message": runner._HISTORICAL_RECOVERY_MESSAGE,
+            "error": runner._HISTORICAL_RECOVERY_ERROR,
+        }
+    )
+    postcondition = runner.build_historical_recovery_postcondition(
+        identity,
+        terminal,
+        running_refresh_rows=0,
+        active_refresh_backends=0,
+        long_idle_transactions=0,
+        ungranted_locks=0,
+    )
+    path = tmp_path / "postcondition.json"
+
+    runner.persist_historical_recovery_postcondition(path, postcondition)
+    runner.persist_historical_recovery_postcondition(path, postcondition)
+
+    assert path.read_text(encoding="utf-8") == json.dumps(postcondition, sort_keys=True) + "\n"
+    path.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="different content"):
+        runner.persist_historical_recovery_postcondition(path, postcondition)
+
+
+def _historical_recovery_cli_args(postcondition_path: Path) -> list[str]:
+    return [
+        "--recover-refresh-run-id",
+        "e00cb630-7024-4c5d-8c10-ef2a87e83db7",
+        "--recover-job-key",
+        "state-wa-contributions",
+        "--recover-domain",
+        "campaign_finance",
+        "--recover-jurisdiction",
+        "state/WA",
+        "--recover-filing-authority-type",
+        "state",
+        "--recover-filing-authority-code",
+        "WA",
+        "--recover-data-source-name",
+        "WA PDC Contributions",
+        "--recover-execution-origin",
+        "operator_attended",
+        "--recover-started-at",
+        "2026-08-29T23:39:28Z",
+        "--recover-app",
+        "civibus-regional-refresh",
+        "--recover-machine-id",
+        "080d391a2ed098",
+        "--recover-authority",
+        "state/WA",
+        "--recover-execution-plan",
+        "regional-wa-scheduled",
+        "--recover-database-host",
+        "civibus-db.internal",
+        "--recover-database-port",
+        "5432",
+        "--recover-database-name",
+        "civibus",
+        "--recover-postcondition-json",
+        str(postcondition_path),
+    ]
+
+
+def test_historical_recovery_cli_requires_and_dispatches_complete_expected_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: list[tuple[runner.HistoricalRefreshRecoveryIdentity, Path]] = []
+    monkeypatch.setattr(
+        runner,
+        "_run_historical_recovery_cli",
+        lambda identity, path: captured.append((identity, path)) or 0,
+    )
+    postcondition_path = tmp_path / "postcondition.json"
+
+    exit_code = runner.main(_historical_recovery_cli_args(postcondition_path))
+
+    assert exit_code == 0
+    assert captured == [(_historical_recovery_identity(), postcondition_path)]
+
+
+def test_historical_recovery_cli_refuses_incomplete_or_mixed_mode_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dispatch = MagicMock()
+    monkeypatch.setattr(runner, "_run_historical_recovery_cli", dispatch)
+    complete = _historical_recovery_cli_args(tmp_path / "postcondition.json")
+    started_at_index = complete.index("--recover-started-at")
+    incomplete = complete[:started_at_index] + complete[started_at_index + 2 :]
+
+    with pytest.raises(SystemExit) as missing:
+        runner.main(incomplete)
+    with pytest.raises(SystemExit) as mixed:
+        runner.main([*complete, "--force"])
+
+    assert missing.value.code == 2
+    assert mixed.value.code == 2
+    dispatch.assert_not_called()
 
 
 def test_build_refresh_plan_all_scope_emits_canonical_stage6_job_keys() -> None:
     jobs = job_builders.build_refresh_plan(scope="all")
-    job_keys = {job.key for job in jobs}
-    expected_job_keys = {
-        "federal-fec-schedule-a",
+    job_keys = tuple(job.key for job in jobs)
+    expected_job_keys = (
         "federal-fec-masters",
-        "federal-fec-schedule-b",
+        "federal-fec-schedule-a",
         "federal-fec-committee-summary",
-        "federal-fec-races",
         "federal-congress-spine",
+        "federal-fec-races",
         "federal-donor-search-rollup",
-        "federal-enrichment",
+        "federal-fec-schedule-b",
         "federal-fec-schedule-e",
+        "federal-enrichment",
         "federal-irs-527",
         "federal-geometry-probe",
         "state-al-contributions",
@@ -108,16 +531,18 @@ def test_build_refresh_plan_all_scope_emits_canonical_stage6_job_keys() -> None:
         "state-ky-contributions-11-5-2024",
         "state-ky-contributions-5-19-2026",
         "state-la-contributions",
-        "state-la-expenditures",
         "state-la-loans",
+        "state-la-expenditures",
         "state-ma-contributions",
         "state-ma-expenditures",
         "state-mn-contributions",
         "state-mn-expenditures",
         "state-mn-independent_expenditures",
+        "state-nc-committee-discovery",
+        "civic-nc-candidate-listing",
         "state-ne-contributions",
-        "state-ne-expenditures",
         "state-ne-loans",
+        "state-ne-expenditures",
         "state-nj-contributions",
         "state-ny-contributions",
         "state-ny-expenditures",
@@ -143,29 +568,26 @@ def test_build_refresh_plan_all_scope_emits_canonical_stage6_job_keys() -> None:
         "city-phl-contributions",
         "city-phl-expenditures",
         "city-sf-transactions",
-        "state-nc-committee-discovery",
-        "civic-nc-candidate-listing",
+        "civic-rosters-council-of-state-ag-comm",
+        "civic-rosters-council-of-state-ag",
+        "civic-rosters-council-of-state-auditor",
+        "civic-rosters-nc-appeals",
+        "civic-rosters-council-of-state-gov",
+        "civic-rosters-council-of-state-ins-comm",
+        "civic-rosters-council-of-state-labor-comm",
+        "civic-rosters-council-of-state-lt-gov",
+        "civic-rosters-council-of-state-sos",
+        "civic-rosters-nc-senate",
+        "civic-rosters-nc-supreme",
+        "civic-rosters-council-of-state-supt",
+        "civic-rosters-council-of-state-treasurer",
         "civic-rosters-us-house-nc",
         "civic-rosters-us-senate-nc-ii",
         "civic-rosters-us-senate-nc-iii",
-        "civic-rosters-nc-senate",
-        "civic-rosters-council-of-state-gov",
-        "civic-rosters-council-of-state-lt-gov",
-        "civic-rosters-council-of-state-ag",
-        "civic-rosters-council-of-state-sos",
-        "civic-rosters-council-of-state-treasurer",
-        "civic-rosters-council-of-state-auditor",
-        "civic-rosters-council-of-state-supt",
-        "civic-rosters-council-of-state-ag-comm",
-        "civic-rosters-council-of-state-ins-comm",
-        "civic-rosters-council-of-state-labor-comm",
-        "civic-rosters-nc-supreme",
-        "civic-rosters-nc-appeals",
-    }
-    expected_job_keys.update({f"civics-roster-{metadata.source_id}" for metadata in list_nc_roster_source_metadata()})
+    ) + tuple(f"civics-roster-{metadata.source_id}" for metadata in list_nc_roster_source_metadata())
 
     assert job_keys == expected_job_keys
-
+    assert len(job_keys) == len(set(job_keys))
     assert len(job_keys) == 115
     assert "state-nc-ie-transactions" not in job_keys
     assert "state-nc-transactions" not in job_keys
@@ -233,54 +655,6 @@ def test_build_refresh_plan_adds_nc_jobs_from_independent_input_paths() -> None:
     assert "civics-nc-past-results-2022-2024" not in job_keys_with_transaction_nc
     assert "civics-nc-past-results-2022-2024" not in job_keys_with_ie_nc
     assert "civics-nc-past-results-2022-2024" not in job_keys_with_both_nc
-
-
-def test_build_refresh_plan_wires_stage_locked_parameters(monkeypatch: pytest.MonkeyPatch) -> None:
-    run_co_refresh = MagicMock()
-    run_pa_refresh = MagicMock()
-    run_ne_refresh = MagicMock()
-    run_la_refresh = MagicMock()
-    run_ga_refresh = MagicMock()
-    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
-
-    monkeypatch.setattr(job_builders, "run_co_refresh", run_co_refresh)
-    monkeypatch.setattr(job_builders, "run_pa_refresh", run_pa_refresh)
-    monkeypatch.setattr(job_builders, "run_ne_refresh", run_ne_refresh)
-    monkeypatch.setattr(job_builders, "run_la_refresh", run_la_refresh)
-    monkeypatch.setattr(job_builders, "run_ga_refresh", run_ga_refresh)
-
-    jobs = job_builders.build_refresh_plan(
-        scope="all",
-        parameters=runner.RunnerParameters(
-            fec_cycle=2024,
-            fec_limit=50,
-            co_year=2026,
-            pa_year=2025,
-            ga_candidate="Hatfield",
-            ga_date_start="01/01/2025",
-            ga_date_end="12/31/2025",
-        ),
-        now=now,
-    )
-    jobs_by_key = {job.key: job for job in jobs}
-
-    jobs_by_key["state-co-contributions"].run_callable()
-    jobs_by_key["state-pa-contributions"].run_callable()
-    jobs_by_key["state-ne-contributions"].run_callable()
-    jobs_by_key["state-la-contributions"].run_callable()
-    jobs_by_key["state-ga-contributions"].run_callable()
-
-    run_co_refresh.assert_called_once_with(year=2026, data_type="contributions", download=True, allow_insecure_tls=True)
-    run_pa_refresh.assert_called_once_with(year=2025, data_type="contributions", download=True)
-    run_ne_refresh.assert_called_once_with(year=2026, data_type="contributions", download=True)
-    run_la_refresh.assert_called_once_with(year=2026, data_type="contributions", download=True)
-    run_ga_refresh.assert_called_once_with(
-        candidate="Hatfield",
-        date_start="01/01/2025",
-        date_end="12/31/2025",
-        data_type="contributions",
-        download=True,
-    )
 
 
 def test_build_refresh_plan_wires_federal_schedule_a_bulk_job_parameters(
@@ -816,13 +1190,14 @@ def test_select_latest_completed_run_returns_newer_failed_attempt_not_older_succ
     completed_at = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
     connection = MagicMock()
     cursor = connection.cursor.return_value.__enter__.return_value
-    cursor.fetchone.return_value = (completed_at, "crashed", 11, 22, 33, 44, 55, "boom")
+    cursor.fetchone.return_value = (completed_at, "crashed", "legacy_unknown", 11, 22, 33, 44, 55, "boom")
 
     latest_run = runner.select_latest_completed_run(connection, job)
 
     assert latest_run == {
         "completed_at": completed_at,
         "pull_status": "crashed",
+        "execution_origin": "legacy_unknown",
         "inserted_count": 11,
         "skipped_count": 22,
         "quarantined_count": 33,
@@ -834,7 +1209,7 @@ def test_select_latest_completed_run_returns_newer_failed_attempt_not_older_succ
     params = cursor.execute.call_args.args[1]
     normalized_query = " ".join(query.split())
     assert (
-        "SELECT completed_at, pull_status, inserted_count, skipped_count, quarantined_count, "
+        "SELECT completed_at, pull_status, execution_origin, inserted_count, skipped_count, quarantined_count, "
         "superseded_count, error_count, error FROM core.refresh_run"
     ) in normalized_query
     assert "job_key = %s" in query
@@ -1110,71 +1485,6 @@ def test_build_refresh_plan_includes_nc_transactions_with_committee_docs_path() 
     assert cadence_by_source["North Carolina SBoE Transaction Search"] == "daily"
 
 
-def test_build_refresh_plan_passes_committee_docs_path_to_nc_job(monkeypatch: pytest.MonkeyPatch) -> None:
-    committee_docs_path = Path("/tmp/nc-committee-docs.csv")
-    run_nc_refresh = MagicMock()
-    monkeypatch.setattr(job_builders, "run_nc_refresh", run_nc_refresh)
-
-    jobs = job_builders.build_refresh_plan(
-        scope="all",
-        parameters=runner.RunnerParameters(
-            nc_committee_docs_path=committee_docs_path,
-            nc_committee_id="C12345",
-            nc_committee_name="Example Committee",
-            nc_date_from="01/01/2026",
-            nc_date_to="03/31/2026",
-            nc_trans_type="exp",
-        ),
-    )
-
-    nc_job = next(job for job in jobs if job.key == "state-nc-transactions")
-    nc_job.run_callable()
-
-    run_nc_refresh.assert_called_once()
-    assert run_nc_refresh.call_args.kwargs["committee_docs_path"] == committee_docs_path
-    assert run_nc_refresh.call_args.kwargs["committee_id"] == "C12345"
-    assert run_nc_refresh.call_args.kwargs["committee_name"] == "Example Committee"
-    assert run_nc_refresh.call_args.kwargs["date_from"] == "01/01/2026"
-    assert run_nc_refresh.call_args.kwargs["date_to"] == "03/31/2026"
-    assert run_nc_refresh.call_args.kwargs["trans_type"] == "exp"
-    assert run_nc_refresh.call_args.kwargs["output_path"].name == "transactions.csv"
-
-
-def test_build_refresh_plan_wires_nc_ie_transaction_job_to_pathless_run_nc_refresh(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    committee_docs_path = Path("/tmp/nc-committee-docs.csv")
-    ie_document_index_path = Path("/tmp/nc-ie-document-index.csv")
-    run_nc_refresh = MagicMock()
-    monkeypatch.setattr(job_builders, "run_nc_refresh", run_nc_refresh)
-
-    jobs = job_builders.build_refresh_plan(
-        scope="all",
-        parameters=runner.RunnerParameters(
-            nc_committee_docs_path=committee_docs_path,
-            nc_committee_id="C12345",
-            nc_committee_name="Example Committee",
-            nc_date_from="01/01/2026",
-            nc_date_to="03/31/2026",
-            nc_trans_type="exp",
-            nc_ie_document_index_path=ie_document_index_path,
-        ),
-    )
-
-    nc_job_keys = [job.key for job in jobs if job.key.startswith("state-nc")]
-    assert nc_job_keys == [
-        "state-nc-ie-document-index",
-        "state-nc-ie-transactions",
-        "state-nc-committee-discovery",
-        "state-nc-transactions",
-    ]
-
-    ie_transactions_job = next(job for job in jobs if job.key == "state-nc-ie-transactions")
-    ie_transactions_job.run_callable()
-
-    run_nc_refresh.assert_called_once_with(data_type="ie-transactions")
-
-
 def test_build_refresh_plan_rejects_nc_runner_request_without_explicit_committee_scope() -> None:
     committee_docs_path = Path("/tmp/nc-committee-docs.csv")
 
@@ -1183,140 +1493,6 @@ def test_build_refresh_plan_rejects_nc_runner_request_without_explicit_committee
             scope="all",
             parameters=runner.RunnerParameters(nc_committee_docs_path=committee_docs_path),
         )
-
-
-def test_build_refresh_plan_wires_al_ky_or_tx_pa_il_in_la_and_ne_run_callables(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run_al_refresh = MagicMock()
-    run_ky_refresh = MagicMock()
-    run_or_refresh = MagicMock()
-    run_tx_refresh = MagicMock()
-    run_pa_refresh = MagicMock()
-    run_il_refresh = MagicMock()
-    run_in_refresh = MagicMock()
-    run_la_refresh = MagicMock()
-    run_ne_refresh = MagicMock()
-    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
-
-    monkeypatch.setattr(job_builders, "run_al_refresh", run_al_refresh)
-    monkeypatch.setattr(job_builders, "run_ky_refresh", run_ky_refresh)
-    monkeypatch.setattr(job_builders, "run_or_refresh", run_or_refresh)
-    monkeypatch.setattr(job_builders, "run_tx_refresh", run_tx_refresh)
-    monkeypatch.setattr(job_builders, "run_pa_refresh", run_pa_refresh)
-    monkeypatch.setattr(job_builders, "run_il_refresh", run_il_refresh)
-    monkeypatch.setattr(job_builders, "run_in_refresh", run_in_refresh)
-    monkeypatch.setattr(job_builders, "run_la_refresh", run_la_refresh)
-    monkeypatch.setattr(job_builders, "run_ne_refresh", run_ne_refresh)
-
-    jobs = job_builders.build_refresh_plan(scope="all", now=now)
-    jobs_by_key = {job.key: job for job in jobs}
-
-    jobs_by_key["state-al-contributions"].run_callable()
-    jobs_by_key["state-al-expenditures"].run_callable()
-    # KY uses election-date scoped contribution jobs — run the 2026 primary one
-    jobs_by_key["state-ky-contributions-5-19-2026"].run_callable()
-    jobs_by_key["state-ky-expenditures"].run_callable()
-    jobs_by_key["state-or-contributions"].run_callable()
-    jobs_by_key["state-or-expenditures"].run_callable()
-    jobs_by_key["state-tx-contributions"].run_callable()
-    jobs_by_key["state-tx-expenditures"].run_callable()
-    jobs_by_key["state-tx-loans"].run_callable()
-
-    jobs_by_key["state-pa-contributions"].run_callable()
-    jobs_by_key["state-pa-expenditures"].run_callable()
-    jobs_by_key["state-pa-debts"].run_callable()
-    jobs_by_key["state-pa-receipts"].run_callable()
-    jobs_by_key["state-il-contributions"].run_callable()
-    jobs_by_key["state-il-expenditures"].run_callable()
-    jobs_by_key["state-in-contributions"].run_callable()
-    jobs_by_key["state-in-expenditures"].run_callable()
-    jobs_by_key["state-la-contributions"].run_callable()
-    jobs_by_key["state-la-expenditures"].run_callable()
-    jobs_by_key["state-la-loans"].run_callable()
-    jobs_by_key["state-ne-contributions"].run_callable()
-    jobs_by_key["state-ne-expenditures"].run_callable()
-    jobs_by_key["state-ne-loans"].run_callable()
-
-    assert [call.kwargs for call in run_al_refresh.call_args_list] == [
-        {"year_from": 2022, "data_type": "contributions", "download": True},
-        {"year_from": 2022, "data_type": "expenditures", "download": True},
-    ]
-    # KY uses election-date scoping for contributions; we only ran the 2026 primary job
-    assert [call.kwargs for call in run_ky_refresh.call_args_list] == [
-        {"year_from": 2022, "data_type": "contributions", "download": True, "election_date": "5/19/2026 12:00:00 AM"},
-        {"year_from": 2022, "data_type": "expenditures", "download": True},
-    ]
-    assert [call.kwargs for call in run_or_refresh.call_args_list] == [
-        {"year_from": 2022, "data_type": "contributions", "download": True},
-        {"year_from": 2022, "data_type": "expenditures", "download": True},
-    ]
-    assert [call.kwargs for call in run_tx_refresh.call_args_list] == [
-        {"data_type": "contributions", "download": True, "year_from": 2022},
-        {"data_type": "expenditures", "download": True, "year_from": 2022},
-        {"data_type": "loans", "download": True, "year_from": 2022},
-    ]
-    assert [call.kwargs for call in run_pa_refresh.call_args_list] == [
-        {"year": 2026, "data_type": "contributions", "download": True},
-        {"year": 2026, "data_type": "expenditures", "download": True},
-        {"year": 2026, "data_type": "debts", "download": True},
-        {"year": 2026, "data_type": "receipts", "download": True},
-    ]
-    assert [call.kwargs for call in run_il_refresh.call_args_list] == [
-        {"data_type": "contributions", "download": True},
-        {"data_type": "expenditures", "download": True},
-    ]
-    assert [call.kwargs for call in run_in_refresh.call_args_list] == [
-        {"year": 2026, "data_type": "contributions", "download": True},
-        {"year": 2026, "data_type": "expenditures", "download": True},
-    ]
-    assert [call.kwargs for call in run_la_refresh.call_args_list] == [
-        {"year": 2026, "data_type": "contributions", "download": True},
-        {"year": 2026, "data_type": "expenditures", "download": True},
-        {"year": 2026, "data_type": "loans", "download": True},
-    ]
-    assert [call.kwargs for call in run_ne_refresh.call_args_list] == [
-        {"year": 2026, "data_type": "contributions", "download": True},
-        {"year": 2026, "data_type": "expenditures", "download": True},
-        {"year": 2026, "data_type": "loans", "download": True},
-    ]
-
-
-def test_build_refresh_plan_wires_wi_run_callable(monkeypatch: pytest.MonkeyPatch) -> None:
-    run_wi_refresh = MagicMock()
-    monkeypatch.setattr(job_builders, "run_wi_refresh", run_wi_refresh)
-
-    jobs = job_builders.build_refresh_plan(scope="all")
-    jobs_by_key = {job.key: job for job in jobs}
-
-    assert "state-wi-transactions" in jobs_by_key
-    assert jobs_by_key["state-wi-transactions"].data_source_names == ("WI Sunshine Transactions Export",)
-    assert jobs_by_key["state-wi-transactions"].cadence == "daily"
-
-    jobs_by_key["state-wi-transactions"].run_callable()
-    run_wi_refresh.assert_called_once_with(data_type="transactions", download=True)
-
-
-def test_build_refresh_plan_uses_pa_year_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    run_co_refresh = MagicMock()
-    run_pa_refresh = MagicMock()
-    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
-
-    monkeypatch.setattr(job_builders, "run_co_refresh", run_co_refresh)
-    monkeypatch.setattr(job_builders, "run_pa_refresh", run_pa_refresh)
-
-    jobs = job_builders.build_refresh_plan(
-        scope="all",
-        parameters=runner.RunnerParameters(pa_year=2025),
-        now=now,
-    )
-    jobs_by_key = {job.key: job for job in jobs}
-
-    jobs_by_key["state-co-contributions"].run_callable()
-    jobs_by_key["state-pa-contributions"].run_callable()
-
-    run_co_refresh.assert_called_once_with(year=2026, data_type="contributions", download=True, allow_insecure_tls=True)
-    run_pa_refresh.assert_called_once_with(year=2025, data_type="contributions", download=True)
 
 
 def test_build_refresh_plan_includes_fl_jobs_in_all_scope() -> None:
@@ -1352,26 +1528,6 @@ def test_build_refresh_plan_excludes_fl_officeholder_directory_sources() -> None
 
     assert "FL Senate Officeholder Directory" not in fl_source_names
     assert "FL House Representatives Directory (Blocked in Datacenter)" not in fl_source_names
-
-
-def test_build_refresh_plan_wires_fl_run_callables(monkeypatch: pytest.MonkeyPatch) -> None:
-    run_fl_refresh = MagicMock()
-    monkeypatch.setattr(job_builders, "run_fl_refresh", run_fl_refresh)
-
-    jobs = job_builders.build_refresh_plan(scope="all")
-    jobs_by_key = {job.key: job for job in jobs}
-
-    jobs_by_key["state-fl-contributions"].run_callable()
-    jobs_by_key["state-fl-expenditures"].run_callable()
-    jobs_by_key["state-fl-transfers"].run_callable()
-    jobs_by_key["state-fl-other"].run_callable()
-
-    assert [call.kwargs for call in run_fl_refresh.call_args_list] == [
-        {"data_type": "contributions", "download": True},
-        {"data_type": "expenditures", "download": True},
-        {"data_type": "transfers", "download": True},
-        {"data_type": "other", "download": True},
-    ]
 
 
 def test_build_refresh_plan_priority_scope_excludes_fl() -> None:
@@ -2064,7 +2220,12 @@ def test_run_job_syncs_metadata_through_shared_helper(monkeypatch: pytest.Monkey
         jurisdiction="state/CO",
         name="TRACER Bulk Download — Contributions",
     )
-    sync_data_source_metadata.assert_called_once_with(connection, data_source_id, pull_status="success")
+    sync_data_source_metadata.assert_called_once_with(
+        connection,
+        data_source_id,
+        pull_status="success",
+        commit=False,
+    )
 
 
 def test_civic_roster_job_cadence_gate_and_metadata_sync(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2112,7 +2273,12 @@ def test_civic_roster_job_cadence_gate_and_metadata_sync(monkeypatch: pytest.Mon
         jurisdiction="federal/officeholder/house",
         name="US House Officeholder Directory (NC)",
     )
-    sync_data_source_metadata.assert_called_once_with(connection, data_source_id, pull_status="success")
+    sync_data_source_metadata.assert_called_once_with(
+        connection,
+        data_source_id,
+        pull_status="success",
+        commit=False,
+    )
 
 
 def test_run_job_includes_loader_counts_in_success_message(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2149,6 +2315,11 @@ class _RefreshRunCallRecorder:
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(runner, "insert_refresh_run", self.insert_refresh_run)
         monkeypatch.setattr(runner, "update_refresh_run", self.update_refresh_run)
+        monkeypatch.setattr(
+            runner,
+            "_select_started_attempt_for_update",
+            lambda connection, refresh_run_id: self.started_run,
+        )
 
     def recording_callable(self, *, result: object = None, error: Exception | None = None) -> MagicMock:
         def _run() -> object:
@@ -2313,8 +2484,14 @@ def test_run_job_reports_metadata_sync_failure_even_when_finishing_the_attempt_a
     connection = MagicMock()
     job = _job_for_tests(key="double-failure-job", run_callable=MagicMock())
 
-    monkeypatch.setattr(runner, "insert_refresh_run", MagicMock())
+    insert_refresh_run = MagicMock()
+    monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
     monkeypatch.setattr(runner, "update_refresh_run", MagicMock(side_effect=RuntimeError("finish write boom")))
+    monkeypatch.setattr(
+        runner,
+        "_select_started_attempt_for_update",
+        lambda connection, refresh_run_id: insert_refresh_run.call_args.args[1],
+    )
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=uuid4()))
     monkeypatch.setattr(
         runner,
@@ -2324,10 +2501,10 @@ def test_run_job_reports_metadata_sync_failure_even_when_finishing_the_attempt_a
 
     result = runner.run_job(connection, job)
 
-    # The original failure is the one the caller must see; the salvage attempt is best-effort.
+    # The original failure remains first, and exact terminal-finalization failure is explicit.
     assert result.status == "failed"
     assert result.message == "Metadata sync failed"
-    assert result.error == "metadata write boom"
+    assert result.error == "metadata write boom; terminal finalization refused: finish write boom"
 
 
 @pytest.mark.integration
@@ -2483,6 +2660,7 @@ def test_select_latest_completed_run_ignores_an_in_flight_running_row(
         assert latest_without_in_flight_row == {
             "completed_at": terminal_at,
             "pull_status": "degraded",
+            "execution_origin": "legacy_unknown",
             "inserted_count": 7,
             "skipped_count": 3,
             "quarantined_count": 1,
@@ -2710,6 +2888,33 @@ def test_run_job_records_empty_pull_status_for_zero_activity_loader_result(monke
     assert result.message == "Refresh job completed with no inserted rows"
     assert update_refresh_run.call_args.args[1].pull_status == "empty"
     # Honest reruns must NOT backfill a fake success state into core.data_source.
+    sync_data_source_metadata.assert_not_called()
+
+
+def test_complete_source_marker_cannot_promote_freshness_for_a_foreign_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = MagicMock()
+    run_callable = MagicMock(
+        return_value=SimpleNamespace(
+            inserted=0,
+            skipped=0,
+            quarantined=0,
+            superseded=0,
+            errors=0,
+            source_complete=True,
+            source_row_count=6_358_218,
+        )
+    )
+    job = _job_for_tests(key="state-wa-loans", run_callable=run_callable)
+    sync_data_source_metadata = MagicMock()
+    monkeypatch.setattr(runner, "insert_refresh_run", MagicMock())
+    monkeypatch.setattr(runner, "update_refresh_run", MagicMock())
+    monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
+
+    result = runner.run_job(connection, job)
+
+    assert result.status == "empty"
     sync_data_source_metadata.assert_not_called()
 
 
@@ -3253,6 +3458,7 @@ def test_run_all_jobs_stops_after_failure_when_requested(monkeypatch: pytest.Mon
         connection,
         first_job,
         dry_run=False,
+        execution_origin="legacy_unknown",
         on_heartbeat=None,
         heartbeat_interval_seconds=runner._HEARTBEAT_INTERVAL_SECONDS,
     )
@@ -3378,6 +3584,7 @@ def test_run_all_jobs_isolates_gating_failures_and_continues(monkeypatch: pytest
         connection,
         second_job,
         dry_run=False,
+        execution_origin="legacy_unknown",
         on_heartbeat=None,
         heartbeat_interval_seconds=runner._HEARTBEAT_INTERVAL_SECONDS,
     )
@@ -3426,109 +3633,6 @@ def test_run_all_jobs_force_skips_cadence_lookup_and_executes_jobs(monkeypatch: 
     assert [result.status for result in results] == ["success", "success"]
     select_latest_pull_at.assert_not_called()
     assert run_job.call_count == 2
-
-
-def test_build_refresh_plan_wires_nj_run_callable(monkeypatch: pytest.MonkeyPatch) -> None:
-    run_nj_refresh = MagicMock()
-    monkeypatch.setattr(job_builders, "run_nj_refresh", run_nj_refresh)
-
-    jobs = job_builders.build_refresh_plan(scope="all")
-    jobs_by_key = {job.key: job for job in jobs}
-
-    assert "state-nj-contributions" in jobs_by_key
-    assert jobs_by_key["state-nj-contributions"].data_source_names == ("ELEC Reports and Data Search Export API",)
-    assert jobs_by_key["state-nj-contributions"].cadence == "quarterly"
-
-    jobs_by_key["state-nj-contributions"].run_callable()
-    run_nj_refresh.assert_called_once_with(data_type="contributions", download=True)
-
-
-def test_build_state_jobs_download_states_call_download_builder_directly(monkeypatch: pytest.MonkeyPatch) -> None:
-    configs_by_state_code = job_builders._discover_configs_by_state_code()
-    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
-    parameters = runner.RunnerParameters()
-    build_download_transaction_jobs = MagicMock(return_value=[])
-    monkeypatch.setattr(job_builders, "_build_download_transaction_jobs", build_download_transaction_jobs)
-
-    for state_code in (
-        "AL",
-        "CO",
-        "FL",
-        "IN",
-        "KY",
-        "LA",
-        "MA",
-        "MN",
-        "NE",
-        "NJ",
-        "NY",
-        "OR",
-        "PA",
-        "TX",
-        "VA",
-        "WA",
-        "WI",
-    ):
-        job_builders._build_state_jobs(configs_by_state_code[state_code], parameters=parameters, now=now)
-
-    assert [call.kwargs for call in build_download_transaction_jobs.call_args_list] == [
-        _download_job_call(
-            "AL",
-            job_builders.AL_LOADABLE_REFRESH_DATA_TYPES,
-            job_builders.run_al_refresh,
-            year_from=2022,
-        ),
-        _download_job_call(
-            "CO",
-            ("contributions", "expenditures"),
-            job_builders.run_co_refresh,
-            year=2026,
-            allow_insecure_tls=True,
-        ),
-        _download_job_call("FL", job_builders.FL_LOADABLE_REFRESH_DATA_TYPES, job_builders.run_fl_refresh),
-        _download_job_call("IN", ("contributions", "expenditures"), job_builders.run_in_refresh, year=2026),
-        # KY now uses _build_ky_jobs with election-date scoping — does not call
-        # _build_download_transaction_jobs, so it doesn't appear in this list.
-        _download_job_call("LA", job_builders.LA_LOADABLE_REFRESH_DATA_TYPES, job_builders.run_la_refresh, year=2026),
-        _download_job_call("MA", ("contributions", "expenditures"), job_builders.run_ma_refresh),
-        _download_job_call(
-            "MN",
-            ("contributions", "expenditures", "independent_expenditures"),
-            job_builders.run_mn_refresh,
-        ),
-        _download_job_call("NE", job_builders.NE_LOADABLE_REFRESH_DATA_TYPES, job_builders.run_ne_refresh, year=2026),
-        _download_job_call("NJ", ("contributions",), job_builders.run_nj_refresh),
-        _download_job_call(
-            "NY",
-            ("contributions", "expenditures", "independent_expenditures"),
-            job_builders.run_ny_refresh,
-        ),
-        _download_job_call(
-            "OR",
-            job_builders.OR_LOADABLE_REFRESH_DATA_TYPES,
-            job_builders.run_or_refresh,
-            year_from=2022,
-        ),
-        _download_job_call("PA", job_builders.PA_LOADABLE_REFRESH_DATA_TYPES, job_builders.run_pa_refresh, year=2026),
-        _download_job_call(
-            "TX",
-            ("contributions", "expenditures", "loans"),
-            job_builders.run_tx_refresh,
-            year_from=2022,
-        ),
-        _download_job_call(
-            "VA",
-            ("contributions", "expenditures"),
-            job_builders.run_va_refresh,
-            year_month="2026_06",
-        ),
-        _download_job_call(
-            "WA",
-            ("contributions", "expenditures", "independent_expenditures", "loans"),
-            job_builders.run_wa_refresh,
-        ),
-        _download_job_call("WI", ("transactions",), job_builders.run_wi_refresh),
-    ]
 
 
 def test_build_argument_parser_accepts_civic_candidate_listing_flags() -> None:
@@ -3689,11 +3793,21 @@ def test_main_builds_refresh_plan_before_acquiring_per_job_locks(
         events.append("get_connection")
         return FakeConnection()
 
+    def _fake_acquire_database_runner_locks(
+        connection: object,
+        jobs: list[runner.RefreshJob],
+    ) -> bool:
+        events.append("acquire_database_locks")
+        assert isinstance(connection, FakeConnection)
+        assert jobs == [job]
+        return True
+
     def _fake_run_all_jobs(
         connection: object,
         jobs: list[runner.RefreshJob],
         dry_run: bool,
         force: bool,
+        execution_origin: str,
         on_result: object,
         stop_on_failure: bool = False,
         on_heartbeat: object = None,
@@ -3705,6 +3819,7 @@ def test_main_builds_refresh_plan_before_acquiring_per_job_locks(
         assert jobs == [job]
         assert dry_run is False
         assert force is False
+        assert execution_origin == "legacy_unknown"
         assert stop_on_failure is False
         assert callable(on_result)
         result = runner.RefreshRunResult(
@@ -3727,6 +3842,7 @@ def test_main_builds_refresh_plan_before_acquiring_per_job_locks(
     monkeypatch.setattr(runner, "_acquire_runner_lock", _fake_acquire_runner_lock)
     monkeypatch.setattr(job_builders, "build_refresh_plan", _fake_build_refresh_plan)
     monkeypatch.setattr(runner, "get_connection", _fake_get_connection)
+    monkeypatch.setattr(runner, "_try_acquire_database_runner_locks", _fake_acquire_database_runner_locks)
     monkeypatch.setattr(runner, "run_all_jobs", _fake_run_all_jobs)
     monkeypatch.setattr(runner, "_release_runner_locks", _fake_release_runner_locks)
 
@@ -3744,6 +3860,7 @@ def test_main_builds_refresh_plan_before_acquiring_per_job_locks(
         "build_refresh_plan",
         "acquire:civibus-refresh-runner-state-wa-contributions.lock",
         "get_connection",
+        "acquire_database_locks",
         "run_all_jobs",
         "close",
         "release",
@@ -3765,6 +3882,7 @@ def test_main_enables_fail_fast_for_federal_scope(monkeypatch: pytest.MonkeyPatc
     def _fake_run_all_jobs(*args: object, **kwargs: object) -> list[runner.RefreshRunResult]:
         captured["jobs"] = args[1]
         captured["stop_on_failure"] = kwargs["stop_on_failure"]
+        captured["execution_origin"] = kwargs["execution_origin"]
         return [runner.RefreshRunResult(key=job.key, status="success", metadata_updates=0, message="ok")]
 
     monkeypatch.setattr(job_builders, "build_refresh_plan", lambda **kwargs: [job])
@@ -3776,6 +3894,7 @@ def test_main_enables_fail_fast_for_federal_scope(monkeypatch: pytest.MonkeyPatc
     assert exit_code == 0
     assert captured["jobs"] == [job]
     assert captured["stop_on_failure"] is True
+    assert captured["execution_origin"] == "legacy_unknown"
 
 
 @pytest.mark.parametrize("failing_status", ["empty", "degraded", "failed", "crashed"])
@@ -4135,6 +4254,201 @@ def test_run_job_stops_heartbeat_before_returning_on_the_failed_attempt_path(
     assert len(emitted) == 2
     assert stop_event.set_calls == 1
     assert _live_heartbeat_threads() == []
+
+
+@pytest.mark.parametrize("controlled_signal", [signal.SIGTERM, signal.SIGINT])
+def test_run_job_controlled_signal_rolls_back_and_terminally_fails_exact_started_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    controlled_signal: signal.Signals,
+) -> None:
+    recorder = _RefreshRunCallRecorder()
+    previous_handler = signal.getsignal(controlled_signal)
+
+    def _write_then_interrupt() -> object:
+        recorder.calls.append("partial_write")
+        installed_handler = signal.getsignal(controlled_signal)
+        assert callable(installed_handler), "a started attempt must install its controlled-signal handler"
+        installed_handler(controlled_signal, None)
+        raise AssertionError("the controlled signal handler must interrupt the active write")
+
+    job = _job_for_tests(
+        key="state-wa-contributions",
+        run_callable=MagicMock(side_effect=_write_then_interrupt),
+    )
+    recorder.install(monkeypatch)
+
+    result = runner.run_job(recorder.connection, job, execution_origin="operator_attended")
+
+    expected_signal_name = signal.Signals(controlled_signal).name
+    assert result.status == "failed"
+    assert result.metadata_updates == 0
+    assert result.message == f"Refresh attempt interrupted by {expected_signal_name}"
+    assert recorder.calls == ["insert", "commit", "partial_write", "rollback", "update", "commit"]
+    assert recorder.finished_run.id == recorder.started_run.id
+    assert recorder.finished_run.job_key == "state-wa-contributions"
+    assert recorder.finished_run.execution_origin == "operator_attended"
+    assert recorder.finished_run.pull_status == "failed"
+    assert recorder.finished_run.completed_at is not None
+    assert recorder.finished_run.metadata_updates == 0
+    assert signal.getsignal(controlled_signal) is previous_handler
+
+
+def test_started_attempt_signal_handler_finalizes_only_once_when_signal_repeats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _RefreshRunCallRecorder()
+
+    def _repeat_signal() -> object:
+        installed_handler = signal.getsignal(signal.SIGTERM)
+        assert callable(installed_handler)
+        try:
+            installed_handler(signal.SIGTERM, None)
+        except BaseException:
+            installed_handler(signal.SIGTERM, None)
+            raise
+        raise AssertionError("the first controlled signal must interrupt")
+
+    job = _job_for_tests(key="state-wa-contributions", run_callable=MagicMock(side_effect=_repeat_signal))
+    recorder.install(monkeypatch)
+
+    result = runner.run_job(recorder.connection, job, execution_origin="operator_attended")
+
+    assert result.status == "failed"
+    assert recorder.calls.count("rollback") == 1
+    assert recorder.calls.count("update") == 1
+    assert recorder.calls.count("commit") == 2
+
+
+def test_controlled_signal_during_metadata_write_rolls_back_without_freshness_promotion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _RefreshRunCallRecorder()
+    job = _job_for_tests(
+        key="state-wa-contributions",
+        run_callable=recorder.recording_callable(result=_successful_loader_result()),
+    )
+    recorder.install(monkeypatch)
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=UUID(int=38)))
+
+    def _interrupt_metadata(*_args: object, **_kwargs: object) -> None:
+        recorder.calls.append("metadata_partial_write")
+        installed_handler = signal.getsignal(signal.SIGTERM)
+        assert callable(installed_handler)
+        installed_handler(signal.SIGTERM, None)
+
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock(side_effect=_interrupt_metadata))
+
+    result = runner.run_job(recorder.connection, job, execution_origin="operator_attended")
+
+    assert result.status == "failed"
+    assert result.metadata_updates == 0
+    assert recorder.calls == [
+        "insert",
+        "commit",
+        "run_callable",
+        "metadata_partial_write",
+        "rollback",
+        "update",
+        "commit",
+    ]
+    assert recorder.finished_run.pull_status == "failed"
+    assert recorder.finished_run.metadata_updates == 0
+
+
+@pytest.mark.parametrize(
+    ("override", "expected_error"),
+    [
+        ({"job_key": "state-wa-loans"}, "job identity"),
+        ({"execution_origin": "scheduled"}, "execution origin"),
+        ({"pull_status": "success", "completed_at": _HEARTBEAT_STARTED_AT}, "already terminal"),
+    ],
+)
+def test_interrupted_attempt_ownership_refuses_foreign_or_terminal_rows(
+    override: dict[str, object],
+    expected_error: str,
+) -> None:
+    job = _job_for_tests(key="state-wa-contributions")
+    started_at = _HEARTBEAT_STARTED_AT
+    stored = RefreshRun(
+        id=UUID(int=37),
+        job_key=job.key,
+        domain=job.domain,
+        jurisdiction=job.jurisdiction,
+        data_source_names=list(job.data_source_names),
+        execution_origin="operator_attended",
+        pull_status="running",
+        started_at=started_at,
+        completed_at=None,
+        message="Refresh job started",
+    ).model_copy(update=override)
+
+    with pytest.raises(RuntimeError, match=expected_error):
+        runner._require_exact_started_attempt(
+            stored,
+            refresh_run_id=UUID(int=37),
+            job=job,
+            started_at=started_at,
+            execution_origin="operator_attended",
+        )
+
+
+@pytest.mark.integration
+def test_controlled_signal_during_real_postgres_write_rolls_back_and_closes_exact_attempt(
+    committing_db_conn: psycopg.Connection,
+) -> None:
+    db_conn = committing_db_conn
+    job_key = "r36-signal-active-write-proof"
+    delete_refresh_runs_for_job(db_conn, job_key)
+    db_conn.execute("CREATE TABLE IF NOT EXISTS core.r36_signal_probe (value INTEGER NOT NULL)")
+    db_conn.execute("TRUNCATE core.r36_signal_probe")
+    db_conn.commit()
+    write_started = threading.Event()
+    signal_sent = threading.Event()
+
+    def _send_signal_after_write() -> None:
+        assert write_started.wait(timeout=5)
+        os.kill(os.getpid(), signal.SIGTERM)
+        signal_sent.set()
+
+    sender = threading.Thread(target=_send_signal_after_write, name="r36-signal-sender")
+
+    def _write_then_signal() -> None:
+        db_conn.execute("INSERT INTO core.r36_signal_probe (value) VALUES (36)")
+        write_started.set()
+        installed_handler = signal.getsignal(signal.SIGTERM)
+        assert callable(installed_handler)
+        assert threading.current_thread() is threading.main_thread()
+        assert installed_handler.__module__ == runner.__name__
+        threading.Event().wait(timeout=5)
+        raise AssertionError("SIGTERM must interrupt the active PostgreSQL write")
+
+    job = _job_for_tests(key=job_key, run_callable=MagicMock(side_effect=_write_then_signal))
+    try:
+        sender.start()
+        result = runner.run_job(db_conn, job, execution_origin="operator_attended")
+
+        assert result.status == "failed"
+        assert result.metadata_updates == 0
+        assert result.message == "Refresh attempt interrupted by SIGTERM"
+        assert result.error == "controlled SIGTERM interrupted the active refresh attempt"
+        assert signal_sent.wait(timeout=1)
+        assert db_conn.execute("SELECT COUNT(*) FROM core.r36_signal_probe").fetchone() == (0,)
+        terminal_row = db_conn.execute(
+            """
+            SELECT pull_status, completed_at IS NOT NULL, metadata_updates, execution_origin
+            FROM core.refresh_run
+            WHERE job_key = %s
+            """,
+            (job_key,),
+        ).fetchone()
+        assert terminal_row == ("failed", True, 0, "operator_attended")
+    finally:
+        sender.join(timeout=1)
+        assert not sender.is_alive()
+        db_conn.rollback()
+        delete_refresh_runs_for_job(db_conn, job_key)
+        db_conn.execute("DROP TABLE IF EXISTS core.r36_signal_probe")
+        db_conn.commit()
 
 
 def test_main_heartbeat_lines_do_not_change_exit_code_or_result_stream(

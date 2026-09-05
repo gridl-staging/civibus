@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,7 +16,9 @@ from tests.infra.detached_runner_helpers import (
     _run_runner,
     _status,
     _stop_if_running,
+    _terminate_exact_pid,
     _terminate_recorded_processes,
+    _wait_for_file,
     _write_executable,
 )
 
@@ -33,6 +36,53 @@ _UNREADY_WRAPPER_SECONDS = 0.7 * _READY_WINDOW_SECONDS
 _START_TIMEOUT_SECONDS = _assert_ready_window_budget_ordering(
     _READY_WINDOW_WALL_SECONDS + 4.0, readiness_delay=_UNREADY_WRAPPER_SECONDS
 )
+
+
+def _assert_cleanup_receipt_matches_empty_child(job_dir: Path, wrapper_pid: int) -> None:
+    receipt = (job_dir / "cleanup_receipt").read_text(encoding="utf-8").splitlines()[0]
+    assert receipt.split(" ") == [str(wrapper_pid), ""]
+
+
+def test_wrapper_refuses_foreign_launch_approval_without_payload(tmp_path: Path) -> None:
+    job_dir = tmp_path / "jobs" / "foreign_wrapper_approval"
+    job_dir.mkdir(parents=True)
+    (job_dir / "log").touch()
+    (job_dir / "progress.jsonl").touch()
+
+    wrapper = subprocess.Popen(
+        [
+            "bash",
+            str(Path("infra/scripts/detached_runner.sh")),
+            "__run_wrapper",
+            str(job_dir),
+            "--require-launch-approval",
+            "--",
+            "sleep",
+            "30",
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    try:
+        assert _wait_for_file(job_dir / "wrapper_ready") == f"{wrapper.pid} ready"
+        (job_dir / "cleanup_requested").write_text(f"{wrapper.pid}\n", encoding="utf-8")
+        (job_dir / "wrapper_ready").write_text(f"{os.getpid()} approved\n", encoding="utf-8")
+        try:
+            stdout, stderr = wrapper.communicate(timeout=2.0)
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError("wrapper did not bound its launch-approval wait") from exc
+
+        assert wrapper.returncode != 0, stdout or stderr
+        assert not (job_dir / "child_pid").exists()
+        _assert_cleanup_receipt_matches_empty_child(job_dir, wrapper.pid)
+    finally:
+        if wrapper.poll() is None:
+            _terminate_exact_pid(wrapper.pid)
+            wrapper.wait(timeout=5.0)
+        assert not (job_dir / "child_pid").exists()
 
 
 def test_start_accepts_delayed_valid_isolated_wrapper(tmp_path: Path) -> None:

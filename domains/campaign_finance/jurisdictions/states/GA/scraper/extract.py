@@ -114,6 +114,8 @@ def build_ga_data_source(transaction_type: str) -> DataSource:
     return DataSource(
         domain="campaign_finance",
         jurisdiction="state/GA",
+        filing_authority_type="state",
+        filing_authority_code="GA",
         name=data_source_block.name,
         source_url=data_source_block.url,
         update_frequency=data_source_block.update_frequency,

@@ -1,7 +1,3 @@
-"""
-Stub summary for jun04_3pm_1_fec_money_pipeline/civibus_dev/domains/campaign_finance/ingest/bulk_loader.py.
-"""
-
 from __future__ import annotations
 
 from datetime import date
@@ -86,13 +82,13 @@ def _select_fec_bulk_data_source_id(conn: psycopg.Connection) -> UUID | None:
             SELECT id
             FROM core.data_source
             WHERE domain = %s
-              AND jurisdiction = %s
+              AND filing_authority_type = 'federal'
+              AND filing_authority_code = 'FEC'
               AND name = %s
             LIMIT 1
             """,
             (
                 _FEC_BULK_DATA_SOURCE_DOMAIN,
-                _FEC_BULK_DATA_SOURCE_JURISDICTION,
                 FEC_BULK_DATA_SOURCE_NAME,
             ),
         )
@@ -111,6 +107,8 @@ def ensure_fec_bulk_data_source(conn: psycopg.Connection) -> UUID:
     data_source = DataSource(
         domain=_FEC_BULK_DATA_SOURCE_DOMAIN,
         jurisdiction=_FEC_BULK_DATA_SOURCE_JURISDICTION,
+        filing_authority_type="federal",
+        filing_authority_code="FEC",
         name=FEC_BULK_DATA_SOURCE_NAME,
         source_url=_FEC_BULK_DATA_SOURCE_URL,
         source_format=_FEC_BULK_DATA_SOURCE_FORMAT,
@@ -157,6 +155,7 @@ def _try_insert_bulk_source_record(
 def _upsert_committee(
     conn: psycopg.Connection,
     *,
+    data_source_id: UUID,
     mapped_fields: dict[str, object],
     organization_id: UUID,
     source_record_id: UUID,
@@ -166,6 +165,8 @@ def _upsert_committee(
             """
             INSERT INTO cf.committee (
                 fec_committee_id,
+                data_source_id,
+                native_committee_id,
                 name,
                 committee_type,
                 committee_designation,
@@ -177,8 +178,9 @@ def _upsert_committee(
                 organization_id,
                 source_record_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (fec_committee_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (data_source_id, native_committee_id)
+            WHERE data_source_id IS NOT NULL
             DO UPDATE SET
                 name = EXCLUDED.name,
                 committee_type = EXCLUDED.committee_type,
@@ -192,6 +194,8 @@ def _upsert_committee(
                 source_record_id = EXCLUDED.source_record_id
             """,
             (
+                mapped_fields["fec_committee_id"],
+                data_source_id,
                 mapped_fields["fec_committee_id"],
                 mapped_fields["name"],
                 mapped_fields["committee_type"],
@@ -278,7 +282,12 @@ def load_committees(
             )
             continue
 
-        organization_id = find_organization_by_identifier(conn, "fec_committee_id", fec_committee_id)
+        organization_id = find_organization_by_identifier(
+            conn,
+            "fec_committee_id",
+            fec_committee_id,
+            data_source_id=data_source_id,
+        )
         if organization_id is None:
             organization_id = insert_organization(
                 conn,
@@ -302,6 +311,7 @@ def load_committees(
 
         _upsert_committee(
             conn,
+            data_source_id=data_source_id,
             mapped_fields={
                 **mapped_fields,
                 "fec_committee_id": fec_committee_id,
@@ -328,6 +338,7 @@ def load_committees(
 def _upsert_candidate(
     conn: psycopg.Connection,
     *,
+    data_source_id: UUID,
     mapped_fields: dict[str, object],
     principal_committee_id: UUID | None,
     person_id: UUID,
@@ -338,6 +349,8 @@ def _upsert_candidate(
             """
             INSERT INTO cf.candidate (
                 fec_candidate_id,
+                data_source_id,
+                native_candidate_id,
                 name,
                 party,
                 office,
@@ -348,8 +361,9 @@ def _upsert_candidate(
                 person_id,
                 source_record_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (fec_candidate_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (data_source_id, native_candidate_id)
+            WHERE data_source_id IS NOT NULL
             DO UPDATE SET
                 name = EXCLUDED.name,
                 party = EXCLUDED.party,
@@ -361,6 +375,8 @@ def _upsert_candidate(
                 source_record_id = EXCLUDED.source_record_id
             """,
             (
+                mapped_fields["fec_candidate_id"],
+                data_source_id,
                 mapped_fields["fec_candidate_id"],
                 mapped_fields["name"],
                 mapped_fields["party"],
@@ -376,6 +392,7 @@ def _upsert_candidate(
     _update_candidate_person_link(
         conn,
         fec_candidate_id=str(mapped_fields["fec_candidate_id"]),
+        data_source_id=data_source_id,
         person_id=person_id,
     )
 
@@ -430,7 +447,12 @@ def load_candidates(
             processed_since_commit = _finalize_candidate_row()
             continue
 
-        person_id = find_person_by_identifier(conn, "fec_candidate_id", fec_candidate_id)
+        person_id = find_person_by_identifier(
+            conn,
+            "fec_candidate_id",
+            fec_candidate_id,
+            data_source_id=data_source_id,
+        )
         existing_person_name = find_person_canonical_name(conn, person_id)
         resolved_candidate_name = candidate_name_or_fec_id_label(
             candidate_name,
@@ -467,10 +489,15 @@ def load_candidates(
         principal_committee_fec_id = normalize_optional_text(mapped_fields.get("principal_committee_fec_id"))
         principal_committee_id = None
         if principal_committee_fec_id is not None:
-            principal_committee_id = find_committee_id_by_fec_id(conn, principal_committee_fec_id)
+            principal_committee_id = find_committee_id_by_fec_id(
+                conn,
+                principal_committee_fec_id,
+                data_source_id=data_source_id,
+            )
 
         _upsert_candidate(
             conn,
+            data_source_id=data_source_id,
             mapped_fields={
                 **mapped_fields,
                 "fec_candidate_id": fec_candidate_id,
@@ -524,7 +551,7 @@ def load_candidate_summaries(
             )
             continue
 
-        if find_candidate_id_by_fec_id(conn, fec_candidate_id) is None:
+        if find_candidate_id_by_fec_id(conn, fec_candidate_id, data_source_id=data_source_id) is None:
             load_result.skipped += 1
             LOGGER.warning("Skipping weball row with unresolved candidate_fec_id=%s", fec_candidate_id)
             processed_since_commit = _finalize_stage3_row(
@@ -558,6 +585,7 @@ def load_candidate_summaries(
         _update_candidate_summary(
             conn,
             mapped_fields={**mapped_fields, "fec_candidate_id": fec_candidate_id},
+            data_source_id=data_source_id,
         )
         load_result.inserted += 1
         processed_since_commit = _finalize_stage3_row(
@@ -609,8 +637,8 @@ def load_candidate_committee_links(
             )
             continue
 
-        candidate_id = find_candidate_id_by_fec_id(conn, candidate_fec_id)
-        committee_id = find_committee_id_by_fec_id(conn, committee_fec_id)
+        candidate_id = find_candidate_id_by_fec_id(conn, candidate_fec_id, data_source_id=data_source_id)
+        committee_id = find_committee_id_by_fec_id(conn, committee_fec_id, data_source_id=data_source_id)
         if candidate_id is None or committee_id is None:
             load_result.skipped += 1
             LOGGER.warning(
@@ -724,11 +752,14 @@ def sync_data_source_metadata(
     data_source_id: UUID,
     *,
     pull_status: str,
+    commit: bool = True,
 ) -> int:
     """Sync record_count, last_pull_at, last_pull_status on core.data_source.
 
     Sources record_count from active core.source_record rows (superseded_by IS NULL)
     instead of trusting caller-supplied counts. Returns the stored record_count.
+    Passing commit=False lets an orchestration owner make freshness and its terminal
+    ledger update atomic.
     """
     record_count = _count_active_source_records(conn, data_source_id)
     with conn.cursor() as cursor:
@@ -742,7 +773,8 @@ def sync_data_source_metadata(
             """,
             (record_count, pull_status, data_source_id),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
     return record_count
 
 

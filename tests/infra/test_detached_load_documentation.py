@@ -5,6 +5,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = REPO_ROOT / "docs/howto/operations/long_running_ingest_discipline.md"
+OWNERSHIP_LIBRARY = REPO_ROOT / "infra/scripts/detached_runner_ownership_lib.sh"
 PROTOCOLS = REPO_ROOT / "docs/protocols.md"
 AUTHORING_GUIDE = REPO_ROOT / "chats/icg/_authoring_guide.md"
 ROADMAP = REPO_ROOT / "ROADMAP.md"
@@ -14,6 +15,17 @@ def _markdown_links(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8")
     links = re.findall(r"(?<!!)\[[^\]]+\]\(([^)]+)\)", text)
     return [link for link in links if not link.startswith(("http://", "https://", "mailto:", "#"))]
+
+
+def _shell_assignment(name: str) -> str:
+    ownership_library = OWNERSHIP_LIBRARY.read_text(encoding="utf-8")
+    match = re.search(
+        rf"^{name}=(?:\"([^\"]*)\"|([^\s#]+))$",
+        ownership_library,
+        re.MULTILINE,
+    )
+    assert match is not None, f"missing {name} in {OWNERSHIP_LIBRARY.relative_to(REPO_ROOT)}"
+    return next(value for value in match.groups() if value is not None)
 
 
 def test_detached_load_docs_use_one_canonical_runner_contract() -> None:
@@ -28,6 +40,8 @@ def test_detached_load_docs_use_one_canonical_runner_contract() -> None:
     )[0]
     authoring_guide = AUTHORING_GUIDE.read_text(encoding="utf-8")
     roadmap = ROADMAP.read_text(encoding="utf-8")
+    concurrent_start_refusal = _shell_assignment("CONCURRENT_START_REFUSAL_REASON")
+    wrapper_launch_approval_attempts = _shell_assignment("WRAPPER_LAUNCH_APPROVAL_ATTEMPTS")
 
     assert "infra/scripts/detached_runner.sh" in runbook
     assert "build/detached_jobs/" in runbook
@@ -43,12 +57,23 @@ def test_detached_load_docs_use_one_canonical_runner_contract() -> None:
     assert (
         "start fails closed with a clear error and no non-isolated job becomes a later stop target" in runner_lifecycle
     )
+    assert f"detached_runner.sh: refusing to start job '<job_name>': {concurrent_start_refusal}" in runner_lifecycle
+    assert "exits `3` without adopting `pid`, `pgid`, `process_identity`, or command metadata" in runner_lifecycle
+    assert f"`WRAPPER_LAUNCH_APPROVAL_ATTEMPTS` ({wrapper_launch_approval_attempts}) fast polls" in runner_lifecycle
+    assert "the wrapper exits `1`, launches no payload, and writes no `child_pid`" in runner_lifecycle
+    assert "writes a cleanup receipt when `cleanup_requested` names that wrapper" in runner_lifecycle
     assert "Stop terminates the verified owned process group" in runner_lifecycle
     assert "signals the negative verified `pgid` with TERM, then escalates to KILL" in runner_lifecycle
     assert "`pgid` metadata is missing, mismatched, or reused" in runner_lifecycle
     assert "wrapper no longer leads its recorded group" in runner_lifecycle
     assert "required metadata is incomplete" in runner_lifecycle
     assert "wrapper has already disappeared before stop can verify ownership" in runner_lifecycle
+    assert "`start.lock` is internal per-job runner state" in job_state_contract
+    assert (
+        "records the starter PID and process identity while the `start` critical section is active"
+        in job_state_contract
+    )
+    assert "not an operator progress or stop target" in job_state_contract
     assert "targets only the verified owned process group recorded for that job" in supervisor_interpretation
     assert "Treat any stop refusal as a safety outcome" in supervisor_interpretation
     assert "missing, mismatched, or reused `pgid` state" in supervisor_interpretation

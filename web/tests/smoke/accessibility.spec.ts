@@ -497,7 +497,7 @@ test.describe("accessibility smoke axe scan", () => {
     assertNoSeriousAccessibilityViolations(normalizeBaselineEntries(routeResults));
   });
 
-  test("application shell keyboard traversal reaches primary navigation links", async ({ page }: { page: Page }) => {
+  test("application shell skip link bypasses primary navigation without changing its traversal", async ({ page }: { page: Page }) => {
     const pageLoadErrors = capturePageLoadErrors(page);
 
     await page.goto("/");
@@ -505,8 +505,19 @@ test.describe("accessibility smoke axe scan", () => {
     await expect(page.getByTestId("shell-primary-nav")).toBeVisible();
     await expect(page.getByTestId("shell-main")).toBeVisible();
     await expect(page.getByTestId("shell-footer")).toBeVisible();
-    await expect(page.getByTestId("shell-skip-link")).toHaveCount(0);
 
+    const skipLink = page.getByTestId("shell-skip-link");
+    await expect(skipLink).not.toBeInViewport();
+    await expectNextTabStop(page, "shell-skip-link");
+    await expect(skipLink).toBeVisible();
+    await expect(skipLink).toBeInViewport();
+    await expect(skipLink).toHaveCSS("outline-style", /^(auto|solid)$/);
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("shell-main")).toBeFocused();
+    await expect(page).toHaveURL(/#main-content$/);
+
+    await page.goto("/");
+    await expectNextTabStop(page, "shell-skip-link");
     await expectNextTabStop(page, "shell-nav-link-home");
     await expect(page.getByTestId("shell-nav-link-home")).toHaveCSS("outline-style", /^(auto|solid)$/);
     await expectNextTabStop(page, "shell-nav-link-search");

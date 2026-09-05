@@ -6,14 +6,17 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from api.models._validation import POSTGRES_SIGNED_BIGINT_MAX
+
 SearchEntityType = Literal["person", "org", "committee", "candidate", "office", "contest"]
+SEARCH_QUERY_MAX_LENGTH = 100
 
 
 class SearchParams(BaseModel):
-    q: str = Field(min_length=2, max_length=100)
+    q: str = Field(min_length=2, max_length=SEARCH_QUERY_MAX_LENGTH)
     entity_type: SearchEntityType | None = None
     limit: int = Field(default=20, ge=1, le=100)
-    offset: int = Field(default=0, ge=0)
+    offset: int = Field(default=0, ge=0, le=POSTGRES_SIGNED_BIGINT_MAX)
 
 
 class SearchResult(BaseModel):

@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-08-23",
+  "updated_at": "2026-08-27",
   "rows": [
     {
       "jurisdiction_code": "FEC",
@@ -265,7 +265,7 @@
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
       "civics_candidacy_status": "not_started",
-      "main_blocker": "Locate the exact retained 3K Hetzner load artifact/path before promoting implementation above fixture_tested, then capture qualifying production core.refresh_run rows for state-pa-*; Stage 2 observed zero state rows."
+      "main_blocker": "The authorized 2026-08-27 state-pa-contributions launch was terminal-negative before Machine creation because flyctl v0.4.93 composed a double-digest image identifier. Production stayed N_pre=N_post=5,996 with F=0 and produced no qualifying core.refresh_run row, elapsed time, throughput rate, projection, or full run. Keep implementation_maturity=fixture_tested, operational_maturity=runner_wired, and public_claim_status=launch-support candidate; civibus-aji.35.1 owns the no-production immutable-selector compatibility prerequisite, then civibus-aji.35 and civibus-aji.8 own the still-unauthorized production proof and PA closeout."
     },
     {
       "jurisdiction_code": "TX",
@@ -344,16 +344,16 @@
       "discovery_maturity": "interactively_proven",
       "source_contract_maturity": "encoded",
       "legal_filing_semantics_maturity": "substantial",
-      "implementation_maturity": "fixture_tested",
+      "implementation_maturity": "live_proven",
       "operational_maturity": "runner_wired",
       "public_claim_status": "implemented but unproven",
       "completeness_intelligence_maturity": "not_started",
       "civics_candidacy_status": "not_started",
-      "main_blocker": "Run city-sf-transactions in production and capture a qualifying core.refresh_run receipt with counts and recurring freshness evidence before promoting implementation or public tier."
+      "main_blocker": "A manual city-sf-transactions production run completed successfully on 2026-08-27 (run d13bedaf-fdec-459c-999a-f068b4510945; 32 inserted, 279,095 skipped, zero quarantined/superseded/errors; canonical receipt ede0bf0f3). This proves live execution only: recurring or unattended freshness remains unproven, so operational_maturity stays runner_wired and public_claim_status stays implemented but unproven."
     },
     {
       "jurisdiction_code": "NY_NEW_YORK",
-      "name": "New York",
+      "name": "New York City",
       "acquisition_pattern": "bulk_file",
       "discovery_maturity": "interactively_proven",
       "source_contract_maturity": "encoded",

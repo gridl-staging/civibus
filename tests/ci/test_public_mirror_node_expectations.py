@@ -52,6 +52,20 @@ def test_expected_dev_repo_only_failures_are_limited_to_selected_nodes() -> None
     assert PROJECTED_PUBLIC_CONTRACT_NODE_ID not in expected_failure_nodes
 
 
+def test_projection_only_document_contracts_are_classified_as_dev_repo_only() -> None:
+    projection_only_nodes = {
+        "tests/keel/test_gate_l3.py::test_repo_sources_registry_wa_emits_four_source_attributed_prototyped_artifacts",
+        "tests/test_checkpoint_b_receipt_contract.py::test_aug15_closeout_preserves_the_red_verdict_without_private_paths",
+        "tests/test_doc_system_v2_layout.py::test_codex_governance_routes_to_one_inactive_civibus_profile",
+        "tests/test_jurisdiction_authority_ledger_contract.py::test_autonomous_docs_have_no_stale_routine_approval_or_planned_registry_gate",
+        "tests/test_jurisdiction_authority_ledger_contract.py::test_canonical_docs_define_the_general_filing_authority_relation_contract",
+        "tests/test_jurisdiction_authority_ledger_contract.py::test_geography_owner_remains_separate_from_filing_authority",
+        "tests/test_jurisdiction_authority_ledger_contract.py::test_legacy_parent_boolean_bootstrap_evidence_is_explicit_debt",
+    }
+
+    assert expected_dev_repo_only_failure_nodes(projection_only_nodes) == projection_only_nodes
+
+
 def test_node_set_at_the_floor_reports_no_violations() -> None:
     nodes = _at_floor()
 

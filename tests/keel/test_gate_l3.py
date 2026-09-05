@@ -169,6 +169,49 @@ def test_repo_sources_registry_registers_federal_chartered_sources(tmp_path: Pat
     assert {source_result.status for source_result in result.source_results} == {"pass"}
 
 
+def test_repo_sources_registry_wa_emits_four_source_attributed_prototyped_artifacts(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    registry = keel_gate_l3.load_sources_registry(repo_root / "sources.yaml")
+    wa_entry = next(entry for entry in registry.jurisdictions if entry.scope == "WA")
+    expected_transition_dates = {
+        "wa_contributions": date(2026, 8, 26),
+        "wa_expenditures": date(2026, 8, 24),
+        "wa_independent_expenditures": date(2026, 8, 23),
+        "wa_loans": date(2026, 8, 26),
+    }
+
+    assert [source.source_id for source in wa_entry.sources] == list(expected_transition_dates)
+    assert {source.current_state for source in wa_entry.sources} == {"prototyped"}
+
+    evidence_root = tmp_path / "evidence" / "L3"
+    result = keel_gate_l3.evaluate_registry(
+        repo_root=repo_root,
+        sources_path=repo_root / "sources.yaml",
+        jurisdiction="WA",
+        evidence_root=evidence_root,
+    )
+
+    assert result.exit_code == 0
+    assert [source_result.source_id for source_result in result.source_results] == list(expected_transition_dates)
+    assert {source_result.status for source_result in result.source_results} == {"pass"}
+
+    for source_result in result.source_results:
+        transition_date = expected_transition_dates[source_result.source_id]
+        expected_path = (
+            evidence_root / "WA" / source_result.source_id / f"prototyped_{transition_date.isoformat()}.json"
+        )
+        assert source_result.evidence_path == expected_path
+        payload = _read_json(expected_path)
+        assert payload["scope"] == "WA"
+        assert payload["source_id"] == source_result.source_id
+        assert payload["current_state"] == "prototyped"
+        assert payload["transition_date"] == transition_date.isoformat()
+        assert payload["status"] == "pass"
+        assert payload["linked_evidence"]
+        assert {item["layer"] for item in payload["linked_evidence"]} == {"docs"}
+        assert {item["status"] for item in payload["linked_evidence"]} == {"pass"}
+
+
 def test_public_sources_registry_loader_matches_private_loader_and_default_path() -> None:
     repo_root = Path(__file__).resolve().parents[2]
 

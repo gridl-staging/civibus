@@ -101,6 +101,28 @@ describe("ComparisonBar SSR presentation component", () => {
     );
   });
 
+  it("rejects an unsafe caller-computed width instead of emitting CSS declarations", () => {
+    const rendered = render(ComparisonBar, {
+      props: {
+        scaleMax: "100",
+        entities: [
+          {
+            id: "person_unsafe_width",
+            label: "Unsafe Width",
+            value: "100",
+            valueLabel: "$100.00",
+            widthPercentage: "100%; background-image: url(https://attacker.example/pixel)"
+          }
+        ]
+      }
+    });
+
+    expect(rendered.body).not.toContain("background-image");
+    expect(rendered.body).not.toContain("attacker.example");
+    expect(rendered.body).not.toContain('data-testid="comparison-bar-person_unsafe_width"');
+    expect(rendered.body).toContain("No reported/loaded money.");
+  });
+
   it("renders exact shared-scale widths and caller-supplied end labels", () => {
     const rendered = render(ComparisonBar, {
       props: {
@@ -158,6 +180,43 @@ describe("ComparisonBar SSR presentation component", () => {
     expect(getEndLabel("person_one_third")).toBe("$100,000 exact caller label");
     expect(rendered.body).not.toContain("$300K");
     expect(rendered.body).not.toContain("$100K");
+  });
+
+  it("renders caller-computed exact decimal widths without narrowing money values", () => {
+    const rendered = render(ComparisonBar, {
+      props: {
+        scaleMax: 0,
+        entities: [
+          {
+            id: "person_close_lower",
+            label: "Close Lower",
+            value: "9007199254740993.01",
+            valueLabel: "$9,007,199,254,740,993.01",
+            widthPercentage: "99.999999999999999889%"
+          },
+          {
+            id: "person_close_higher",
+            label: "Close Higher",
+            value: "9007199254740993.02",
+            valueLabel: "$9,007,199,254,740,993.02",
+            widthPercentage: "100%"
+          },
+          {
+            id: "person_overflow_half",
+            label: "Overflow Half",
+            value: "1e400",
+            valueLabel: `$10${",000".repeat(133)}.00`,
+            widthPercentage: "50%"
+          }
+        ]
+      }
+    });
+
+    expect(rendered.body).toContain("--comparison-track-width: 99.999999999999999889%");
+    expect(rendered.body).toContain("--comparison-track-width: 100%");
+    expect(rendered.body).toContain("--comparison-track-width: 50%");
+    expect(rendered.body).toContain("$9,007,199,254,740,993.01");
+    expect(rendered.body).toContain("$9,007,199,254,740,993.02");
   });
 
   it("delegates image and initials fallback rendering to the shared Portrait component", () => {
@@ -256,6 +315,14 @@ describe("ComparisonBar SSR presentation component", () => {
                 color: "#6fada8"
               }
             ]
+          },
+          {
+            id: "person_unavailable",
+            label: "Unavailable Official",
+            href: "/person/person_unavailable",
+            value: null,
+            valueLabel: "$999,999.00",
+            showMissingValueLabel: false
           }
         ],
         segmentOrder: ["Self-Funded"]
@@ -264,11 +331,15 @@ describe("ComparisonBar SSR presentation component", () => {
 
     expect(rendered.body).toContain('data-testid="comparison-row-person_missing"');
     expect(rendered.body).toContain('data-testid="comparison-end-label-person_missing"');
+    expect(rendered.body).toContain('data-testid="comparison-row-person_unavailable"');
+    expect(rendered.body).toContain('data-testid="comparison-end-label-person_unavailable"');
     expect(rendered.body).toContain("No reported/loaded money.");
     expect(rendered.body.match(/No reported\/loaded money\./g)).toHaveLength(1);
     expect(rendered.body).not.toContain('data-testid="comparison-bar-person_missing"');
+    expect(rendered.body).not.toContain('data-testid="comparison-bar-person_unavailable"');
     expect(rendered.body).not.toContain('data-testid="comparison-segment-person_missing-self"');
     expect(rendered.body).not.toContain("$123,456.00");
+    expect(rendered.body).not.toContain("$999,999.00");
   });
 
   it("renders a reported zero with its caller value label and bar rather than no-data copy", () => {

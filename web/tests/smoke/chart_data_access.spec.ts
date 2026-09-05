@@ -12,6 +12,7 @@ import {
   SMOKE_COMMITTEE_CASH_TREND_NO_MISSING_INTERVAL,
   SMOKE_COMMITTEE_CASH_TREND_SECOND_PERIOD,
   SMOKE_COMMITTEE_SLUG,
+  SMOKE_CANDIDATE_NAME,
   SMOKE_CONGRESS_LEADER_PERSON_ID,
   SMOKE_CONGRESS_LEADER_TOTAL_RAISED_COMPACT,
   SMOKE_PERSON_CANONICAL_NAME,
@@ -41,6 +42,7 @@ const CHART_DATA_ACCESS_CASES = [
     route: "person",
     paintLabel: null,
     testId: "person-receipt-composition",
+    accessibleName: `View chart data: Sources of receipts for ${SMOKE_PERSON_CANONICAL_NAME}, 2026 cycle`,
     rows: SMOKE_USE_LIVE_API
       ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.receiptComposition
       : SMOKE_CHART_DATA_ACCESS_ROWS.receiptComposition
@@ -50,6 +52,7 @@ const CHART_DATA_ACCESS_CASES = [
     route: "person",
     paintLabel: "Monthly contribution columns",
     testId: "person-monthly-contributions",
+    accessibleName: `View chart data: Itemized individual contributions by month for ${SMOKE_PERSON_CANONICAL_NAME}, 2026 cycle`,
     rows: SMOKE_USE_LIVE_API
       ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.monthlyContributions
       : SMOKE_CHART_DATA_ACCESS_ROWS.monthlyContributions
@@ -61,6 +64,7 @@ const CHART_DATA_ACCESS_CASES = [
     // svg and no aria-labelled chart section.
     paintLabel: null,
     testId: "person-size-buckets",
+    accessibleName: `View chart data: Itemized contribution-size buckets for ${SMOKE_PERSON_CANONICAL_NAME}, 2026 cycle`,
     rows: SMOKE_USE_LIVE_API
       ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.sizeBuckets
       : SMOKE_CHART_DATA_ACCESS_ROWS.sizeBuckets
@@ -70,6 +74,7 @@ const CHART_DATA_ACCESS_CASES = [
     route: "person",
     paintLabel: "Geography dollar share by contributor location",
     testId: "person-geography-share",
+    accessibleName: `View chart data: Geography for ${SMOKE_PERSON_CANONICAL_NAME}, 2026 cycle`,
     rows: SMOKE_USE_LIVE_API
       ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.geographyShare
       : SMOKE_CHART_DATA_ACCESS_ROWS.geographyShare
@@ -79,6 +84,7 @@ const CHART_DATA_ACCESS_CASES = [
     route: "person",
     paintLabel: "Zero-centered support and oppose spending comparison",
     testId: "person-outside-spending",
+    accessibleName: `View chart data: Outside spending for ${SMOKE_CANDIDATE_NAME} (candidacy 1), 2026 cycle`,
     rows: SMOKE_USE_LIVE_API
       ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.outsideSpending
       : SMOKE_CHART_DATA_ACCESS_ROWS.outsideSpending
@@ -87,6 +93,7 @@ const CHART_DATA_ACCESS_CASES = [
     owner: "CashOnHandTrendChart",
     route: "committee",
     testId: "committee-cash-on-hand-trend",
+    accessibleName: "View chart data",
     rows: [
       {
         label: SMOKE_COMMITTEE_CASH_TREND_FIRST_PERIOD,
@@ -157,13 +164,21 @@ function expectExactAccessibleTextNode(snapshot: string, text: string): void {
   expect(snapshot.split("\n").map((line) => line.trim())).toContain(`- text: ${text}`);
 }
 
-async function openChartDataAndSnapshot(chart: Locator): Promise<string> {
+async function openChartDataAndSnapshot(chart: Locator, accessibleName: string): Promise<string> {
   const disclosure = chart.getByText("View chart data", { exact: true });
   await expect(disclosure).toBeVisible();
+  await expect(disclosure).toHaveText("View chart data");
+  await expect(disclosure).toHaveAccessibleName(accessibleName);
   await disclosure.click();
   return chart.ariaSnapshot();
 }
 
+function chartCaseForRoute(
+  route: "committee"
+): Extract<ChartDataAccessCase, { route: "committee" }>;
+function chartCaseForRoute(
+  route: "congress"
+): Extract<ChartDataAccessCase, { route: "congress" }>;
 function chartCaseForRoute(route: "committee" | "congress") {
   const matches = CHART_DATA_ACCESS_CASES.filter((chartCase) => chartCase.route === route);
   expect(matches).toHaveLength(1);
@@ -215,11 +230,16 @@ test.describe("fixture-backed chart data accessibility", () => {
   test("person chart disclosures expose exact fixture facts", async ({ page }: { page: Page }) => {
     await page.goto(`/person/${SMOKE_PERSON_ID}`);
 
-    for (const chartCase of personChartCases()) {
+    const chartCases = personChartCases();
+    const accessibleNames = chartCases.map(({ accessibleName }) => accessibleName);
+    expect(accessibleNames).toHaveLength(5);
+    expect(new Set(accessibleNames).size).toBe(5);
+
+    for (const chartCase of chartCases) {
       await test.step(chartCase.owner, async () => {
         const chart = page.getByTestId(chartCase.testId);
         await expect(chart).toBeVisible();
-        const snapshot = await openChartDataAndSnapshot(chart);
+        const snapshot = await openChartDataAndSnapshot(chart, chartCase.accessibleName);
         expectExactAccessibleRows(snapshot, chartCase.rows);
       });
     }
@@ -235,7 +255,7 @@ test.describe("fixture-backed chart data accessibility", () => {
     const chartCase = chartCaseForRoute("committee");
     const chart = page.getByTestId(chartCase.testId);
     await expect(chart).toBeVisible();
-    const snapshot = await openChartDataAndSnapshot(chart);
+    const snapshot = await openChartDataAndSnapshot(chart, chartCase.accessibleName);
     expectExactAccessibleRows(snapshot, chartCase.rows);
   });
 
@@ -300,7 +320,7 @@ test.describe.serial("live person chart data known-answer smoke", () => {
 
         await expectPersonChartPaint(page, chartCase);
 
-        const snapshot = await openChartDataAndSnapshot(chartFrame);
+        const snapshot = await openChartDataAndSnapshot(chartFrame, chartCase.accessibleName);
         expectExactAccessibleRows(snapshot, chartCase.rows);
       });
     }

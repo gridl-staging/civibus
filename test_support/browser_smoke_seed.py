@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from api.models.search import SearchParams
 from api.queries import fetch_search_results
@@ -129,6 +130,55 @@ _PERSON_IDS = (
     UUID(SMOKE_NO_MONEY_PERSON_ID),
 )
 
+_WA_PERSON_ID = UUID("53000000-0000-4000-8000-000000000001")
+_WA_ORGANIZATION_ID = UUID("53000000-0000-4000-8000-000000000002")
+_WA_COMMITTEE_ID = UUID("53000000-0000-4000-8000-000000000003")
+_WA_CONTEST_ID = UUID("53000000-0000-4000-8000-000000000004")
+_WA_CANDIDACY_ID = UUID("53000000-0000-4000-8000-000000000005")
+_WA_OFFICEHOLDING_ID = UUID("53000000-0000-4000-8000-000000000006")
+_WA_GOVERNOR_OFFICE_ID = UUID("00000000-0000-4000-8000-000000000204")
+_WA_DIVISION_ID = UUID("00000000-0000-4000-8000-000000000502")
+_WA_SOURCE_ROWS = (
+    (
+        "contributions",
+        "WA PDC Contributions",
+        Decimal("125.50"),
+        date(2026, 8, 20),
+        {"office": "Governor", "jurisdiction_type": "State", "filer_id": "WA-FILER-1"},
+    ),
+    (
+        "expenditures",
+        "WA PDC Expenditures",
+        Decimal("80.25"),
+        date(2026, 8, 21),
+        {"office": "Governor", "jurisdiction_type": "State", "filer_id": "WA-FILER-1"},
+    ),
+    (
+        "independent_expenditures",
+        "WA PDC Independent Expenditures",
+        Decimal("45.75"),
+        date(2026, 8, 22),
+        {
+            "origin": "C6.3 - Identified Entities",
+            "candidate_office": "Governor",
+            "candidate_jurisdiction": "STATE OF WASHINGTON",
+            "candidate_filer_id": "WA-FILER-1",
+        },
+    ),
+    (
+        "loans",
+        "WA PDC Loans",
+        Decimal("20.00"),
+        date(2026, 8, 23),
+        {"office": "Governor", "jurisdiction_type": "State", "filer_id": "WA-FILER-1"},
+    ),
+)
+_WA_DATA_SOURCE_IDS = tuple(UUID(f"53000000-0000-4000-8100-{index:012d}") for index in range(1, 5))
+_WA_SOURCE_RECORD_IDS = tuple(UUID(f"53000000-0000-4000-8200-{index:012d}") for index in range(1, 5))
+_WA_FILING_IDS = tuple(UUID(f"53000000-0000-4000-8300-{index:012d}") for index in range(1, 5))
+_WA_TRANSACTION_IDS = tuple(UUID(f"53000000-0000-4000-8400-{index:012d}") for index in range(1, 5))
+_WA_REFRESH_IDS = tuple(UUID(f"53000000-0000-4000-8500-{index:012d}") for index in range(1, 5))
+
 
 def _fixture_column_values(file_type: str, column_name: str) -> frozenset[str]:
     path = (
@@ -168,6 +218,7 @@ def seed_browser_smoke(conn: psycopg.Connection) -> None:
         _seed_people_and_search_org(conn)
         _seed_civic_officeholders(conn)
         _seed_campaign_finance(conn)
+        _seed_washington_product(conn)
     rebuild_donor_search_rollup(conn)
 
 
@@ -262,6 +313,17 @@ def _bulk_sample_entity_ids(conn: psycopg.Connection, source_record_ids: list[UU
 
 
 def _cleanup(conn: psycopg.Connection) -> None:
+    conn.execute("DELETE FROM cf.transaction WHERE id = ANY(%s::uuid[])", (list(_WA_TRANSACTION_IDS),))
+    conn.execute("DELETE FROM cf.filing WHERE id = ANY(%s::uuid[])", (list(_WA_FILING_IDS),))
+    conn.execute("DELETE FROM core.refresh_run WHERE id = ANY(%s::uuid[])", (list(_WA_REFRESH_IDS),))
+    conn.execute("DELETE FROM civic.candidacy WHERE id = %s", (_WA_CANDIDACY_ID,))
+    conn.execute("DELETE FROM civic.contest WHERE id = %s", (_WA_CONTEST_ID,))
+    conn.execute("DELETE FROM civic.officeholding WHERE id = %s", (_WA_OFFICEHOLDING_ID,))
+    conn.execute("DELETE FROM cf.committee WHERE id = %s", (_WA_COMMITTEE_ID,))
+    conn.execute("DELETE FROM core.organization WHERE id = %s", (_WA_ORGANIZATION_ID,))
+    conn.execute("DELETE FROM core.person WHERE id = %s", (_WA_PERSON_ID,))
+    conn.execute("DELETE FROM core.source_record WHERE id = ANY(%s::uuid[])", (list(_WA_SOURCE_RECORD_IDS),))
+    conn.execute("DELETE FROM core.data_source WHERE id = ANY(%s::uuid[])", (list(_WA_DATA_SOURCE_IDS),))
     conn.execute(
         "DELETE FROM cf.transaction WHERE id = ANY(%s::uuid[])",
         (list(_TRANSACTION_IDS) + list(_IE_TRANSACTION_IDS),),
@@ -325,7 +387,7 @@ def _assert_smoke_isolated(conn: psycopg.Connection) -> bool:
         LEFT JOIN core.data_source source ON source.id = record.data_source_id
         WHERE committee.id <> ALL(%s::uuid[])
         """,
-        ([UUID(SMOKE_COMMITTEE_ID), UUID(SMOKE_IE_COMMITTEE_ID)],),
+        ([UUID(SMOKE_COMMITTEE_ID), UUID(SMOKE_IE_COMMITTEE_ID), _WA_COMMITTEE_ID],),
     ).fetchall()
     canonical_bulk_sample_is_loaded = _is_canonical_bulk_sample(conn, candidate_rows, committee_rows)
     extra_search_org_count = _count_extra_search_organizations(
@@ -441,6 +503,132 @@ def _seed_sources(conn: psycopg.Connection) -> None:
             pull_date=_PULL_DATE,
             record_hash=compute_record_hash(second_raw_fields),
         ),
+    )
+
+
+def _seed_washington_product(conn: psycopg.Connection) -> None:
+    """Seed the exact state/WA browser specimen without broadening federal fixtures."""
+    observed_at = datetime.now(timezone.utc).replace(microsecond=0)
+    conn.execute(
+        """
+        INSERT INTO core.organization (id, canonical_name, identifiers, registered_state)
+        VALUES (%s, 'Washington Future Committee', %s, 'WA')
+        """,
+        (_WA_ORGANIZATION_ID, Jsonb({"wa_committee_id": "WA-CMTE-1"})),
+    )
+    conn.execute(
+        """
+        INSERT INTO cf.committee (id, fec_committee_id, name, organization_id, state, city)
+        VALUES (%s, 'C53000001', 'Washington Future Committee', %s, 'WA', 'Olympia')
+        """,
+        (_WA_COMMITTEE_ID, _WA_ORGANIZATION_ID),
+    )
+
+    for index, (class_key, source_name, amount, transaction_date, raw_fields) in enumerate(
+        _WA_SOURCE_ROWS,
+        start=1,
+    ):
+        data_source_id = _WA_DATA_SOURCE_IDS[index - 1]
+        source_record_id = _WA_SOURCE_RECORD_IDS[index - 1]
+        filing_id = _WA_FILING_IDS[index - 1]
+        transaction_id = _WA_TRANSACTION_IDS[index - 1]
+        refresh_id = _WA_REFRESH_IDS[index - 1]
+        conn.execute(
+            """
+            INSERT INTO core.data_source (
+                id, domain, jurisdiction, name, source_url, source_format,
+                update_frequency, last_pull_at, last_pull_status, record_count
+            )
+            VALUES (%s, 'campaign_finance', 'state/WA', %s, %s, 'api', 'daily', %s, 'success', 1)
+            """,
+            (data_source_id, source_name, f"https://data.wa.gov/{class_key}", observed_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO core.refresh_run (
+                id, job_key, domain, jurisdiction, data_source_names, execution_origin,
+                pull_status, started_at, completed_at, inserted_count, message
+            )
+            VALUES (%s, %s, 'campaign_finance', 'state/WA', %s, 'scheduled',
+                    'success', %s, %s, 1, 'deterministic Washington browser fixture')
+            """,
+            (refresh_id, f"state-wa-{class_key}", [source_name], observed_at, observed_at),
+        )
+        conn.execute(
+            """
+            INSERT INTO core.source_record (
+                id, data_source_id, source_record_key, source_url, raw_fields, pull_date, record_hash
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                source_record_id,
+                data_source_id,
+                f"WA-PDC:browser:{class_key}",
+                f"https://my.pdc.wa.gov/{class_key}",
+                Jsonb(raw_fields),
+                observed_at,
+                f"browser-hash-{class_key}",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO cf.filing (
+                id, filing_fec_id, committee_id, amendment_indicator, coverage_start_date,
+                coverage_end_date, source_record_id
+            )
+            VALUES (%s, %s, %s, 'N', '2025-01-01', '2026-12-31', %s)
+            """,
+            (filing_id, f"WA-PDC-BROWSER-{class_key}", _WA_COMMITTEE_ID, source_record_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO cf.transaction (
+                id, filing_id, committee_id, transaction_type, transaction_identifier,
+                transaction_date, amount, amendment_indicator, source_record_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'N', %s)
+            """,
+            (
+                transaction_id,
+                filing_id,
+                _WA_COMMITTEE_ID,
+                "Cash" if class_key == "contributions" else "New",
+                f"WA-PDC:browser:{class_key}",
+                transaction_date,
+                amount,
+                source_record_id,
+            ),
+        )
+
+    conn.execute(
+        "INSERT INTO core.person (id, canonical_name, identifiers) VALUES (%s, 'Alex Washington', %s)",
+        (_WA_PERSON_ID, Jsonb({"wa_filer_id": "WA-FILER-1"})),
+    )
+    conn.execute(
+        """
+        INSERT INTO civic.contest (
+            id, name, election_date, election_type, office_id, electoral_division_id
+        )
+        VALUES (%s, 'WA Governor General 2026', '2026-11-03', 'general', %s, %s)
+        """,
+        (_WA_CONTEST_ID, _WA_GOVERNOR_OFFICE_ID, _WA_DIVISION_ID),
+    )
+    conn.execute(
+        """
+        INSERT INTO civic.candidacy (id, person_id, contest_id, party, status)
+        VALUES (%s, %s, %s, 'Independent', 'qualified')
+        """,
+        (_WA_CANDIDACY_ID, _WA_PERSON_ID, _WA_CONTEST_ID),
+    )
+    conn.execute(
+        """
+        INSERT INTO civic.officeholding (
+            id, person_id, office_id, electoral_division_id, holder_status, valid_period
+        )
+        VALUES (%s, %s, %s, %s, 'elected', daterange('2025-01-01', NULL, '[)'))
+        """,
+        (_WA_OFFICEHOLDING_ID, _WA_PERSON_ID, _WA_GOVERNOR_OFFICE_ID, _WA_DIVISION_ID),
     )
 
 

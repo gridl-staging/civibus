@@ -41,8 +41,8 @@ def write_wa_contribution_fixture(tmp_path: Path, *, row_count: int) -> WABulkFi
     """Write a contributions CSV whose every identity is unique to this run.
 
     All rows share one per-run committee so the load resolves a single committee and
-    filing, while each row carries a distinct contributor name — and therefore a distinct
-    whole-row hash, source-record key, and transaction identifier. That is what lets a
+    filing family, while each row carries a distinct PDC native ID — and therefore a
+    distinct source-record key and transaction identifier. That is what lets a
     bulk fixture cross ``wa_load._COMMIT_BATCH_ROWS`` and still be cleaned up by its own
     scoped keys, and what keeps two fixtures running concurrently under xdist from
     resolving to, and then deleting, each other's rows.
@@ -52,6 +52,7 @@ def write_wa_contribution_fixture(tmp_path: Path, *, row_count: int) -> WABulkFi
 
     run_suffix = uuid4().hex[:12]
     committee_native_id = f"WABATCH{run_suffix}"
+    report_number = f"WABATCHRPT{run_suffix}"
     contributions_path = tmp_path / f"wa_bounded_{run_suffix}_contributions.csv"
 
     with _SAMPLE_CONTRIBUTIONS_PATH.open(encoding="utf-8", newline="") as sample_file:
@@ -63,6 +64,7 @@ def write_wa_contribution_fixture(tmp_path: Path, *, row_count: int) -> WABulkFi
     for index in range(row_count):
         row = dict(base_row)
         row["id"] = f"{run_suffix}{index}"
+        row["report_number"] = report_number
         row["committee_id"] = committee_native_id
         row["filer_name"] = f"WA Bounded Commit Test Committee {run_suffix}"
         row["contributor_name"] = f"Batch{index}, Donor{run_suffix}"
@@ -74,7 +76,9 @@ def write_wa_contribution_fixture(tmp_path: Path, *, row_count: int) -> WABulkFi
         writer.writeheader()
         writer.writerows(rows)
 
-    source_record_keys = [_wa_source_record_key(row) for row in parse_contributions(contributions_path)]
+    source_record_keys = [
+        _wa_source_record_key(row, data_type="contributions") for row in parse_contributions(contributions_path)
+    ]
     return WABulkFixture(
         contributions_path=contributions_path,
         run_suffix=run_suffix,

@@ -17,11 +17,39 @@ from domains.campaign_finance.jurisdictions._config_specimens import (
     TEMPLATE_CONFIG_PATH,
 )
 from domains.campaign_finance.jurisdictions.config_schema import (
+    FilingAuthorityKindLiteral,
     JurisdictionConfig,
+    JurisdictionIdentity,
     PublicFinancingConfig,
     discover_jurisdiction_configs,
     load_jurisdiction_config,
 )
+
+
+@pytest.mark.parametrize(
+    "authority_kind",
+    (
+        "federal",
+        "state",
+        "county",
+        "municipality",
+        "school_district",
+        "special_district",
+        "named_other",
+    ),
+)
+def test_config_identity_accepts_every_typed_acquisition_authority_kind(
+    authority_kind: FilingAuthorityKindLiteral,
+) -> None:
+    identity = JurisdictionIdentity(
+        name="Synthetic authority",
+        code="SYNTH_AUTHORITY",
+        type=authority_kind,
+        fips="",
+        parent=None,
+    )
+
+    assert identity.identity == (authority_kind, "SYNTH_AUTHORITY")
 
 
 @pytest.mark.parametrize("config_path", EXPANDED_CONFIG_PATHS, ids=EXPANDED_CONFIG_IDS)
@@ -62,6 +90,16 @@ def test_discover_jurisdiction_configs_returns_sorted_non_template_paths() -> No
 
     assert discovered_paths == sorted(EXPANDED_CONFIG_PATHS)
     assert TEMPLATE_CONFIG_PATH not in discovered_paths
+
+
+def test_load_jurisdiction_config_rejects_duplicate_source_names(tmp_path: Path) -> None:
+    config_data = yaml.safe_load(NC_CONFIG_PATH.read_text(encoding="utf-8"))
+    config_data["data_sources"][1]["name"] = config_data["data_sources"][0]["name"]
+    duplicate_source_path = tmp_path / "duplicate_source_name.yaml"
+    duplicate_source_path.write_text(yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"duplicate data source name.*North Carolina SBoE"):
+        load_jurisdiction_config(duplicate_source_path)
 
 
 def test_nested_extra_field_raises_validation_error_with_extra_forbid(tmp_path: Path) -> None:

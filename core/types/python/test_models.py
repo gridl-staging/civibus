@@ -433,10 +433,59 @@ class TestJurisdictionModel:
         jurisdiction = Jurisdiction(name="North Carolina", jurisdiction_type="state")
 
         assert jurisdiction.fips is None
+        assert jurisdiction.state_fips is None
+        assert jurisdiction.county_geoid is None
+        assert jurisdiction.place_geoid is None
         assert jurisdiction.parent_id is None
         assert jurisdiction.state is None
         assert jurisdiction.geometry is None
         assert jurisdiction.population is None
+
+    @pytest.mark.parametrize(
+        ("jurisdiction_type", "field_name", "value"),
+        (
+            ("state", "state_fips", "37"),
+            ("county", "county_geoid", "37063"),
+            ("municipality", "place_geoid", "0644000"),
+            ("municipality", "county_geoid", "06075"),
+        ),
+    )
+    def test_jurisdiction_accepts_typed_geography_identifiers(
+        self,
+        jurisdiction_type: str,
+        field_name: str,
+        value: str,
+    ) -> None:
+        jurisdiction = Jurisdiction(
+            name="Typed jurisdiction",
+            jurisdiction_type=jurisdiction_type,
+            **{field_name: value},
+        )
+
+        assert getattr(jurisdiction, field_name) == value
+
+    @pytest.mark.parametrize(
+        ("field_name", "value"),
+        (
+            ("state_fips", "3"),
+            ("state_fips", "٣٧"),
+            ("county_geoid", "3706A"),
+            ("county_geoid", "370630"),
+            ("place_geoid", "064400"),
+            ("place_geoid", "０６４４０００"),
+        ),
+    )
+    def test_jurisdiction_rejects_invalid_typed_geography_identifiers(
+        self,
+        field_name: str,
+        value: str,
+    ) -> None:
+        with pytest.raises(ValueError, match=field_name):
+            Jurisdiction(
+                name="Invalid typed jurisdiction",
+                jurisdiction_type="municipality",
+                **{field_name: value},
+            )
 
     def test_jurisdiction_geometry_rejects_non_none_values(self) -> None:
         with pytest.raises(ValueError):
@@ -448,6 +497,9 @@ class TestJurisdictionModel:
             name="Durham County",
             jurisdiction_type="county",
             fips="37063",
+            state_fips=None,
+            county_geoid="37063",
+            place_geoid=None,
             parent_id=uuid4(),
             state="NC",
             geometry=None,
@@ -464,6 +516,7 @@ class TestJurisdictionModel:
         assert isinstance(json_dumped["id"], str)
         assert isinstance(json_dumped["created_at"], str)
         assert isinstance(json_dumped["updated_at"], str)
+        assert json_dumped["county_geoid"] == "37063"
 
 
 class TestContactPointModel:
@@ -679,6 +732,9 @@ class TestModelJsonSchemaSmoke:
             "name",
             "jurisdiction_type",
             "fips",
+            "state_fips",
+            "county_geoid",
+            "place_geoid",
             "parent_id",
             "state",
             "geometry",

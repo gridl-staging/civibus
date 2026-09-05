@@ -127,7 +127,7 @@ export async function fetchCommitteeIndependentExpendituresMade(
   apiClient: ApiClient,
   request: CommitteeDetailRequest
 ): Promise<CommitteeIndependentExpenditureActivity> {
-  return fetchById(apiClient, request, buildCommitteeIndependentExpendituresMadePath);
+  return fetchByCycleScopedId(apiClient, request, buildCommitteeIndependentExpendituresMadePath);
 }
 
 export type CandidateDetailBundle = {

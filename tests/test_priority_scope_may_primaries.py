@@ -29,7 +29,7 @@ def _load_configs(*state_codes: str) -> dict[str, object]:
 def test_may_primary_states_in_priority_scope() -> None:
     """NE, LA, AL, KY, OR must appear in priority source names."""
     configs = _load_configs("NE", "LA", "AL", "KY", "OR", "CA", "CO", "GA", "TX")
-    priority_names = _priority_source_names(configs, parameters=RunnerParameters())
+    priority_names = _priority_source_names(configs, parameters=RunnerParameters(), jobs=[])
 
     for state_code in ("NE", "LA", "AL", "KY", "OR"):
         config = configs[state_code]
@@ -44,7 +44,7 @@ def test_may_primary_states_in_priority_scope() -> None:
 def test_indiana_excluded_from_priority_scope() -> None:
     """IN is annual cadence — must NOT appear in priority source names."""
     configs = _load_configs("IN", "CA", "CO", "GA", "TX")
-    priority_names = _priority_source_names(configs, parameters=RunnerParameters())
+    priority_names = _priority_source_names(configs, parameters=RunnerParameters(), jobs=[])
 
     in_config = configs["IN"]
     in_source_names = {ds.name for ds in in_config.data_sources}
@@ -55,7 +55,7 @@ def test_indiana_excluded_from_priority_scope() -> None:
 def test_original_states_still_in_priority_scope() -> None:
     """CA, CO, GA, TX must remain in priority scope after expansion."""
     configs = _load_configs("CA", "CO", "GA", "TX")
-    priority_names = _priority_source_names(configs, parameters=RunnerParameters())
+    priority_names = _priority_source_names(configs, parameters=RunnerParameters(), jobs=[])
 
     for state_code in ("CA", "CO", "GA", "TX"):
         config = configs[state_code]

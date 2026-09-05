@@ -167,6 +167,20 @@ describe('search presentation rich metadata', () => {
     expect(cards[0].contextLine).toBe('$150,000 · NY');
   });
 
+  it('preserves exact serialized money beyond JavaScript safe-integer precision', () => {
+    const cards = buildSearchResultCards([
+      {
+        entity_type: 'committee',
+        entity_id: '20202020-2020-4020-8020-202020202020',
+        name: 'Exact Money Committee',
+        total_raised: '9007199254740993.00',
+        state: 'NY'
+      }
+    ]);
+
+    expect(cards[0].contextLine).toBe('$9,007,199,254,740,993 · NY');
+  });
+
   it('builds committee metadata with formatted zero currency when total_raised is zero', () => {
     const cards = buildSearchResultCards([
       {
@@ -225,21 +239,28 @@ describe('search presentation rich metadata', () => {
     expect(cards[0].contextLine).toBe('Democrat · joint_fundraising · CA');
   });
 
-  it('builds select options from the shared presentation contract with candidate included', () => {
+  it('builds the exact seven select options from the shared presentation contract', () => {
     const pagePresentation = buildSearchPagePresentation({
       query: '',
       entityType: 'candidate',
       results: []
     }) as unknown as Record<string, unknown>;
+    const regionPagePresentation = buildSearchPagePresentation({
+      query: '',
+      entityType: 'region',
+      results: []
+    });
 
     expect(pagePresentation.selectedEntityType).toBe('candidate');
+    expect(regionPagePresentation.selectedEntityType).toBe('region');
     expect(pagePresentation.entityTypeOptions).toEqual([
       { value: 'person', label: 'Person' },
       { value: 'org', label: 'Organization' },
       { value: 'committee', label: 'Committee' },
       { value: 'candidate', label: 'Candidate' },
       { value: 'office', label: 'Office' },
-      { value: 'contest', label: 'Contest' }
+      { value: 'contest', label: 'Contest' },
+      { value: 'region', label: 'Region' }
     ]);
     expect(pagePresentation.queryPlaceholder).toBe(
       'Search people, organizations, committees, candidates, offices, or contests'

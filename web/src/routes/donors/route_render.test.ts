@@ -20,7 +20,6 @@ type DonorPageRenderData = Omit<DonorSearchResponse, 'rollup_completed_at'> & {
   rollup_completed_at: string | null;
   shortQueryGuidance?: boolean;
   validationMessage?: string;
-  rollupUnavailable?: boolean;
 };
 type SourceFixture = DonorSearchUnderlyingRecord['sources'][number];
 
@@ -179,31 +178,6 @@ describe('/donors route rendering', () => {
     expect(rendered.body.toLowerCase()).not.toContain('real time');
   });
 
-  it('renders rollup unavailability distinctly from zero results and retains the form values', () => {
-    const rendered = render(DonorPage, {
-      props: {
-        data: donorResponse({
-          query: 'Williams',
-          by: 'employer',
-          limit: 10,
-          offset: 20,
-          rollup_completed_at: null,
-          results: [],
-          rollupUnavailable: true
-        })
-      }
-    });
-
-    expect(rendered.body).toContain(
-      'Donor search is temporarily unavailable while contribution data is refreshed.'
-    );
-    expect(rendered.body).toContain('value="Williams"');
-    expect(rendered.body).toContain('<option value="employer" selected="">employer</option>');
-    expect(rendered.body).not.toContain('No donors match this search.');
-    expect(rendered.body).not.toContain('data-testid="donor-result-row"');
-    expect(rendered.body).not.toContain('data-testid="donor-freshness-stamp"');
-  });
-
   it('renders populated donor rows with money, recipient links, and seed fields', () => {
     const rendered = render(DonorPage, {
       props: {
@@ -221,8 +195,39 @@ describe('/donors route rendering', () => {
     expect(rendered.body).toContain('href="https://example.org/campaign-finance-source"');
     expect(rendered.body).toContain('href="https://example.org/fec/donor-search/current"');
     expect(rendered.body).toContain('data-testid="donor-result-row"');
+    expect(rendered.body).toMatch(
+      /<div(?=[^>]*class="[^"]*\bdonor-lookup__table-wrap\b[^"]*")(?=[^>]*tabindex="0")[^>]*>/
+    );
     expect(rendered.body).not.toContain('0 records combined');
     expect(rendered.body).not.toContain('data-testid="donor-identity-disclosure"');
+  });
+
+  it.each([
+    ['exact large cents', '9007199254740993.01', '$9,007,199,254,740,993.01'],
+    ['a signed refund', '-9007199254740993.01', '-$9,007,199,254,740,993.01'],
+    ['genuine zero', '0.00', '$0.00']
+  ])('renders %s without manufacturing a plausible rounded total', (_case, totalAmount, expected) => {
+    const rendered = render(DonorPage, {
+      props: {
+        data: donorResponse({
+          results: [{ ...unresolvedResult(), total_amount: totalAmount }]
+        })
+      }
+    });
+
+    expect(rendered.body).toContain(expected);
+  });
+
+  it('fails closed when an unsupported amount could be coerced into plausible currency', () => {
+    const rendered = render(DonorPage, {
+      props: {
+        data: donorResponse({
+          results: [{ ...unresolvedResult(), total_amount: '0x10' }]
+        })
+      }
+    });
+
+    expect(() => rendered.body).toThrow('Money value must be a finite decimal amount.');
   });
 
   it('renders a resolved match profile with exactly its combined records and filing links', () => {
@@ -410,6 +415,22 @@ describe('/donors route rendering', () => {
 
     expect(rendered.body).toContain('No donors match this search.');
     expect(rendered.body).toContain('data-testid="donor-freshness-stamp"');
+    expect(rendered.body).not.toContain('<table');
+  });
+
+  it('does not claim no donors match when only a later page is empty', () => {
+    const rendered = render(DonorPage, {
+      props: {
+        data: donorResponse({ offset: 20, results: [] })
+      }
+    });
+
+    expect(rendered.body).toContain('No donors are shown on this page.');
+    expect(rendered.body).not.toContain('No donors match this search.');
+    expect(rendered.body).toContain(
+      'href="/donors?q=Jane&amp;by=name&amp;limit=20&amp;offset=0"'
+    );
+    expect(rendered.body).toContain('>Previous</a>');
     expect(rendered.body).not.toContain('<table');
   });
 

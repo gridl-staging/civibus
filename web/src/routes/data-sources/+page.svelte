@@ -2,6 +2,7 @@
   import { env } from "$env/dynamic/public";
   import { page } from "$app/stores";
   import { APP_SHELL } from "$lib/config/app";
+  import { parsePullDateTimestamp } from "$lib/detail-trust/relative-date";
   import { buildDataSourcesRoutePath } from "$lib/metadata/contract";
   import SeoHead from "$lib/seo/SeoHead.svelte";
   import { buildSeoHeadModel } from "$lib/seo/head";
@@ -24,6 +25,13 @@
     },
     { label: "Browse data", href: "https://www.fec.gov/data/browse-data/" }
   ] as const;
+
+  function displayLastPullAt(value: string | null): string {
+    if (value === null) return "unknown";
+
+    const parsedValue = parsePullDateTimestamp(value);
+    return parsedValue !== null && parsedValue <= Date.now() ? value : "unknown";
+  }
 
   $: canonicalPageUrl = new URL(buildDataSourcesRoutePath(), $page.url);
   $: headModel = buildSeoHeadModel({
@@ -70,14 +78,11 @@
           <th scope="col">Record count</th>
           <th scope="col">Last pull status</th>
           <th scope="col">Last pull at</th>
-          <th scope="col">Latest source pull</th>
-          <th scope="col">Latest source record</th>
         </tr>
       </thead>
       <tbody>
         {#each data.dataSources as row (row.data_source_id)}
           {@const sourceUrl = sanitizeExternalUrl(row.source_url)}
-          {@const latestSourceRecordUrl = sanitizeExternalUrl(row.latest_source_record_url)}
           <tr>
             <td>
               {#if sourceUrl}
@@ -91,17 +96,7 @@
             <td>{row.update_frequency ?? "unknown"}</td>
             <td>{row.record_count ?? "unknown"}</td>
             <td>{row.last_pull_status ?? "unknown"}</td>
-            <td>{row.last_pull_at ?? "unknown"}</td>
-            <td>{row.latest_source_pull_date ?? "unknown"}</td>
-            <td>
-              {#if latestSourceRecordUrl}
-                <a href={latestSourceRecordUrl} target="_blank" rel="noopener nofollow">
-                  {row.latest_source_record_key ?? latestSourceRecordUrl}
-                </a>
-              {:else}
-                {row.latest_source_record_key ?? "unknown"}
-              {/if}
-            </td>
+            <td>{displayLastPullAt(row.last_pull_at)}</td>
           </tr>
         {/each}
       </tbody>

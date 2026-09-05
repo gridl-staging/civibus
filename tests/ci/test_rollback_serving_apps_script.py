@@ -26,6 +26,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ROLLBACK_SCRIPT_PATH = REPO_ROOT / "infra/scripts/rollback_serving_apps.sh"
+API_DOCKERFILE_PATH = REPO_ROOT / "infra/api/Dockerfile"
+API_FLY_CONFIG_PATH = REPO_ROOT / "infra/fly/api.fly.toml"
+API_ENTRYPOINT_PATH = REPO_ROOT / "infra/api/docker-entrypoint.sh"
 
 # The serving set, and only the serving set. `civibus-db` holds the data and
 # `civibus-refresh` is a scheduled worker; rolling either back from a failed
@@ -184,6 +187,20 @@ def test_restore_redeploys_every_captured_image_with_its_own_config(
         "deploy --image registry.fly.io/civibus-web:deployment-BBB -a civibus-web -c infra/fly/web.fly.toml",
         "deploy --image registry.fly.io/civibus-caddy:deployment-CCC -a civibus-caddy -c infra/fly/caddy.fly.toml",
     ]
+
+
+def test_api_rollback_restores_image_owned_promotion_evidence_without_shared_state() -> None:
+    rollback_text = ROLLBACK_SCRIPT_PATH.read_text(encoding="utf-8")
+    dockerfile_text = API_DOCKERFILE_PATH.read_text(encoding="utf-8")
+    fly_config_text = API_FLY_CONFIG_PATH.read_text(encoding="utf-8")
+    entrypoint_text = API_ENTRYPOINT_PATH.read_text(encoding="utf-8")
+
+    assert '"civibus-api|infra/fly/api.fly.toml"' in rollback_text
+    assert 'flyctl deploy --image "$image" -a "$app" -c "$config"' in rollback_text
+    assert "COPY infra/api/authority_promotion_bundle /app/private/civibus/authority-promotion" in dockerfile_text
+    assert "/app/private/civibus/authority-promotion/authority-promotion-receipt.json" in entrypoint_text
+    assert "CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON" not in fly_config_text
+    assert "file-local" not in fly_config_text
 
 
 def test_restore_refuses_an_empty_manifest(tmp_path: Path, stub_env: tuple[Path, Path]) -> None:

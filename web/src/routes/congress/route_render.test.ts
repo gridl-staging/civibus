@@ -184,7 +184,9 @@ function renderedMemberRow(body: string, rowIndex: number): string {
 describe("/congress route render", () => {
   it("renders populated member rows with linked names, context metadata, and portrait alt text", () => {
     currentPageUrl = new URL("https://preview.internal:5173/congress");
-    const rendered = render(CongressPage, { props: { data: { members: MEMBERS, moneySummaries: [] } } });
+    const rendered = render(CongressPage, {
+      props: { data: { members: MEMBERS, moneySummaries: [], moneySummariesUnavailable: false } }
+    });
 
     expect(rendered.head).toContain('<link rel="canonical" href="https://civibus.test/congress"');
     expect(rendered.body).toMatch(/<h2[^>]*>Congress<\/h2>/);
@@ -203,7 +205,9 @@ describe("/congress route render", () => {
 
   it("renders initials fallback content when portrait data is missing", () => {
     currentPageUrl = new URL("https://preview.internal:5173/congress");
-    const rendered = render(CongressPage, { props: { data: { members: MEMBERS, moneySummaries: [] } } });
+    const rendered = render(CongressPage, {
+      props: { data: { members: MEMBERS, moneySummaries: [], moneySummariesUnavailable: false } }
+    });
 
     expect(rendered.body).toContain('data-testid="entity-portrait-initials"');
     expect(rendered.body).toContain(">AS<");
@@ -212,7 +216,9 @@ describe("/congress route render", () => {
 
   it("renders an initial empty-data message distinct from filtered-empty results", () => {
     currentPageUrl = new URL("https://preview.internal:5173/congress");
-    const rendered = render(CongressPage, { props: { data: { members: [], moneySummaries: [] } } });
+    const rendered = render(CongressPage, {
+      props: { data: { members: [], moneySummaries: [], moneySummariesUnavailable: false } }
+    });
 
     expect(rendered.body).toContain("No Congress members are available right now.");
     expect(rendered.body).not.toContain("No members match the active filters.");
@@ -220,7 +226,9 @@ describe("/congress route render", () => {
 
   it("renders the screen-spec filtered-empty message when filters exclude all rows", () => {
     currentPageUrl = new URL("https://preview.internal:5173/congress?search=nomatch");
-    const rendered = render(CongressPage, { props: { data: { members: MEMBERS, moneySummaries: [] } } });
+    const rendered = render(CongressPage, {
+      props: { data: { members: MEMBERS, moneySummaries: [], moneySummariesUnavailable: false } }
+    });
 
     expect(rendered.body).toContain('value="nomatch"');
     expect(rendered.body).toContain("No members match the active filters.");
@@ -229,10 +237,78 @@ describe("/congress route render", () => {
     expect(rendered.body).not.toContain("Alex Senator");
   });
 
+  it("distinguishes unavailable financial summaries from a successful empty response", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/congress");
+    const unavailable = render(CongressPage, {
+      props: {
+        data: {
+          members: MEMBERS,
+          moneySummaries: [],
+          moneySummariesUnavailable: true
+        }
+      }
+    });
+
+    expect(unavailable.body).toContain("Jane Representative");
+    expect(unavailable.body).toContain(
+      'href="/person/11111111-1111-4111-8111-111111111111"'
+    );
+    expect(unavailable.body).toContain('data-testid="congress-member-profile-link"');
+    expect(unavailable.body).toContain('alt="Portrait of Jane Representative"');
+    expect(unavailable.body).toContain("House · NC · District 01 · Democratic");
+    expect(unavailable.body).toContain(
+      "Congress financial summaries are temporarily unavailable. Member directory information remains available."
+    );
+    expect(unavailable.body).toContain('data-testid="congress-money-summaries-unavailable"');
+    expect(unavailable.body).not.toContain("No reported/loaded money.");
+    expect(unavailable.body).not.toContain('data-testid="congress-money-sort"');
+    expect(unavailable.body).not.toContain('data-testid="comparison-bar-');
+    expect(unavailable.body).not.toContain('aria-label="Money summary for');
+    expect(unavailable.body).not.toContain("$");
+
+    const empty = render(CongressPage, {
+      props: {
+        data: {
+          members: MEMBERS,
+          moneySummaries: [],
+          moneySummariesUnavailable: false
+        }
+      }
+    });
+
+    expect(empty.body).not.toContain("financial summaries are temporarily unavailable");
+    expect(empty.body).toContain("No reported/loaded money.");
+    expect(empty.body).toContain('data-testid="congress-money-sort"');
+  });
+
+  it("keeps unavailable directory profile links behind the existing safe internal-link boundary", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/congress");
+    const rendered = render(CongressPage, {
+      props: {
+        data: {
+          members: [
+            { ...MEMBERS[0], person_detail_path: "javascript:alert('unsafe')" },
+            { ...MEMBERS[1], person_detail_path: "//attacker.example/person" }
+          ],
+          moneySummaries: [],
+          moneySummariesUnavailable: true
+        }
+      }
+    });
+
+    expect(rendered.body).toContain("Jane Representative");
+    expect(rendered.body).toContain("Alex Senator");
+    expect(rendered.body).not.toContain("javascript:");
+    expect(rendered.body).not.toContain("attacker.example");
+    expect(rendered.body).not.toContain('data-testid="congress-member-profile-link"');
+  });
+
   it("renders exact money columns, shared-scale bars, reported zero, and explicit no-money copy", () => {
     currentPageUrl = new URL("https://preview.internal:5173/congress");
     const rendered = render(CongressPage, {
-      props: { data: { members: MEMBERS, moneySummaries: MONEY_SUMMARIES } }
+      props: {
+        data: { members: MEMBERS, moneySummaries: MONEY_SUMMARIES, moneySummariesUnavailable: false }
+      }
     });
     const janeRow = renderedMemberRow(rendered.body, 0);
     const alexRow = renderedMemberRow(rendered.body, 1);
@@ -260,10 +336,44 @@ describe("/congress route render", () => {
     expect(mariaRow).not.toContain("$0");
   });
 
+  it("renders close large positive and negative cents exactly without changing source links", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/congress");
+    const precisionSummaries = MONEY_SUMMARIES.map((summary) => {
+      if (summary.person_id === MEMBERS[0]!.person_id) {
+        return { ...summary, total_raised: "9007199254740993.01" };
+      }
+      if (summary.person_id === MEMBERS[1]!.person_id) {
+        return { ...summary, total_raised: "-9007199254740993.01" };
+      }
+      return summary;
+    });
+    const rendered = render(CongressPage, {
+      props: {
+        data: {
+          members: MEMBERS,
+          moneySummaries: precisionSummaries,
+          moneySummariesUnavailable: false
+        }
+      }
+    });
+    const janeRow = renderedMemberRow(rendered.body, 0);
+    const alexRow = renderedMemberRow(rendered.body, 1);
+
+    expect(janeRow).toContain("$9,007,199,254,740,993.01");
+    expect(janeRow).toMatch(
+      /<a href="https:\/\/www\.fec\.gov\/data\/candidate\/H6NC01001\/" target="_blank" rel="noreferrer"[^>]*>\$9,007,199,254,740,993\.01<\/a>/
+    );
+    expect(alexRow).toContain("-$9,007,199,254,740,993.01");
+    expect(alexRow).toContain("Source link unavailable");
+    expect(alexRow).toMatch(/<span[^>]*>-\$9,007,199,254,740,993\.01<\/span>/);
+  });
+
   it("renders words, not a dollar figure, for a linked member whose cycle was never loaded", () => {
     currentPageUrl = new URL("https://preview.internal:5173/congress");
     const rendered = render(CongressPage, {
-      props: { data: { members: MEMBERS, moneySummaries: MONEY_SUMMARIES } }
+      props: {
+        data: { members: MEMBERS, moneySummaries: MONEY_SUMMARIES, moneySummariesUnavailable: false }
+      }
     });
     // Located by name, not by sort position: the assertions below are about
     // what this member's row says, and a failure should read "printed $0.00",

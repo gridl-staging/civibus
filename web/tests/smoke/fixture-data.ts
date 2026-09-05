@@ -6,6 +6,23 @@ import type {
 const fixtureConstants =
   (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
 
+const COMMITTEE_IE_SELECTED_CYCLE_FIELDS = {
+  selected_cycle: 2026,
+  coverage_start_date: "2025-01-01",
+  coverage_end_date: "2026-12-31",
+  available_cycles: [2022, 2024, 2026]
+};
+const POPULATED_COMMITTEE_IE_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "partial" as const,
+  basis: "fec_schedule_e_transactions" as const
+};
+const LOADED_ZERO_COMMITTEE_IE_COVERAGE = {
+  activity_state: "loaded_zero" as const,
+  completeness: "partial" as const,
+  basis: "fec_schedule_e_transactions" as const
+};
+
 const {
   SMOKE_CANDIDACY_ID,
   SMOKE_CANDIDACY_PERSON_NAME,
@@ -340,11 +357,13 @@ function buildFilingPaginationCommitteeFixture(params: {
       filings
     },
     independentExpendituresMade: {
+      ...COMMITTEE_IE_SELECTED_CYCLE_FIELDS,
       committee_id: id,
       support_total: "0.00",
       oppose_total: "0.00",
       ie_transaction_count: 0,
       excluded_outlier_count: 0,
+      coverage: LOADED_ZERO_COMMITTEE_IE_COVERAGE,
       targets: []
     }
   };
@@ -1190,11 +1209,13 @@ export const smokeFixtures = {
       ]
     },
     independentExpendituresMade: {
+      ...COMMITTEE_IE_SELECTED_CYCLE_FIELDS,
       committee_id: SMOKE_COMMITTEE_ID,
       support_total: "1500.00",
       oppose_total: "250.00",
       ie_transaction_count: 3,
       excluded_outlier_count: 1,
+      coverage: POPULATED_COMMITTEE_IE_COVERAGE,
       targets: [
         {
           candidate_id: SMOKE_CANDIDATE_ID,
@@ -1273,11 +1294,13 @@ export const smokeFixtures = {
       filings: []
     },
     independentExpendituresMade: {
+      ...COMMITTEE_IE_SELECTED_CYCLE_FIELDS,
       committee_id: SMOKE_EMPTY_COMMITTEE_ID,
       support_total: "0.00",
       oppose_total: "0.00",
       ie_transaction_count: 0,
       excluded_outlier_count: 0,
+      coverage: LOADED_ZERO_COMMITTEE_IE_COVERAGE,
       targets: []
     }
   },
@@ -1378,11 +1401,13 @@ export const smokeFixtures = {
       ]
     },
     independentExpendituresMade: {
+      ...COMMITTEE_IE_SELECTED_CYCLE_FIELDS,
       committee_id: SMOKE_PHL_COMMITTEE_ID,
       support_total: "0.00",
       oppose_total: "0.00",
       ie_transaction_count: 0,
       excluded_outlier_count: 0,
+      coverage: LOADED_ZERO_COMMITTEE_IE_COVERAGE,
       targets: []
     }
   },
@@ -1469,11 +1494,13 @@ export const smokeFixtures = {
       filings: []
     },
     independentExpendituresMade: {
+      ...COMMITTEE_IE_SELECTED_CYCLE_FIELDS,
       committee_id: SMOKE_IDENTITY_JOURNEY_COMMITTEE_ID,
       support_total: "0.00",
       oppose_total: "0.00",
       ie_transaction_count: 0,
       excluded_outlier_count: 0,
+      coverage: LOADED_ZERO_COMMITTEE_IE_COVERAGE,
       targets: []
     }
   },

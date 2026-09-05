@@ -86,6 +86,29 @@ describe("/candidates +page.server load", () => {
     expect(requestJson).toHaveBeenCalledWith("/v1/candidates?offset=-1");
   });
 
+  it("forwards a signed-bigint overflow unchanged and preserves the backend 422", async () => {
+    const requestJson = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiResponseError(422, {
+          detail: [
+            {
+              loc: ["query", "offset"],
+              msg: "Input should be less than or equal to 9223372036854775807"
+            }
+          ]
+        })
+      );
+
+    await expect(
+      load(createLoadEvent("https://web.civibus.local/candidates?offset=9223372036854775808", requestJson))
+    ).rejects.toMatchObject({
+      status: 422,
+      body: { detail: [{ loc: ["query", "offset"] }] }
+    });
+    expect(requestJson).toHaveBeenCalledWith("/v1/candidates?offset=9223372036854775808");
+  });
+
   it("drops explicit blank state and office filters so all-option submits behave like no filter", async () => {
     const requestJson = vi.fn().mockResolvedValue(CANDIDATE_LIST_RESPONSE);
 

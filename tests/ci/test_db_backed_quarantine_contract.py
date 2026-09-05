@@ -118,6 +118,21 @@ def _assert_entries_resolve_once(
     assert resolved_node_ids == entry_node_ids
 
 
+def _assert_quarantined_selection_matches_registry(
+    entries: tuple[root_conftest._DbBackedQuarantineEntry, ...],
+    selected_node_ids: tuple[str, ...],
+) -> None:
+    registered_node_ids = {entry.node_id for entry in entries}
+    selected_node_id_set = set(selected_node_ids)
+    missing_node_ids = sorted(registered_node_ids - selected_node_id_set)
+    unexpected_node_ids = sorted(selected_node_id_set - registered_node_ids)
+
+    assert selected_node_id_set == registered_node_ids, (
+        "Quarantined DB-backed marker selection differs from registry: "
+        f"missing={missing_node_ids}, unexpected={unexpected_node_ids}"
+    )
+
+
 def test_full_scope_validator_rejects_unknown_node_ids() -> None:
     entries = (_entry("api/test_example.py::test_missing"),)
 
@@ -131,6 +146,34 @@ def test_full_scope_validator_rejects_one_entry_resolving_multiple_items() -> No
 
     with pytest.raises(AssertionError, match="resolved to multiple collected items"):
         _assert_entries_resolve_once(entries, (duplicated_node_id, duplicated_node_id))
+
+
+@pytest.mark.parametrize(
+    ("registered_node_ids", "selected_node_ids", "error_pattern"),
+    [
+        pytest.param(
+            ("api/test_example.py::test_registered", "api/test_example.py::test_missing"),
+            ("api/test_example.py::test_registered",),
+            r"missing=.*test_missing",
+            id="missing-registered-entry",
+        ),
+        pytest.param(
+            ("api/test_example.py::test_registered",),
+            ("api/test_example.py::test_registered", "api/test_example.py::test_unexpected"),
+            r"unexpected=.*test_unexpected",
+            id="unexpected-selected-node",
+        ),
+    ],
+)
+def test_quarantined_selection_validator_rejects_exact_set_drift(
+    registered_node_ids: tuple[str, ...],
+    selected_node_ids: tuple[str, ...],
+    error_pattern: str,
+) -> None:
+    entries = tuple(_entry(node_id) for node_id in registered_node_ids)
+
+    with pytest.raises(AssertionError, match=error_pattern):
+        _assert_quarantined_selection_matches_registry(entries, selected_node_ids)
 
 
 class _FakeItem:
@@ -170,16 +213,16 @@ def test_collection_hook_marks_only_exact_node_id_matches(monkeypatch: pytest.Mo
     assert longer_item.marker_names == []
 
 
-def _collect_db_backed_node_ids(*, marker_expression: str | None = None) -> tuple[str, ...]:
+def _collect_quarantined_db_backed_node_ids() -> tuple[str, ...]:
     command = [
         sys.executable,
         "-m",
         "pytest",
         "--collect-only",
         "-q",
+        "-m",
+        "quarantined",
     ]
-    if marker_expression is not None:
-        command.extend(["-m", marker_expression])
     command.extend(DB_BACKED_TARGET_PATHS)
     result = subprocess.run(
         command,
@@ -193,27 +236,28 @@ def _collect_db_backed_node_ids(*, marker_expression: str | None = None) -> tupl
         f"DB-backed collection failed with exit {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     collected_node_ids = tuple(line.strip() for line in result.stdout.splitlines() if "::" in line)
-    assert collected_node_ids, "DB-backed collection was vacuous"
+    assert collected_node_ids, "Quarantined DB-backed collection was vacuous"
     return collected_node_ids
 
 
 @pytest.fixture(scope="module")
-def all_db_backed_node_ids() -> tuple[str, ...]:
-    return _collect_db_backed_node_ids()
+def quarantined_db_backed_node_ids() -> tuple[str, ...]:
+    return _collect_quarantined_db_backed_node_ids()
 
 
 def test_quarantine_entries_resolve_one_to_one_in_complete_db_backed_scope(
-    all_db_backed_node_ids: tuple[str, ...],
+    quarantined_db_backed_node_ids: tuple[str, ...],
 ) -> None:
     entries = root_conftest._load_db_backed_quarantine()
 
-    _assert_entries_resolve_once(entries, all_db_backed_node_ids)
+    _assert_entries_resolve_once(entries, quarantined_db_backed_node_ids)
 
 
-def test_quarantine_marker_is_applied_before_builtin_marker_deselection() -> None:
+def test_quarantine_marker_is_applied_before_builtin_marker_deselection(
+    quarantined_db_backed_node_ids: tuple[str, ...],
+) -> None:
     entries = root_conftest._load_db_backed_quarantine()
 
-    selected_node_ids = _collect_db_backed_node_ids(marker_expression="integration and not quarantined")
-
-    assert set(selected_node_ids).isdisjoint(entry.node_id for entry in entries)
+    assert quarantined_db_backed_node_ids, "Quarantined DB-backed collection was vacuous"
+    _assert_quarantined_selection_matches_registry(entries, quarantined_db_backed_node_ids)
     assert root_conftest.pytest_collection_modifyitems.pytest_impl["tryfirst"] is True

@@ -609,7 +609,7 @@ def test_ensure_durham_data_source_refreshes_existing_metadata_from_config(db_co
     }
 
 
-def test_ensure_durham_jurisdiction_refreshes_existing_metadata_from_config(db_conn: psycopg.Connection) -> None:
+def test_ensure_durham_jurisdiction_refreshes_only_compatible_county_name(db_conn: psycopg.Connection) -> None:
     config = load_durham_config()
     jurisdiction = config["jurisdiction"]
     assert isinstance(jurisdiction, dict)
@@ -621,7 +621,7 @@ def test_ensure_durham_jurisdiction_refreshes_existing_metadata_from_config(db_c
             VALUES (%s, %s, %s, %s)
             RETURNING id
             """,
-            ("Old Durham Label", "municipality", jurisdiction["fips"], "SC"),
+            ("Old Durham Label", jurisdiction["type"], jurisdiction["fips"], jurisdiction["state"]),
         )
         existing_row = cursor.fetchone()
 
@@ -635,7 +635,7 @@ def test_ensure_durham_jurisdiction_refreshes_existing_metadata_from_config(db_c
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT name, jurisdiction_type, fips, state
+            SELECT name, jurisdiction_type, fips, county_geoid, state
             FROM core.jurisdiction
             WHERE id = %s
             """,
@@ -647,5 +647,58 @@ def test_ensure_durham_jurisdiction_refreshes_existing_metadata_from_config(db_c
         "name": jurisdiction["name"],
         "jurisdiction_type": jurisdiction["type"],
         "fips": jurisdiction["fips"],
+        "county_geoid": jurisdiction["fips"],
         "state": jurisdiction["state"],
     }
+
+
+@pytest.mark.parametrize(
+    ("existing_type", "existing_state"),
+    (
+        ("municipality", "NC"),
+        ("county", "SC"),
+    ),
+)
+def test_ensure_durham_jurisdiction_refuses_incompatible_bare_fips_row_without_mutation(
+    db_conn: psycopg.Connection,
+    existing_type: str,
+    existing_state: str,
+) -> None:
+    config = load_durham_config()
+    jurisdiction = config["jurisdiction"]
+    assert isinstance(jurisdiction, dict)
+    original = {
+        "name": "Conflicting geography",
+        "jurisdiction_type": existing_type,
+        "fips": jurisdiction["fips"],
+        "county_geoid": None,
+        "state": existing_state,
+    }
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            INSERT INTO core.jurisdiction (name, jurisdiction_type, fips, county_geoid, state)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            tuple(original.values()),
+        )
+        existing_row = cursor.fetchone()
+    assert existing_row is not None
+
+    with pytest.raises(ValueError, match=r"bare-FIPS reinterpretation.*county_geoid=37063"):
+        ensure_durham_jurisdiction(db_conn, config)
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT name, jurisdiction_type, fips, county_geoid, state
+            FROM core.jurisdiction
+            WHERE id = %s
+            """,
+            (existing_row["id"],),
+        )
+        unchanged_row = cursor.fetchone()
+
+    assert unchanged_row == original

@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 
 import pytest
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 
 import api.main as api_main
@@ -65,7 +65,7 @@ def test_valid_key_hits_cap_then_returns_429_with_retry_after(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     current_time_seconds = {"value": 100}
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: current_time_seconds["value"])
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: current_time_seconds["value"])
     client = _build_rate_limited_client(monkeypatch, max_requests=2, window_seconds=10)
 
     first_response = client.get(f"/v1{_PROBE_ROUTE_PATH}", headers={"X-API-Key": _VALID_API_KEY})
@@ -83,7 +83,7 @@ def test_second_key_isolated_and_window_reset_restores_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     current_time_seconds = {"value": 100}
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: current_time_seconds["value"])
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: current_time_seconds["value"])
     client = _build_rate_limited_client(monkeypatch, max_requests=2, window_seconds=10)
 
     for _ in range(2):
@@ -101,7 +101,7 @@ def test_second_key_isolated_and_window_reset_restores_capacity(
 def test_first_party_key_is_exempt_from_rate_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: 100)
     client = _build_rate_limited_client(
         monkeypatch,
         max_requests=2,
@@ -119,7 +119,7 @@ def test_first_party_key_is_exempt_from_rate_limit(
 def test_non_first_party_key_still_rate_limited(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: 100)
     client = _build_rate_limited_client(
         monkeypatch,
         max_requests=2,
@@ -139,7 +139,7 @@ def test_unset_first_party_env_still_rate_limits_normal_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("CIVIBUS_FIRST_PARTY_API_KEYS", raising=False)
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: 100)
     client = _build_rate_limited_client(monkeypatch, max_requests=2, window_seconds=10)
 
     statuses = [
@@ -152,7 +152,7 @@ def test_unset_first_party_env_still_rate_limits_normal_key(
 def test_first_party_key_on_administrative_path_still_rate_limited(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: 100)
     client = _build_rate_limited_client(
         monkeypatch,
         max_requests=2,
@@ -175,7 +175,7 @@ def test_ip_rate_limit_keys_are_isolated(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("CIVIBUS_RATE_LIMIT_REQUESTS", "2")
     monkeypatch.setenv("CIVIBUS_RATE_LIMIT_WINDOW_SECONDS", "10")
     monkeypatch.setattr(api_main, "_v1_routers", lambda: ())
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: current_time_seconds["value"])
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: current_time_seconds["value"])
     app = create_app()
     request = Request({"type": "http", "app": app, "method": "GET", "path": "/public/v1/federal/officials"})
 
@@ -189,11 +189,158 @@ def test_ip_rate_limit_keys_are_isolated(monkeypatch: pytest.MonkeyPatch) -> Non
     access_middleware._enforce_fixed_window_rate_limit_for_key(request, "2.2.2.2")
 
 
+def test_expired_unique_identity_buckets_are_pruned_on_the_next_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_time_seconds = {"value": 100}
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: current_time_seconds["value"])
+    app = FastAPI()
+    access_middleware.initialize_rate_limiter_state(app.state, max_requests=2, window_seconds=10)
+    request = Request({"type": "http", "app": app, "method": "GET", "path": "/public/v1/probe"})
+
+    for identity_number in range(1_000):
+        access_middleware._enforce_fixed_window_rate_limit_for_key(request, f"unique-identity-{identity_number}")
+
+    assert len(app.state.rate_limit_buckets) == 1_000
+
+    current_time_seconds["value"] = 110
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "203.0.113.1")
+
+    assert set(app.state.rate_limit_buckets) == {"203.0.113.1"}
+
+
+def test_expired_returning_identity_is_reinserted_after_live_buckets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_time_seconds = {"value": 100}
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: current_time_seconds["value"])
+    app = FastAPI()
+    access_middleware.initialize_rate_limiter_state(app.state, max_requests=2, window_seconds=10)
+    request = Request({"type": "http", "app": app, "method": "GET", "path": "/public/v1/probe"})
+
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "identity-a")
+    current_time_seconds["value"] = 101
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "identity-b")
+    current_time_seconds["value"] = 110
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "identity-a")
+
+    assert list(app.state.rate_limit_buckets) == ["identity-b", "identity-a"]
+
+    current_time_seconds["value"] = 111
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "identity-b")
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "identity-c")
+
+    assert list(app.state.rate_limit_buckets) == ["identity-b", "identity-a", "identity-c"]
+    assert app.state.rate_limit_buckets["identity-b"] == access_middleware._FixedWindowBucket(
+        window_started_at=111,
+        request_count=1,
+    )
+
+    current_time_seconds["value"] = 120
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "identity-d")
+
+    assert list(app.state.rate_limit_buckets) == ["identity-b", "identity-c", "identity-d"]
+
+
+def test_rate_limit_clock_uses_monotonic_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(access_middleware.time, "time", lambda: 999)
+    monkeypatch.setattr(access_middleware.time, "monotonic", lambda: 123.9)
+
+    assert access_middleware._current_monotonic_seconds() == 123
+
+
+def test_wall_clock_rollback_does_not_extend_a_fixed_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monotonic_seconds = {"value": 100.0}
+    wall_seconds = {"value": 1_000.0}
+    monkeypatch.setattr(access_middleware.time, "monotonic", lambda: monotonic_seconds["value"])
+    monkeypatch.setattr(access_middleware.time, "time", lambda: wall_seconds["value"])
+    app = FastAPI()
+    access_middleware.initialize_rate_limiter_state(app.state, max_requests=1, window_seconds=10)
+    request = Request({"type": "http", "app": app, "method": "GET", "path": "/public/v1/probe"})
+
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "identity")
+    monotonic_seconds["value"] = 109.0
+    wall_seconds["value"] = -10_000.0
+
+    with pytest.raises(access_middleware.HTTPException) as exc_info:
+        access_middleware._enforce_fixed_window_rate_limit_for_key(request, "identity")
+
+    assert exc_info.value.headers == {"Retry-After": "1"}
+
+    monotonic_seconds["value"] = 110.0
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "identity")
+
+    assert app.state.rate_limit_buckets["identity"] == access_middleware._FixedWindowBucket(
+        window_started_at=110,
+        request_count=1,
+    )
+
+
+def test_cleanup_scans_at_most_once_per_configured_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TrackingBuckets(dict[str, access_middleware._FixedWindowBucket]):
+        def __init__(self) -> None:
+            super().__init__()
+            self.scan_count = 0
+
+        def items(self):  # type: ignore[no-untyped-def, override]
+            self.scan_count += 1
+            return super().items()
+
+    current_time_seconds = {"value": 100}
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: current_time_seconds["value"])
+    app = FastAPI()
+    access_middleware.initialize_rate_limiter_state(app.state, max_requests=1_000, window_seconds=10)
+    tracking_buckets = TrackingBuckets()
+    app.state.rate_limit_buckets = tracking_buckets
+    request = Request({"type": "http", "app": app, "method": "GET", "path": "/public/v1/probe"})
+
+    for _ in range(100):
+        access_middleware._enforce_fixed_window_rate_limit_for_key(request, "steady-identity")
+
+    assert tracking_buckets.scan_count == 0
+
+    current_time_seconds["value"] = 110
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "steady-identity")
+    for _ in range(100):
+        access_middleware._enforce_fixed_window_rate_limit_for_key(request, "steady-identity")
+
+    assert tracking_buckets.scan_count == 1
+
+    current_time_seconds["value"] = 120
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "steady-identity")
+
+    assert tracking_buckets.scan_count == 2
+
+
+@pytest.mark.parametrize("client_address", [None, ("", 0), ("   ", 0)])
+def test_public_rate_limit_rejects_unusable_client_identity(
+    client_address: tuple[str, int] | None,
+) -> None:
+    app = FastAPI()
+    access_middleware.initialize_rate_limiter_state(app.state, max_requests=1, window_seconds=60)
+
+    @app.get("/public-rate-limit-probe", dependencies=[Depends(access_middleware.enforce_public_ip_rate_limit)])
+    def public_rate_limit_probe() -> dict[str, str]:
+        return {"status": "ok"}
+
+    client = TestClient(app, client=client_address)
+
+    response = client.get("/public-rate-limit-probe")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Client identity unavailable"}
+    assert app.state.rate_limit_buckets == {}
+
+
 def test_fresh_app_instance_starts_with_fresh_rate_limit_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     current_time_seconds = {"value": 500}
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: current_time_seconds["value"])
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: current_time_seconds["value"])
     first_client = _build_rate_limited_client(monkeypatch, max_requests=1, window_seconds=60)
 
     assert first_client.get(f"/v1{_PROBE_ROUTE_PATH}", headers={"X-API-Key": _VALID_API_KEY}).status_code == 200
@@ -210,7 +357,7 @@ def test_missing_or_invalid_key_does_not_consume_valid_key_quota(
     request_headers: dict[str, str],
 ) -> None:
     current_time_seconds = {"value": 900}
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: current_time_seconds["value"])
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: current_time_seconds["value"])
     client = _build_rate_limited_client(monkeypatch, max_requests=1, window_seconds=30)
 
     unauthorized_response = client.get(f"/v1{_PROBE_ROUTE_PATH}", headers=request_headers)
@@ -256,7 +403,7 @@ def test_same_key_requests_are_serialized_within_a_window(
     monkeypatch.setenv("CIVIBUS_RATE_LIMIT_REQUESTS", "2")
     monkeypatch.setenv("CIVIBUS_RATE_LIMIT_WINDOW_SECONDS", "30")
     monkeypatch.setattr(api_main, "_v1_routers", lambda: ())
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: 100)
     app = create_app()
 
     coordinated_bucket = CoordinatedBucket()
@@ -300,7 +447,7 @@ def test_public_rate_limit_policy_accessor_matches_configured_state_and_enforcem
     configured policy rather than the 100/60 test defaults, and that the cap the
     fixed-window enforcer applies agrees with what the accessor reports.
     """
-    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    monkeypatch.setattr(access_middleware, "_current_monotonic_seconds", lambda: 100)
     client = _build_rate_limited_client(monkeypatch, max_requests=7, window_seconds=13)
 
     assert access_middleware.public_rate_limit_policy(client.app.state) == (7, 13)

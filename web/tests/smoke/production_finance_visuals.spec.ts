@@ -294,7 +294,7 @@ async function expectChartSourceLinksKeyboardReachable(regions: Locator[]): Prom
 }
 
 async function expectDisclosureKeyboardReachable(page: Page): Promise<void> {
-  const disclosure = page.getByRole("button", { name: "View chart data", exact: true });
+  const disclosure = page.getByRole("button", { name: /^View chart data(?::|$)/ });
   const expectedDisclosureCount = await disclosure.count();
   if (expectedDisclosureCount === 0) {
     return;
@@ -384,6 +384,7 @@ async function settledOutsideSpendingTotals(
 
   // dt/dd pairs: the definition follows its term inside the same row container.
   const readTotal = async (label: string): Promise<string> => {
+    // eslint-disable-next-line playwright/no-raw-locators -- dt/dd totals have no role-bearing row wrapper.
     const row = page
       .locator("div", { has: page.getByText(label, { exact: true }) })
       .filter({ hasText: /\$/ })

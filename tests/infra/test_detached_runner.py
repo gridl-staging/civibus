@@ -54,6 +54,7 @@ from tests.infra.detached_runner_helpers import (
 )
 
 _STOP_CADENCE_CONSTANTS = ("STOP_POLLS_PER_SECOND", "DEFAULT_STOP_GRACE_SECONDS")
+_OWNERSHIP_POLLING_CONSTANTS = ("WRAPPER_LAUNCH_APPROVAL_ATTEMPTS",)
 # The exact operator-visible duplicate-start refusals, pinned in full so the
 # runner keeps one wording per case instead of near-copies that can drift.
 _SURVIVING_CHILD_REFUSAL = (
@@ -710,6 +711,19 @@ def test_stop_cadence_constants_live_with_the_ownership_owner() -> None:
     for name in _STOP_CADENCE_CONSTANTS:
         assignment = re.compile(rf"^{name}=", re.MULTILINE)
         assert not assignment.search(runner_source), f"{name} is declared in the runner, not its cadence owner"
+        assert assignment.search(ownership_source), f"{name} is not declared by the ownership owner"
+
+
+def test_wrapper_approval_polling_constants_live_with_the_ownership_owner() -> None:
+    """Guard declaration ownership for wrapper approval cadence constants."""
+    runner_source = SCRIPT_PATH.read_text(encoding="utf-8")
+    ownership_source = _shell_library_source("detached_runner_ownership_lib.sh")
+    launch_source = (SCRIPT_PATH.parent / "detached_runner_launch_lib.sh").read_text(encoding="utf-8")
+
+    for name in _OWNERSHIP_POLLING_CONSTANTS:
+        assignment = re.compile(rf"^{name}=", re.MULTILINE)
+        assert not assignment.search(runner_source), f"{name} is declared in the runner, not its cadence owner"
+        assert not assignment.search(launch_source), f"{name} is declared in the launch library, not its cadence owner"
         assert assignment.search(ownership_source), f"{name} is not declared by the ownership owner"
 
 

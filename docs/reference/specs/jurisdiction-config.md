@@ -13,6 +13,55 @@ Its models reject unknown keys and validate supplied dates and status literals;
 `load_jurisdiction_config` is the canonical reader. The canonical new-config
 shape is [`_template/config.yaml`](../../../domains/campaign_finance/jurisdictions/_template/config.yaml).
 
+## Identity And Coverage Boundary
+
+The config identity is exactly `(jurisdiction.type, jurisdiction.code)`. The
+type is load-bearing: `state/LA` and `municipality/LA` are distinct even though
+their code token is the same. `jurisdiction.name`, `jurisdiction.fips`, and the
+package directory are attributes of that composite identity, not alternate
+keys.
+
+`GeographicJurisdictionTypeLiteral` is the closed geographic-subject set
+`federal | state | county | municipality | school_district | special_district`.
+Config acquisition identity uses the backward-compatible public name
+`JurisdictionTypeLiteral`, whose authority-kind set adds `named_other` for a
+source package owned by an explicitly named non-geographic filing authority.
+This does not add `named_other` to geography. The coverage registry separately
+types filing-authority references with the same authority-kind vocabulary.
+
+The current schema types `jurisdiction.fips` and `jurisdiction.parent` only as
+strings. They are compatibility/source-contract fields with these limits:
+
+- `fips` does not carry an identifier kind. A state FIPS, county/county-
+  equivalent GEOID, and place GEOID are different identifiers even when all are
+  digits. Several municipality configs preserve county-shaped values, so
+  `(type, code)` remains the only config identity and bare `fips` must not join
+  to `core.jurisdiction`, coverage, civic, provenance, or route owners.
+- `parent` is package/acquisition context expressed in config-code space. It is
+  not `core.jurisdiction.parent_id` geographic containment and is not coverage-
+  registry inheritance. Translation validates it against those owners when
+  applicable but never copies it into them or lets it override them.
+- `data_sources[].coverage.covers_sub_jurisdictions` says only that one source
+  has some sub-jurisdiction scope. It does not identify every covered child,
+  filing authority, office/contest class, transaction class, or completeness
+  boundary and cannot alone authorize an inherited public claim.
+
+Cross-owner translation therefore accepts `(namespace, kind, value)`, requests
+one target kind, and refuses zero matches, multiple matches, kind mismatch,
+contradiction, or a missing target slot. The coverage-registry translation
+owner keeps `geographic_subject`, `filing_authority`, `acquisition_scope`,
+`provenance_scope`, and `public_route` separate. It never infers a FIPS kind
+from string length, config type, directory, or name. Operational/provenance
+scope strings are exact owner-local values and are not reverse-parsed into
+config or geography.
+
+The target consolidated-city-county geography remains with the geography owner:
+one proven coextensive geographic object with kind-qualified county-equivalent
+and place identifiers. A city config carrying its surrounding county's GEOID is
+not evidence of consolidation. Until the geography and translation owners can
+represent and prove the mapping, translation refuses; config data remains
+unchanged.
+
 ## Example: Campaign Finance Domain
 
 ```yaml
@@ -20,7 +69,7 @@ shape is [`_template/config.yaml`](../../../domains/campaign_finance/jurisdictio
 jurisdiction:
   name: "Example State"
   code: "EX"
-  type: "state"  # federal | state | county | municipality
+  type: "state"  # federal | state | county | municipality | school_district | special_district | named_other
   fips: "00"
   parent: null    # for county/muni, reference parent jurisdiction
 
@@ -282,471 +331,5 @@ readability duplicate in a separate versioned migration decision.
 
 ## Structured Contribution-Limit Rules: Contract (Stage 2 Decision)
 
-This section supersedes the earlier "Laws Schema: Future Direction (Stage 3
-Research Spike)" sketch. It is the source-grounded contract text produced by the
-Stage 2 research/specification pass. Its evidence base is the Stage 1 audit
-[`docs/reference/research/artifacts/2026_08_22_legal_variation_owner_audit.md`](../research/artifacts/2026_08_22_legal_variation_owner_audit.md)
-(dimensions L1–L23, S1–S14, and the nine Open Questions), whose specimen
-citations are not restated here except where a decision turns on one.
-
-Stage 2 changes only this spec. It does not touch
-[`config_schema.py`](../../../domains/campaign_finance/jurisdictions/config_schema.py),
-any jurisdiction `config.yaml`, any loader, any migration, or any test. See
-"Out of Scope for Stage 2" below.
-
-### Decision: **refine**, and keep the fact inside the existing owner
-
-The `campaign_finance.contribution_limit_rules` direction is **accepted with
-refinements**, not rejected and not accepted as-is. Four refinements are load-
-bearing and are specified below: (1) a `limit_basis` dimension replaces the
-misleading `limit_per_election` column name; (2) an `explicit-unknown` value
-state distinct from both "applies to all values" and "no statutory limit";
-(3) per-rule `source_citation`, `effective_date`, and `sunset_date` semantics
-separated from block-level `laws.last_verified`; (4) a single shared
-`office_level` vocabulary bound to two separate fields.
-
-Backward compatibility is preserved throughout: the flat `laws.contribution_limits`
-block stays required and unchanged, and the structured rules are additive on top of
-it. The refined rules live as **additive seed data inside the existing `laws`
-block**, validated by the existing owner
-[`config_schema.py::load_jurisdiction_config`](../../../domains/campaign_finance/jurisdictions/config_schema.py)
-over each jurisdiction `config.yaml`. This is the seam the SSOT registry already
-assigns to that owner: *"Keep source URLs, formats, coverage, cadence
-expectations, field mappings, and structured source/legal facts here"*
-([`docs/reference/ssot-registry.md:12`](../ssot-registry.md)). Concretely, the
-implemented shape is an **optional** `laws.contribution_limit_rules: list[…]`
-key inside `LawsConfig`.
-
-**Rejected: a parallel legal-rule registry** (a new JSON/YAML store, a new
-registry module, or a new SSOT row). Grounds: (a) the SSOT registry already
-assigns structured legal facts to the config owner; (b) a second store of the
-same facts would immediately fall under the lifecycle spec's duplicate-mismatch
-refusal rule
-([`campaign-finance-region-lifecycle.md`](./campaign-finance-region-lifecycle.md#duplicate-mismatch-rule),
-"Duplicate-mismatch rule"), turning every drift into a refused projection; (c)
-the `laws` block is already the designated seed for the rule table, so a separate
-registry would need a migration away from an already-specified seam.
-
-**Rejected for Stage 2: creating the PostGIS table, its loader, or any config
-rewrite.** The `campaign_finance.contribution_limit_rules` table, the YAML→row
-loader, and the per-jurisdiction seed migrations are **future, unbuilt** work.
-A Stage 2 repo scan found only the fail-closed schema test outside documentation
-and planning artifacts. The follow-up schema stage has since implemented the
-typed config field, but there is still no runtime table consumer, `.sql`
-definition, or checked-in `.yaml` seed. Stage 2 defined the **YAML seed shape and
-its validation contract in prose only**; the table, loader, and migrations remain
-follow-up Beads (see "Out of Scope for Stage 2").
-
-### Rule identity and dimensions
-
-**Row key: `jurisdiction_fips`, never `jurisdiction.code`.** The audit's identity-
-key finding proves `jurisdiction.code` is not unique across the config tree
-(`states/LA` → `code: LA`, `fips: 22` = Louisiana; `cities/LA` → `code: LA`,
-`fips: 06037` = Los Angeles), and it is not the lifecycle/coverage identity
-namespace (those rows are `CA_LOS_ANGELES`, `PA_PHILADELPHIA`, …). Because the
-rule list is nested inside one jurisdiction's `config.yaml`, individual seed
-rules do **not** repeat a jurisdiction key; the future table's `jurisdiction_fips`
-column is populated by the loader from the enclosing config's `jurisdiction.fips`
-(`06`, `13`, `06037`, …), never from `jurisdiction.code`. Nothing a config author
-writes can therefore set a wrong or ambiguous key.
-
-Each rule carries these dimension fields. A dimension that is **omitted or
-`null` means "applies to all values of that dimension"** — the sketch's original
-semantic, preserved. This "all values" meaning is deliberately kept **separate
-from the explicit-unknown value state** defined below (that separation is the
-single most important refinement; see "Value semantics").
-
-| Dimension | Controlled vocabulary (seeded; extend by spec change, not ad hoc) | Notes |
-| --- | --- | --- |
-| `donor_type` | `individual`, `pac`, `party_committee`, `corporation`, `union`, `small_donor_committee`, `small_contributor_committee`, `candidate`, `self`, `issue_committee`, `ie_committee` | Fixes L2: the flat five-slot set has no home for CO's small-donor-committee schedule or CA's small-contributor committee (squeezed into `pac_to_candidate` today). |
-| `recipient_type` | `candidate_committee`, `party_committee`, `pac`, `issue_committee`, `ie_committee`, `ballot_measure_committee` | Fixes L3: today every flat field assumes recipient = candidate, so CO's party-aggregate cap and its candidate→candidate / IE→candidate transfer bans cannot be expressed. |
-| `office_level` | initial canonical tokens enumerated in "One office vocabulary, two fields" below | Fixes L1; omitted/`null` still means all offices. |
-| `election_type` | `primary`, `general`, `runoff`, `special`, `recall` | Fixes L4: GA publishes runoff caps as a separate column; CA treats primary/general/special as separate elections. |
-
-#### One office vocabulary, two fields (S3 decision)
-
-Stage 2 decides: **`data_sources[].coverage.office_levels` and the legal-rule
-`office_level` draw from one shared, canonically-spelled vocabulary, but remain
-two separate fields with two separate meanings and owners' semantics.**
-
-The **initial canonical allowed-token list** is the union needed to represent
-the eight audited specimens, after normalizing known spelling aliases, plus the
-four legal tiers those specimens publish:
-
-- office-specific tokens: `attorney_general`, `board_of_equalization`,
-  `board_of_supervisors`, `borough_president`, `city_attorney`,
-  `city_commissioners`, `city_council`, `controller`, `cu_regent`,
-  `district_attorney`, `governor`, `insurance_commissioner`, `judicial`,
-  `lieutenant_governor`, `mayor`, `public_advocate`, `register_of_wills`,
-  `secretary_of_state`, `sheriff`, `state_board_of_education`,
-  `state_controller`, `state_house`, `state_senate`, `state_treasurer`, and
-  `superintendent_of_public_instruction`;
-- jurisdiction/scope tokens: `citywide`, `county`, `municipal`,
-  `school_district`, `special_district`, and `rtd`;
-- legal-tier tokens: `statewide`, `statewide_except_governor`, `legislative`,
-  and `other_office`.
-
-This is a closed, seeded vocabulary: a newly researched office or legally
-defined tier requires a spec change before it can appear in a structured legal
-rule. Within the eight specimens, existing source-scope spellings
-`comptroller` (NYC) and `city_controller` (LA) alias canonical `controller`, and
-`state_assembly` (CA) aliases canonical `state_house`. `state_controller`
-remains distinct because the CA specimen names that statewide office explicitly;
-`controller` is the canonical municipal-office token. The broader 26-config
-normalization remains follow-up work; until it lands, those legacy aliases can
-remain in existing unvalidated `coverage.office_levels`, but a new legal rule
-must use only the canonical list above.
-
-- One vocabulary removes the drift the audit found: 34 uncontrolled tokens with
-  three spellings of one municipal office family — `comptroller` (NYC),
-  `controller` (PHL), `city_controller` (LA) — and split chamber naming
-  (`state_house` CO/GA/NC vs `state_assembly` CA). The canonical spellings and
-  aliases are enumerated above rather than left to each config author.
-- Two fields, not one, because they answer different questions and are not
-  required to agree: `coverage.office_levels` is a **source-scope** fact ("which
-  offices this feed carries") owned as part of the source contract;
-  legal-rule `office_level` is a **legal-scope** fact ("which office this cap
-  applies to"). A feed may cover offices that share one cap, and a cap may name
-  an office the feed does not label per row (S13: NC's transaction export has no
-  office column at all).
-- Coupling caveat, stated explicitly per Open Question 4: sharing the vocabulary
-  couples a source-scope field to a legal field only at the *token-spelling*
-  level, not at the required-ness or ownership level. That is the intended, low-
-  risk coupling. **Normalizing the existing `coverage.office_levels` values across
-  the 26 checked-in configs is a config-rewrite project and is out of scope for
-  Stage 2** (see follow-up Beads); the new legal-rule `office_level` uses the
-  canonical vocabulary from creation because it is additive.
-
-### Value semantics: amount, basis, and the five states
-
-The flat scalar (`ContributionLimitValue = StrictInt | "unlimited" |
-"prohibited" | None`,
-[`config_schema.py:17`](../../../domains/campaign_finance/jurisdictions/config_schema.py))
-carries no basis unit and overloads `None` across three incompatible meanings
-(audit L5, L12). The refined rule replaces the sketch's single
-`limit_per_election NUMERIC` / `banned BOOLEAN` / `unlimited BOOLEAN` triple with
-a discriminated **`limit_status`** plus an amount and a basis:
-
-| `limit_status` | `limit_amount` | `limit_basis` | Meaning | Audit dimension |
-| --- | --- | --- | --- | --- |
-| `numeric` | required (integer USD) | required | A dollar cap applies. | L1, L5 |
-| `prohibited` | omitted | omitted | This donor→recipient combination is banned. Note the exception if one exists (NC corporate prohibition is subject to segregated-fund exceptions in 163-278.19; the exception rides in `metadata`, see below). | L10 |
-| `unlimited` | omitted | omitted | Statute **affirmatively removes** the cap for this combination. Requires the exempting provision in `source_citation` (NC party per `163-278.13(h)`; NC candidate/spouse self-funding per `163-278.13(d)`). | L11 |
-| `no_statutory_limit` | omitted | omitted | The governing statute contains **no cap provision** for this combination. Distinct from `unlimited`: nothing was removed and nothing was set (CA `party_to_candidate`, "No explicit party-to-candidate limit in the Political Reform Act"). | L12(b) |
-| `unknown` | omitted (never a placeholder number) | omitted | **Not yet researched.** The `explicit-unknown` state. Requires a `note` naming the gap and the research owner (PHL's five `null` limits). | L12(a), L13 |
-
-`limit_basis` controlled vocabulary (required only when `limit_status:
-numeric`): `per_election`, `per_cycle`, `per_calendar_year`. This resolves Open
-Question 1 by **naming the basis instead of normalizing amounts**: CO's per-cycle
-$725 and NC's per-election $6,800 stay the numbers the statute states, and the
-column is no longer mis-named `limit_per_election`. Normalizing per-cycle amounts
-to a per-election basis would fabricate numbers no statute publishes, so it is
-rejected. The `exempt` / no-cap cases are carried by `limit_status`
-(`prohibited` / `unlimited` / `no_statutory_limit`), not by a basis token, so
-"exempt/no-cap" is representable without inventing a basis for a rule that has no
-amount.
-
-The five `limit_status` values, ordinary numeric limits, `prohibited`,
-`unlimited`, exceptions, and aggregation/local-override notes are therefore
-**mutually understandable**: a consumer reads `limit_status` first and never has
-to guess what a bare `null` meant.
-
-#### The explicit-unknown state, and why it reuses an in-repo precedent
-
-`unknown` is the direct answer to the audit's Open Questions 2 and 3 and to the
-sketch's L12 collision (the sketch spent `NULL` on "applies to all values of that
-dimension"). It reuses the tri-state precedent already in the repo:
-[`registry.py::CoverageRegistryRow.ie_coverage_available`](../../../domains/campaign_finance/coverage/registry.py)
-is `bool | None` where *"None = not yet determined"* is documented and load-
-bearing (the API returns `null` IE totals rather than misleading zeroes). The
-legal contract adopts the same discipline: `unknown` means "not yet determined",
-never "zero", never "no limit", never "all values". PHL — which has **no checked-
-in `laws.md`** and five `null` flat limits — becomes expressible as five
-`limit_status: unknown` rules, each with a `note` pointing at the deferred
-Board-of-Ethics research, instead of today's overloaded `null`.
-
-**`itemization_threshold` placeholder (L13) — named, not fixed here.** PHL is
-forced to publish `itemization_threshold: 50  # placeholder pending PHL Board-of-
-Ethics research` because
-[`LawsConfig.itemization_threshold`](../../../domains/campaign_finance/jurisdictions/config_schema.py)
-is a required non-nullable `StrictInt` — a structural owner publishing a
-fabricated legal number. The correct fix is the same explicit-unknown pattern
-(make the field accept an unknown state), but that changes `LawsConfig`'s
-required-key shape, which the "Transition gates" discipline above treats as a
-coordinated, versioned change. Stage 2 therefore **records the intended fix and
-its mechanism** and defers the schema change to a follow-up Bead; PHL keeps its
-placeholder `50` until then, flagged here as a known fabricated value with a named
-fix path.
-
-### Citation and date semantics
-
-Four distinct date facts, deliberately not conflated:
-
-| Field | Scope | Meaning | Required? |
-| --- | --- | --- | --- |
-| `laws.last_verified` | whole `laws` block (existing field, [`config_schema.py:79`](../../../domains/campaign_finance/jurisdictions/config_schema.py)) | A **research** date: when a human last re-verified the block against sources. Never a legal effectivity date. | existing `date \| None` |
-| rule `effective_date` | one rule | The date the known legal status **took effect** (CO amounts "effective 2023-02-15"; CA "effective 2025-01-01"; GA adopted 2023-03-27). It is never a research-observation date. | required for `numeric`, `prohibited`, `unlimited`, and `no_statutory_limit`; forbidden for `unknown` |
-| rule `sunset_date` | one rule | The date the known rule **ceased to apply** (repeal/sunset). | optional for known statuses; omitted/`null` = currently in effect; forbidden for `unknown` |
-| rule `research_observed_date` | one `unknown` rule | A **research** date: when the unresolved state was confirmed against the cited repository/source evidence. It makes the age of a gap queryable without pretending to know legal effectivity. | required for `unknown`; forbidden for every known legal status |
-
-- **Open-ended current rules:** omit `sunset_date`.
-- **Repealed / sunset rules:** set `sunset_date` and **keep the row**, so
-  bitemporal queries ("what was the limit on election day 2022?") stay answerable.
-  NC's public-financing sections "repealed effective July 1, 2013" (L7) is a
-  sunset, not an absence, and is distinct from GA's "never existed".
-- **Per-rule `source_citation` is required when a structured rule is supplied.**
-  Block-level `laws.source_url` is one URL for the whole block, but individual
-  rules cite different provisions — CO cites six distinct authorities (Art. XXVIII
-  § 3(4)(a), § 7, § 3(12), C.R.S. § 1-45-103.7, § 1-45-108(2)(a), § 1-45-111)
-  under one `source_url`; NC cites eight `163-278.*` provisions (L9). The sketch
-  already declared `source_citation TEXT NOT NULL`; this contract keeps that.
-  For a known status, the citation must identify the governing legal authority.
-  For `unknown`, it must instead identify the concrete evidence that the current
-  owner carries an unresolved value (for example the exact config field plus the
-  dated audit); it must not masquerade as a legal citation and must be replaced
-  with legal authority when research resolves the rule.
-- **Public-financing carve-outs:** fine-grained public-financing *program*
-  semantics (NYC's 8:1 match on the first $250, participating-vs-non-participating
-  status, SF/LA match ratios — audit L17) stay with `laws.public_financing`
-  (`PublicFinancingConfig`) and are a **separate** future extension, not absorbed
-  into `contribution_limit_rules`. Where a *contribution limit itself* is
-  conditioned on program participation, the rule carries a `note` and the tiered
-  distinction is deferred; the contribution-rule table does not model match ratios.
-- **Jurisdiction-specific exceptions** (exemptions, aggregation, prohibitions
-  beyond donor class — L19/L20/L21) land in the rule's `metadata`/`notes` escape
-  hatch with their own citation, described next.
-
-### Exceptions, aggregation, and local overrides (audit decision-list item 6)
-
-- **`local_override_allowed` — one optional typed boolean flag (L18).** CO's bulk
-  TRACER feed carries sub-jurisdiction rows whose applicable limits are set by a
-  home-rule locality, not the state, and `coverage.covers_sub_jurisdictions:
-  true` makes the mismatch live in loaded rows. Because this has a direct data-
-  correctness consequence, it earns a typed marker (default `false`) rather than
-  prose. It records only that a state-default rule *may* be locally overridden; it
-  does not itself carry the override amount (there is currently no CO-municipality
-  config to hold that — Open Question 5, deferred).
-- **`metadata` escape hatch for L19–L21.** Exemptions/carve-outs (GA self-and-
-  family `21-5-41(g)`, NC candidate/spouse `163-278.13(d)`), aggregation/
-  attribution rules (GA affiliated-entity aggregation `21-5-41(c)`, CO LLC pro-
-  rata attribution C.R.S. § 1-45-103.7), and prohibitions beyond donor class
-  (CO foreign-source ban, GA anonymous/blackout rules, NC straw-donor rules) land
-  in `metadata`. Each item has a required free-text `description` carrying the
-  carve-out prose and a required `source_citation` carrying its governing authority.
-  The rule-level `metadata` field is optional and defaults to an empty list (`[]`)
-  when omitted; omission means the rule has no recorded carve-out, not that its
-  metadata state is unknown. Items are machine-**attached** to the specific rule
-  (an improvement over today's block-level prose) but not machine-**enforced** in
-  Stage 2. Promotion of any of these to a typed field is a follow-up Bead once
-  evidence broadens, with the audit as the inventory.
-
-### Backward compatibility
-
-- **Flat `laws.contribution_limits` stays required and unchanged.** The five
-  scalar fields in `ContributionLimitsConfig` remain exactly as they are, so all
-  26 checked-in non-template configs — including PHL's all-`null` block — keep
-  loading. `test_config_schema.py::test_load_jurisdiction_config_loads_each_pilot`
-  continues to pass unchanged.
-- **The structured rule seed shape is optional.**
-  `LawsConfig.contribution_limit_rules` is an optional list, so a config that
-  omits it remains valid. When supplied, its closed vocabularies and per-status
-  field requirements are enforced by the canonical Pydantic reader.
-- **`extra="forbid"` remains the reader discipline.** Stage 2 deliberately did
-  not edit `config_schema.py`, so `contribution_limit_rules` was rejected during
-  that contract-only stage. The follow-up schema stage has since enabled and
-  typed this one field; other unknown `LawsConfig` keys remain invalid.
-- **No Stage 2 item rewrites any jurisdiction `config.yaml` or `config_schema.py`.**
-
-### Fit matrix: the eight representative jurisdictions
-
-Each row shows the flat value that loads today, the legal variation the flat
-form loses, and how the refined rule contract represents it **without any product-
-code branching** (the loader reads a uniform rule list; there is no per-
-jurisdiction `if`). Specimen citations are in the Stage 1 audit.
-
-| Jurisdiction | Flat value (as checked in) | Variation flat form loses | Refined representation |
-| --- | --- | --- | --- |
-| **CO** | `individual 725`, `party 789060`, `itemization 20` | 13 office tiers; per-**cycle** vs per-**election** vs per-**calendar-year** basis; home-rule sub-jurisdiction overrides; party-aggregate cap | multiple `numeric` rules keyed by `office_level` + `limit_basis` (`per_cycle` statewide, `per_election` school/municipal); a `party_committee` recipient rule with `limit_basis: per_calendar_year`; `local_override_allowed: true` on the state-default rows |
-| **GA** | `individual 8400` (all five = 8400) | runoff caps ($4,800 statewide / $1,800 all-other) as a separate election; statewide vs all-other office tier | rules split by `election_type` (`primary`/`general` = 8400, `runoff` = 4800) and by `office_level` (statewide vs other = 3300/1800) |
-| **CA** | `individual 5500`, `pac 10200`, `party null` | governor / statewide-except-governor / legislative office tiers; small-contributor committee $10,200 (squeezed into `pac`); per-election basis; no PRA party limit | `office_level`-tiered `numeric` rules, `limit_basis: per_election`; a `small_contributor_committee` donor rule; `party_to_candidate` → `limit_status: no_statutory_limit` (not `null`) |
-| **NC** | `party "unlimited"`, `corporate "prohibited"` | party value is a modelling compromise — statute *exempts* parties (`163-278.13(h)`); candidate/spouse self-funding also unlimited; corporate prohibition has segregated-fund exception | party rule → `limit_status: unlimited` with `source_citation: G.S. 163-278.13(h)`; a `self` donor rule → `unlimited` per `163-278.13(d)`; corporate rule → `prohibited` with the `163-278.19` exception in `metadata` |
-| **NYC** | `individual 2000`, `public_financing matching_funds` | citywide $2,000 / borough-president $1,500 / council $1,000 office tiers; 8:1 match participation semantics | `office_level`-tiered `numeric` rules; match-ratio/participation semantics stay in `public_financing` (not in the rule table), noted on the rule |
-| **PHL** | all five limits `null`; `itemization 50` (placeholder) | no `laws.md` exists; limits genuinely not researched; itemization threshold fabricated | five `limit_status: unknown` rules each with a `note` naming the Board-of-Ethics research gap; `itemization_threshold` fix deferred (required-key transition), placeholder flagged |
-| **SF** | `individual 500`, `public_financing matching_funds` | per-office variation ("flattened law schema cannot fully encode per-office variation yet") | `office_level`-tiered `numeric` rules; SF Ethics match program stays in `public_financing` |
-| **LA** | `individual 900`, `public_financing matching_funds` | per-office variation; amounts "indexed and adjusted periodically" | `office_level`-tiered `numeric` rules; indexation recorded as a re-verification note; LA City Ethics match program stays in `public_financing` |
-
-Worked YAML seed examples (illustrative shape only — no config is edited in
-Stage 2):
-
-```yaml
-# GA runoff as a separate election_type — no product-code branch needed
-laws:
-  contribution_limits: { individual_to_candidate: 8400, ... }   # flat block unchanged, still required
-  contribution_limit_rules:                                     # optional additive seed validated by LawsConfig
-    - donor_type: individual
-      recipient_type: candidate_committee
-      office_level: statewide
-      election_type: primary            # primary and general require separate explicit rows
-      limit_status: numeric
-      limit_amount: 8400
-      limit_basis: per_election
-      effective_date: "2023-03-27"
-      source_citation: "O.C.G.A. § 21-5-41(k); Commission notice 2023-03-27"
-    - donor_type: individual
-      recipient_type: candidate_committee
-      office_level: statewide
-      election_type: general
-      limit_status: numeric
-      limit_amount: 8400
-      limit_basis: per_election
-      effective_date: "2023-03-27"
-      source_citation: "O.C.G.A. § 21-5-41(k); Commission notice 2023-03-27"
-    - donor_type: individual
-      recipient_type: candidate_committee
-      office_level: statewide
-      election_type: runoff
-      limit_status: numeric
-      limit_amount: 4800
-      limit_basis: per_election
-      effective_date: "2023-03-27"
-      source_citation: "O.C.G.A. § 21-5-41(k); Commission notice 2023-03-27"
-
-# NC exempt party + PHL explicit unknown — two honest non-numeric states
-    - donor_type: party_committee       # NC: statute exempts parties from the cap
-      recipient_type: candidate_committee
-      limit_status: unlimited           # affirmative exemption, not "null"
-      effective_date: "2013-12-01"
-      source_citation: "N.C.G.S. § 163-278.13(h)"
-    - donor_type: individual            # PHL: not yet researched
-      recipient_type: candidate_committee
-      limit_status: unknown             # explicit-unknown, never a placeholder number
-      note: "PHL local limits not yet captured; see docs/reference/research/phl_campaign_finance_contract_2026_04_25.md"
-      research_observed_date: "2026-08-22" # research date, never legal effectivity
-      source_citation: "domains/campaign_finance/jurisdictions/cities/PHL/config.yaml laws.contribution_limits.individual_to_candidate; Stage 1 audit 2026-08-22"
-```
-
-## Source-Semantics Boundary (Stage 2)
-
-Structured **source** facts stay in the existing config contract and are **not**
-absorbed into `contribution_limit_rules`. The legal-rule contract answers "who may
-give how much to whom"; the source contract answers "how to read this feed". These
-are orthogonal owners with orthogonal lifecycle-maturity axes
-(`legal_filing_semantics_maturity` vs `source_contract_maturity`), and mixing them
-would recreate the duplicate-mismatch problem the rejected parallel registry has.
-
-The following remain owned by `DataSourceConfig` / the source contract, unchanged
-by Stage 2, and must not move into `contribution_limit_rules`:
-`data_sources[].field_mappings` (source-column → unified-field), source meaning,
-source coverage scope, `format`, `update_frequency`, and known source caveats
-(`known_issues`).
-
-### Disposition of the audit's source/semantic dimensions S1–S14
-
-Per the Stage 1 audit, dimensions S1–S14 are `data_sources[]`-owned facts that
-today live only in `data_semantics.md` prose or in untyped `dict`/`list[str]`
-fields. Stage 2 **defers all of S1–S14 to a named source-semantics follow-up**,
-for the reason the audit gives (Rank 2): the legal dimensions have a declared
-target shape and eight worked specimens, while the source dimensions have neither,
-and S3 alone (34 tokens, three "controller" spellings across 26 configs) is a
-vocabulary-normalization project, not a contract paragraph. The follow-up boundary
-is narrow and named: extend `DataSourceConfig` (or a sibling `data_semantics`
-block), not `contribution_limit_rules`.
-
-First candidates for that follow-up, highest-value first, because each has a closed
-or near-closed vocabulary or a proven correctness consequence:
-
-- **S4 — canonical transaction-type vocabulary.** Already exactly four tokens
-  across all eight specimens (`contributions`, `expenditures`, `loans`,
-  `independent_expenditures`); the cheapest controlled-vocabulary win.
-- **S6 — date format + timezone per source.** Two of eight timezones are self-
-  declared *assumptions* (CO assumed America/Denver, GA assumed America/New_York);
-  encoding them is a correctness fix, not documentation.
-- **S8 — amendment / supersession semantics.** GA's loader hard-codes
-  `amendment_indicator='N'` because the export carries no amendment flag, while CO
-  has an explicit `Amended = Y` filter rule; the contract must capture the five
-  distinct per-source contracts.
-
-The legal-rule contract must **not** absorb S5–S14 source-parsing, date/timezone,
-amendment, row-shape/quarantine, or portal-navigation semantics: those are facts
-about *reading a specific feed*, they vary per source rather than per statute,
-they belong to a different maturity axis, and (per S13, NC has no office column)
-they are sometimes the evidence path *for* a legal dimension rather than the legal
-dimension itself. Also note S14 (dataset-scope caveats currently filed under
-`laws.notes` in SF/LA) is a **source-scope** fact misfiled in the legal block; the
-follow-up moves it to the source contract, and Stage 2 does not.
-
-## Facts Excluded From This Contract (owned elsewhere)
-
-Stage 2 must not absorb any of the following into the legal or source-semantics
-contract. Each is cross-referenced to its owner in
-[`campaign-finance-region-lifecycle.md`](./campaign-finance-region-lifecycle.md#fact--canonical-owner--readvalidation-path--fact-kind):
-
-- **Lifecycle maturity (judgment)** — `acquisition_pattern`,
-  `discovery_maturity`, `source_contract_maturity`,
-  `legal_filing_semantics_maturity`, `implementation_maturity`,
-  `operational_maturity`, `completeness_intelligence_maturity`,
-  `civics_candidacy_status`, `main_blocker`, `updated_at`. Owned by
-  `implemented-region-lifecycle.json` /
-  [`lifecycle.py`](../../../domains/campaign_finance/coverage/lifecycle.py).
-  Adding legal dimensions is *evidence* that could justify a maturity change; it
-  is never itself a maturity change, and this contract must not compute or infer
-  those fields.
-- **Public coverage tier / evidence (judgment/observed)** — `tier`,
-  `evidence_summary`, `evidence_date`, `operational_reason`, `next_action`,
-  `loaded_count`, `expected_count`, `ie_coverage_available`,
-  `parent_jurisdiction_code`, `municipal_audit_decision`, `municipal_portal_url`.
-  Owned by `coverage-registry.json` /
-  [`registry.py`](../../../domains/campaign_finance/coverage/registry.py).
-- **L3 source-maturity state and transition evidence** — `sources.yaml`
-  `current_state`, transition `recorded_on` / `evidence_refs`, validated by
-  [`core/keel_gate_l3.py`](../../../core/keel_gate_l3.py). The lifecycle floor
-  stands: a `config.yaml` `data_sources[]` entry alone supports at most
-  `encoded`, never `verified`.
-- **Runner wiring and observed refresh history** — the `RefreshJob` plan in
-  [`core/refresh/runner.py`](../../../core/refresh/runner.py), `core.refresh_run`,
-  and `core.data_source.last_pull_at` via `cadence_last_pull_owner`.
-- **Derived status views** — `derive_implemented_jurisdiction_codes()` and any
-  status command are derived views, never replacement registries.
-- **Legacy `status.*` and `last_*` compatibility snapshots** — governed by
-  "Legacy Operational Snapshot Deprecation" above; the `laws` extension is inside
-  the permitted-edit envelope and must not touch the seven legacy fields.
-
-The lifecycle spec's **duplicate-mismatch rule** applies to anything this contract
-adds: if the extended contract restates a value another owner holds, do not emit
-the disputed value — report the mismatch and name the canonical owner. The audit
-confirms every dimension L1–L23 and S1–S14 (except S3's shared `office_level`
-vocabulary, handled explicitly above) is a fact **no current owner holds**, which
-is precisely how this extension stays clear of that rule.
-
-## Out of Scope for Stage 2
-
-Stage 2 produces contract text only. It does **not** do, and must not be read to
-authorize, any of the following:
-
-- no production schema migration and no `campaign_finance.contribution_limit_rules`
-  PostGIS table;
-- no YAML-to-row loader;
-- no region `config.yaml` rewrites and no `config_schema.py` change;
-- no product behavior change and no investigation query;
-- no public coverage claim (pipeline code or loaded rows never authorize a claim);
-- no parallel legal-rule registry.
-
-Follow-up work uses this contract and the Stage 1 audit as its specification.
-The schema-validation follow-up is complete; the remaining work stays in Beads:
-
-1. **Completed:** add the optional `laws.contribution_limit_rules` field to
-   `LawsConfig` with Pydantic validation of the vocabularies and the
-   `limit_status`/`limit_basis` discriminant.
-2. Create the `campaign_finance.contribution_limit_rules` table and the YAML→row
-   loader (`jurisdiction_fips` populated from `jurisdiction.fips`).
-3. Per-jurisdiction seed migration batches (CO, GA, CA, NC, NYC, PHL, SF, LA
-   first), each preserving the flat block.
-4. Make `itemization_threshold` accept an explicit-unknown state (a coordinated,
-   versioned required-key transition per "Transition gates"), retiring PHL's
-   placeholder `50`.
-5. Normalize the `office_level` vocabulary across existing
-   `coverage.office_levels` values in the 26 configs to the canonical spellings.
-6. PHL Board-of-Ethics legal research to replace the `unknown` rows with real
-   limits.
-7. Source-semantics extensions for S1–S14, starting with S4/S6/S8, on
-   `DataSourceConfig` (not on `contribution_limit_rules`).
+The structured legal-rule, source-semantics, compatibility, and follow-up
+contract continues in [Structured Contribution-Limit Rules](./jurisdiction_config_contribution_limit_rules.md).

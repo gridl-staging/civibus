@@ -146,6 +146,11 @@ def count_graph_edges_by_family(
     data_source_id: UUID,
 ) -> dict[str, int]:
     """Count graph edges per campaign-finance family for one data source."""
+    # AGE resolves graph operators through search_path even when cypher() and
+    # agtype are schema-qualified. Keep the dependency transaction-local so a
+    # plain shared loader connection is sufficient and caller state is restored
+    # automatically at commit/rollback.
+    conn.execute('SET LOCAL search_path = ag_catalog, "$user", public')
     sr_scope = source_record_scope_where(alias="sr")
     # AGE's ag_catalog.cypher(graph_name, ...) expects graph_name as a SQL string
     # literal, not a bind parameter. Keep only data_source_id parameterized.
@@ -158,7 +163,7 @@ def count_graph_edges_by_family(
                 f"FROM ag_catalog.cypher({graph_name_literal}, $$ "
                 f"MATCH ()-[e:{family}]->() "
                 "RETURN e "
-                "$$) AS edge(v agtype) "
+                "$$) AS edge(v ag_catalog.agtype) "
                 "JOIN core.source_record sr "
                 "ON ((edge.v->>'\"source_record_id\"')::uuid) = sr.id "
                 f"WHERE {sr_scope}"

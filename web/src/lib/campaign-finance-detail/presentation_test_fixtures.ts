@@ -103,11 +103,17 @@ export const DEFAULT_FILING_BREAKDOWN = {
 };
 
 export const DEFAULT_COMMITTEE_IE_ACTIVITY = {
+  ...DEFAULT_SELECTED_CYCLE_FIELDS,
   committee_id: COMMITTEE_ID,
   support_total: "0.00",
   oppose_total: "0.00",
   ie_transaction_count: 0,
   excluded_outlier_count: 0,
+  coverage: {
+    activity_state: "loaded_zero" as const,
+    completeness: "partial" as const,
+    basis: "fec_schedule_e_transactions" as const
+  },
   targets: []
 };
 

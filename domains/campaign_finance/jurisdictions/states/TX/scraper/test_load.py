@@ -1,5 +1,5 @@
 from __future__ import annotations
-import csv
+import os
 from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 
 from domains.campaign_finance.jurisdictions._test_helpers import clear_state_loader_records
@@ -24,46 +25,26 @@ from domains.campaign_finance.jurisdictions.states.TX.scraper.load import (
     load_tx_expenditures_with_filings,
     load_tx_loans_with_filings,
 )
-from domains.campaign_finance.jurisdictions.states.TX.scraper.parse import (
-    parse_contributions,
-    parse_expenditures,
-    parse_loans,
+from domains.campaign_finance.jurisdictions.states.TX.scraper.load_test_support import (
+    SAMPLE_CONTRIBUTIONS_PATH,
+    SAMPLE_EXPENDITURES_PATH,
+    parsed_contributions,
+    parsed_expenditures,
+    parsed_loans,
+    write_csv_rows,
 )
 
-pytestmark = pytest.mark.integration
-
-_FIXTURE_DIR = Path(__file__).parent / "test_fixtures"
-_SAMPLE_CONTRIBUTIONS_PATH = _FIXTURE_DIR / "sample_contributions.csv"
-_SAMPLE_EXPENDITURES_PATH = _FIXTURE_DIR / "sample_expenditures.csv"
-_SAMPLE_LOANS_PATH = _FIXTURE_DIR / "sample_loans.csv"
 _TX_JURISDICTION = "state/TX"
 _TX_STATE_CODE = "TX"
 
 
-def _parsed_contributions() -> list[dict[str, str | None]]:
-    return list(parse_contributions(_SAMPLE_CONTRIBUTIONS_PATH))
-
-
-def _parsed_expenditures() -> list[dict[str, str | None]]:
-    return list(parse_expenditures(_SAMPLE_EXPENDITURES_PATH))
-
-
-def _write_csv_rows(
-    csv_path: Path,
-    *,
-    fieldnames: list[str],
-    rows: list[dict[str, str | None]],
-) -> None:
-    with csv_path.open("w", encoding="utf-8", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({column: row.get(column) or "" for column in fieldnames})
-
-
 def _reader_connection_or_skip(db_conn: psycopg.Connection) -> psycopg.Connection:
+    connection_parameters = conninfo_to_dict(db_conn.info.dsn)
+    if "password" not in connection_parameters and os.environ.get("POSTGRES_PASSWORD"):
+        connection_parameters["password"] = os.environ["POSTGRES_PASSWORD"]
+
     try:
-        return psycopg.connect(db_conn.info.dsn)
+        return psycopg.connect(**connection_parameters)
     except (RuntimeError, psycopg.Error) as error:
         message = str(error)
         if message.startswith("Unable to connect to PostgreSQL at ") or "connection" in message.lower():
@@ -110,22 +91,22 @@ def _isolate_tx_loader_state(
 
 
 def test_source_record_key_and_transaction_identifier_follow_stage1_rules() -> None:
-    row = _parsed_contributions()[0]
+    row = parsed_contributions()[0]
 
     assert _tx_source_record_key(row, data_type="contributions") == row["contributionInfoId"]
     assert _tx_transaction_identifier(row, data_type="contributions") == row["contributionInfoId"]
 
 
 def test_filing_fec_id_and_date_parsing_follow_stage1_rules() -> None:
-    row = _parsed_contributions()[0]
+    row = parsed_contributions()[0]
 
     assert _tx_filing_fec_id(row, data_type="contributions") == "TX-00057770-2008-contributions"
     assert _parse_tx_date("20080410") == date(2008, 4, 10)
 
 
 def test_amendment_indicator_uses_info_only_flag_and_form_type_code() -> None:
-    contribution_row = _parsed_contributions()[0]
-    expenditure_row = _parsed_expenditures()[0]
+    contribution_row = parsed_contributions()[0]
+    expenditure_row = parsed_expenditures()[0]
 
     assert _tx_amendment_indicator(contribution_row, data_type="contributions") == "T"
     assert _tx_amendment_indicator(expenditure_row, data_type="expenditures") == "A"
@@ -164,7 +145,7 @@ def test_upsert_tx_transaction_overrides_type_for_independent_expenditure(monkey
         lambda _row, _data_type: {"payee_person": None, "payee_org": None, "address": None},
     )
 
-    row = dict(_parsed_expenditures()[0])
+    row = dict(parsed_expenditures()[0])
     row["schedFormTypeCd"] = "F1"
     row["formTypeCd"] = "DCE"
     row["expendDt"] = "20260115"
@@ -184,8 +165,9 @@ def test_upsert_tx_transaction_overrides_type_for_independent_expenditure(monkey
     assert captured[0].transaction_type == "Independent Expenditure"
 
 
+@pytest.mark.integration
 def test_load_tx_contribution_deduplicates_source_record_by_stage1_key(db_conn: psycopg.Connection) -> None:
-    row = _parsed_contributions()[0]
+    row = parsed_contributions()[0]
     data_source_id = ensure_tx_data_source(db_conn, data_type="contributions")
 
     first_insert = load_tx_contribution(db_conn, row, data_source_id)
@@ -210,15 +192,16 @@ def test_load_tx_contribution_deduplicates_source_record_by_stage1_key(db_conn: 
     assert result["count"] == 1
 
 
+@pytest.mark.integration
 def test_load_tx_contributions_with_filings_is_idempotent_and_sets_keys(db_conn: psycopg.Connection) -> None:
-    first_result = load_tx_contributions_with_filings(db_conn, _SAMPLE_CONTRIBUTIONS_PATH)
+    first_result = load_tx_contributions_with_filings(db_conn, SAMPLE_CONTRIBUTIONS_PATH)
 
     assert isinstance(first_result, LoadResult)
     assert first_result.inserted == 10
     assert first_result.errors == 0
 
     expected_source_record_keys = sorted(
-        _tx_source_record_key(row, data_type="contributions") for row in _parsed_contributions()
+        _tx_source_record_key(row, data_type="contributions") for row in parsed_contributions()
     )
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
@@ -278,7 +261,7 @@ def test_load_tx_contributions_with_filings_is_idempotent_and_sets_keys(db_conn:
     assert row["amendment_indicator"] == "T"
     assert [record["source_record_key"] for record in source_record_snapshot] == expected_source_record_keys
 
-    second_result = load_tx_contributions_with_filings(db_conn, _SAMPLE_CONTRIBUTIONS_PATH)
+    second_result = load_tx_contributions_with_filings(db_conn, SAMPLE_CONTRIBUTIONS_PATH)
 
     assert isinstance(second_result, LoadResult)
     assert second_result.inserted == 0
@@ -339,8 +322,9 @@ def test_load_tx_contributions_with_filings_is_idempotent_and_sets_keys(db_conn:
     assert rerun_source_record_snapshot == source_record_snapshot
 
 
+@pytest.mark.integration
 def test_load_tx_expenditures_with_filings_maps_cor_form_type_to_amendment_a(db_conn: psycopg.Connection) -> None:
-    result = load_tx_expenditures_with_filings(db_conn, _SAMPLE_EXPENDITURES_PATH)
+    result = load_tx_expenditures_with_filings(db_conn, SAMPLE_EXPENDITURES_PATH)
 
     assert result.inserted == 10
     assert result.errors == 0
@@ -360,17 +344,18 @@ def test_load_tx_expenditures_with_filings_maps_cor_form_type_to_amendment_a(db_
     assert amendments == {"A"}
 
 
+@pytest.mark.integration
 def test_load_tx_loans_with_filings_skips_missing_loan_amount_rows(
     db_conn: psycopg.Connection,
     tmp_path: Path,
 ) -> None:
-    rows = list(parse_loans(_SAMPLE_LOANS_PATH))
+    rows = parsed_loans()
     assert len(rows) >= 2
 
     test_rows = [dict(rows[0]), dict(rows[1])]
     test_rows[0]["loanAmount"] = None
     test_csv_path = tmp_path / "sample_loans_missing_amount.csv"
-    _write_csv_rows(test_csv_path, fieldnames=list(test_rows[0].keys()), rows=test_rows)
+    write_csv_rows(test_csv_path, fieldnames=list(test_rows[0].keys()), rows=test_rows)
 
     load_result = load_tx_loans_with_filings(db_conn, test_csv_path)
 
@@ -396,11 +381,12 @@ def test_load_tx_loans_with_filings_skips_missing_loan_amount_rows(
     assert row["count"] == 1
 
 
-def test_load_tx_loans_with_filings_clears_stale_filing_lookup_after_rollback(
+@pytest.mark.integration
+def test_load_tx_loans_with_filings_skips_ordinary_non_db_error_row(
     db_conn: psycopg.Connection,
     tmp_path: Path,
 ) -> None:
-    rows = list(parse_loans(_SAMPLE_LOANS_PATH))
+    rows = parsed_loans()
     assert rows
 
     base_row = dict(rows[0])
@@ -413,7 +399,7 @@ def test_load_tx_loans_with_filings_clears_stale_filing_lookup_after_rollback(
     good_row["loanInfoId"] = "GOOD-LOOKUP-TEST-2"
 
     test_csv_path = tmp_path / "sample_loans_stale_lookup.csv"
-    _write_csv_rows(test_csv_path, fieldnames=list(base_row.keys()), rows=[bad_row, good_row])
+    write_csv_rows(test_csv_path, fieldnames=list(base_row.keys()), rows=[bad_row, good_row])
 
     load_result = load_tx_loans_with_filings(db_conn, test_csv_path)
 
@@ -425,26 +411,26 @@ def test_load_tx_loans_with_filings_clears_stale_filing_lookup_after_rollback(
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT COUNT(*) AS count
+            SELECT t.transaction_identifier
             FROM cf.transaction t
             JOIN core.source_record sr ON sr.id = t.source_record_id
             JOIN core.data_source ds ON ds.id = sr.data_source_id
             WHERE ds.name = %s
-              AND t.transaction_identifier = %s
+              AND t.transaction_identifier = ANY(%s)
             """,
-            ("TEC Campaign Finance — Loans", "GOOD-LOOKUP-TEST-2"),
+            ("TEC Campaign Finance — Loans", ["BAD-LOOKUP-TEST-1", "GOOD-LOOKUP-TEST-2"]),
         )
-        row = cursor.fetchone()
+        transaction_identifiers = {row["transaction_identifier"] for row in cursor.fetchall()}
 
-    assert row is not None
-    assert row["count"] == 1
+    assert transaction_identifiers == {"GOOD-LOOKUP-TEST-2"}
 
 
-def test_load_tx_loans_with_filings_preserves_existing_filing_provenance_after_row_rollback(
+@pytest.mark.integration
+def test_load_tx_loans_with_filings_preserves_filing_provenance_after_ordinary_non_db_error(
     db_conn: psycopg.Connection,
     tmp_path: Path,
 ) -> None:
-    rows = list(parse_loans(_SAMPLE_LOANS_PATH))
+    rows = parsed_loans()
     assert rows
 
     first_good_row = dict(rows[0])
@@ -460,7 +446,7 @@ def test_load_tx_loans_with_filings_preserves_existing_filing_provenance_after_r
     later_good_row["loanInfoId"] = "GOOD-LATER-LOOKUP-3"
 
     test_csv_path = tmp_path / "sample_loans_preserve_filing_source_record.csv"
-    _write_csv_rows(
+    write_csv_rows(
         test_csv_path,
         fieldnames=list(first_good_row.keys()),
         rows=[first_good_row, bad_row, later_good_row],
@@ -486,15 +472,32 @@ def test_load_tx_loans_with_filings_preserves_existing_filing_provenance_after_r
             (filing_fec_id,),
         )
         row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT t.transaction_identifier
+            FROM cf.transaction t
+            JOIN core.source_record sr ON sr.id = t.source_record_id
+            JOIN core.data_source ds ON ds.id = sr.data_source_id
+            WHERE ds.name = %s
+              AND t.transaction_identifier = ANY(%s)
+            """,
+            (
+                "TEC Campaign Finance — Loans",
+                ["GOOD-FIRST-LOOKUP-1", "BAD-MIDDLE-LOOKUP-2", "GOOD-LATER-LOOKUP-3"],
+            ),
+        )
+        transaction_identifiers = {record["transaction_identifier"] for record in cursor.fetchall()}
 
     assert row is not None
     assert row["source_record_key"] == "GOOD-FIRST-LOOKUP-1"
+    assert transaction_identifiers == {"GOOD-FIRST-LOOKUP-1", "GOOD-LATER-LOOKUP-3"}
 
 
+@pytest.mark.integration
 def test_load_tx_contributions_with_filings_keeps_caller_transaction_uncommitted(
     db_conn: psycopg.Connection,
 ) -> None:
-    load_tx_contributions_with_filings(db_conn, _SAMPLE_CONTRIBUTIONS_PATH)
+    load_tx_contributions_with_filings(db_conn, SAMPLE_CONTRIBUTIONS_PATH)
 
     with _reader_connection_or_skip(db_conn) as reader_conn, reader_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
@@ -534,7 +537,7 @@ def test_load_tx_with_filings_delegates_batch_commits_to_inner_functions(
 
     _stub_load_tx_with_filings(monkeypatch, ensure_data_source=_fake_ensure_tx_data_source)
 
-    tx_load_module._load_tx_with_filings(conn, _SAMPLE_CONTRIBUTIONS_PATH, data_type="contributions")
+    tx_load_module._load_tx_with_filings(conn, SAMPLE_CONTRIBUTIONS_PATH, data_type="contributions")
 
     # It must commit after ensure_tx_data_source to return connection to IDLE state
     # so inner functions detect manages_outer_transaction=True
@@ -549,7 +552,7 @@ def test_load_tx_with_filings_preserves_caller_owned_outer_transaction(
 
     _stub_load_tx_with_filings(monkeypatch, ensure_data_source=lambda *_args, **_kwargs: "tx-source-id")
 
-    tx_load_module._load_tx_with_filings(conn, _SAMPLE_CONTRIBUTIONS_PATH, data_type="contributions")
+    tx_load_module._load_tx_with_filings(conn, SAMPLE_CONTRIBUTIONS_PATH, data_type="contributions")
 
     conn.commit.assert_not_called()
 
@@ -564,7 +567,7 @@ def test_load_tx_with_filings_reports_end_to_end_elapsed_seconds(
     monotonic = MagicMock(side_effect=[100.0, 104.25])
     monkeypatch.setattr(tx_load_module.time, "monotonic", monotonic)
 
-    result = tx_load_module._load_tx_with_filings(conn, _SAMPLE_CONTRIBUTIONS_PATH, data_type="contributions")
+    result = tx_load_module._load_tx_with_filings(conn, SAMPLE_CONTRIBUTIONS_PATH, data_type="contributions")
 
     assert result.elapsed_seconds == 4.25
 
@@ -589,7 +592,7 @@ def test_load_tx_with_filings_propagates_relational_phase_error(
     )
 
     with pytest.raises(RuntimeError, match="relational failed"):
-        tx_load_module._load_tx_with_filings(conn, _SAMPLE_CONTRIBUTIONS_PATH, data_type="contributions")
+        tx_load_module._load_tx_with_filings(conn, SAMPLE_CONTRIBUTIONS_PATH, data_type="contributions")
 
     # No single-transaction rollback — raw ingest was already committed via batch commits
     conn.rollback.assert_not_called()

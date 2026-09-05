@@ -147,6 +147,29 @@ class CsvResponse(Response):
     media_type = "text/csv"
 
 
+CANDIDATE_SUMMARY_UNAVAILABLE_DETAIL = "Candidate summary unavailable"
+CANDIDATE_SUMMARY_UNAVAILABLE_OPENAPI_RESPONSE = {
+    500: {
+        "description": "The candidate summary could not be assembled.",
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "detail": {
+                            "type": "string",
+                            "const": CANDIDATE_SUMMARY_UNAVAILABLE_DETAIL,
+                        }
+                    },
+                    "required": ["detail"],
+                    "additionalProperties": False,
+                }
+            }
+        },
+    }
+}
+
+
 # Shared 404 contract for the routes that resolve one officeholder by path
 # parameter, so the three declarations cannot drift apart.
 _FEDERAL_OFFICIAL_NOT_FOUND_DETAIL = "Federal official not found"
@@ -315,7 +338,7 @@ def _money_summary_for_candidate(
     if resolved_summary is None:
         # Defensive: the candidate row disappeared between the list read and the
         # summary read. Surface as 500 rather than a misleading zero payload.
-        raise HTTPException(status_code=500, detail="Candidate summary unavailable")
+        raise HTTPException(status_code=500, detail=CANDIDATE_SUMMARY_UNAVAILABLE_DETAIL)
     resolved_ie_summary = ie_summary or fetch_candidate_ie_summary(conn, candidate_id)
     resolved_sources = (
         sources
@@ -633,7 +656,7 @@ def _fetch_executive_candidate_summaries(
             continue
         summary = fetch_candidate_summary(conn, candidate["id"], candidate["name"])
         if summary is None:
-            raise HTTPException(status_code=500, detail="Candidate summary unavailable")
+            raise HTTPException(status_code=500, detail=CANDIDATE_SUMMARY_UNAVAILABLE_DETAIL)
         summaries_by_candidate[candidate["id"]] = summary
     return summaries_by_candidate
 
@@ -688,7 +711,7 @@ def _public_money_row_for_person(conn: psycopg.Connection, person_id: UUID) -> P
     if selected_candidate is not None and _member_needs_executive_full_summary(member):
         summary = fetch_candidate_summary(conn, selected_candidate["id"], selected_candidate["name"])
         if summary is None:
-            raise HTTPException(status_code=500, detail="Candidate summary unavailable")
+            raise HTTPException(status_code=500, detail=CANDIDATE_SUMMARY_UNAVAILABLE_DETAIL)
         full_summaries_by_candidate[selected_candidate["id"]] = summary
     return _public_money_row_for_member_candidates(
         conn,
@@ -715,6 +738,7 @@ def _public_money_row_for_person(conn: psycopg.Connection, person_id: UUID) -> P
         '`"0.00"`. '
         f"{_PUBLIC_ACCESS_NOTE}"
     ),
+    responses=CANDIDATE_SUMMARY_UNAVAILABLE_OPENAPI_RESPONSE,
 )
 def export_federal_money_json(
     response: Response,
@@ -751,7 +775,7 @@ def _source_urls_cell(row: PublicMemberMoneySummary) -> str:
 def _public_federal_export_csv_row(row: PublicMemberMoneySummary) -> dict[str, str]:
     return {
         "person_id": _csv_cell(row.person_id),
-        "person_name": row.person_name,
+        "person_name": _csv_cell(row.person_name),
         "has_fec_money": _csv_cell(row.has_fec_money),
         "candidate_id": _csv_cell(row.candidate_id),
         "total_raised": _csv_cell(row.total_raised),
@@ -763,7 +787,7 @@ def _public_federal_export_csv_row(row: PublicMemberMoneySummary) -> dict[str, s
         "ie_oppose_total": _csv_cell(row.ie_oppose_total),
         "ie_support_count": _csv_cell(row.ie_support_count),
         "ie_oppose_count": _csv_cell(row.ie_oppose_count),
-        "source_urls": _source_urls_cell(row),
+        "source_urls": _csv_cell(_source_urls_cell(row)),
     }
 
 
@@ -779,6 +803,7 @@ def _public_federal_export_csv_row(row: PublicMemberMoneySummary) -> dict[str, s
         "`source_urls` is a semicolon-separated list of the filing URLs backing the row. "
         f"{_PUBLIC_ACCESS_NOTE}"
     ),
+    responses=CANDIDATE_SUMMARY_UNAVAILABLE_OPENAPI_RESPONSE,
 )
 def export_federal_money_csv(
     conn: psycopg.Connection = Depends(get_db),
@@ -807,7 +832,10 @@ def export_federal_money_csv(
         "means unknown, never zero. 404 means `person_id` is not a current federal "
         f"officeholder. {_PUBLIC_ACCESS_NOTE}"
     ),
-    responses=_FEDERAL_OFFICIAL_NOT_FOUND_OPENAPI_RESPONSE,
+    responses={
+        **_FEDERAL_OFFICIAL_NOT_FOUND_OPENAPI_RESPONSE,
+        **CANDIDATE_SUMMARY_UNAVAILABLE_OPENAPI_RESPONSE,
+    },
 )
 def get_federal_official_money(
     person_id: UUID,

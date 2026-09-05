@@ -89,6 +89,23 @@ def test_development_without_api_keys_leaves_v1_routes_reachable(
     assert response.json()["detail"][0]["loc"] == ["path", "person_id"]
 
 
+@pytest.mark.parametrize("api_key", [None, "public-key", "not-configured"])
+def test_development_admin_routes_require_explicit_admin_key(
+    monkeypatch: pytest.MonkeyPatch,
+    api_key: str | None,
+) -> None:
+    monkeypatch.setenv("CIVIBUS_ENV", "development")
+    monkeypatch.setenv("CIVIBUS_API_KEYS", "public-key")
+    monkeypatch.delenv("CIVIBUS_ADMIN_API_KEYS", raising=False)
+    monkeypatch.setattr(api_main, "entity_resolution_router", _build_probe_router("/admin-probe", "admin"))
+
+    request_headers = {} if api_key is None else {"X-API-Key": api_key}
+    response = TestClient(create_app()).get("/v1/admin-probe", headers=request_headers)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid or missing API key"}
+
+
 @pytest.mark.parametrize("configured_keys", [None, "", "  ,  "])
 def test_startup_fails_outside_development_when_api_keys_missing(
     monkeypatch: pytest.MonkeyPatch,

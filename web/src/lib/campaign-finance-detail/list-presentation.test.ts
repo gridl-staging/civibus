@@ -21,7 +21,8 @@ const FULL_CANDIDATE: CandidateListItem = {
   slug_is_unique: true,
   identity_is_safe: true,
   has_official_total: true,
-  total_receipts: "1234.56"
+  total_receipts: "1234.56",
+  summary_coverage_end_date: "2026-03-31"
 };
 
 const SPARSE_CANDIDATE: CandidateListItem = {
@@ -35,7 +36,8 @@ const SPARSE_CANDIDATE: CandidateListItem = {
   slug: "sparse-candidate",
   slug_is_unique: true,
   identity_is_safe: true,
-  has_official_total: false
+  has_official_total: false,
+  summary_coverage_end_date: null
 };
 
 const FULL_COMMITTEE: CommitteeListItem = {
@@ -68,7 +70,8 @@ describe("buildCandidateListItemPresentation", () => {
       href: "/candidate/candidate-one",
       contextLine: "DEM · H · NC-01",
       totalRaisedLabel: "Total raised",
-      totalRaisedValue: "$1,234.56"
+      totalRaisedValue: "$1,234.56",
+      totalRaisedPeriodLabel: "Official FEC summary through 2026-03-31"
     });
   });
 
@@ -81,6 +84,15 @@ describe("buildCandidateListItemPresentation", () => {
     expect(result.totalRaisedValue).toBe("$250,000.50");
   });
 
+  it("keeps a loaded amount honest when its summary coverage end is unavailable", () => {
+    const result = buildCandidateListItemPresentation({
+      ...FULL_CANDIDATE,
+      summary_coverage_end_date: null
+    });
+
+    expect(result.totalRaisedPeriodLabel).toBe("Official FEC summary coverage end not available");
+  });
+
   it("reports a missing official total as unknown rather than zero money", () => {
     const missingTotal = buildCandidateListItemPresentation({
       ...FULL_CANDIDATE,
@@ -91,6 +103,8 @@ describe("buildCandidateListItemPresentation", () => {
 
     expect(missingTotal.totalRaisedValue).toBe("Not available");
     expect(absentField.totalRaisedValue).toBe("Not available");
+    expect(missingTotal.totalRaisedPeriodLabel).toBeNull();
+    expect(absentField.totalRaisedPeriodLabel).toBeNull();
     expect(missingTotal.totalRaisedValue).not.toContain("$");
     expect(absentField.totalRaisedValue).not.toContain("$");
   });

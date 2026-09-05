@@ -103,6 +103,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         private_asset="private rendered coverage research artifacts under docs/reference/research/",
         owner="coverage research snapshot contracts",
         node_ids=(
+            "domains/campaign_finance/coverage/test_generate_master_csv.py::test_tracked_jurisdiction_master_csv_matches_generator",
             "domains/campaign_finance/coverage/test_lifecycle.py::test_current_lifecycle_summary_snapshot_matches_rendered_output",
             "domains/campaign_finance/coverage/test_registry_snapshot.py::test_stage3_probe_artifact_keeps_corrected_arizona_entrypoint",
             "domains/campaign_finance/coverage/test_registry_snapshot.py::test_stage5_census_artifact_excludes_non_incorporated_cdps",
@@ -194,7 +195,6 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         owner="Fly ops documentation and private open-work ledger",
         node_ids=(
             "tests/ci/test_fly_ops_docs_contract.py::test_fly_runbook_documents_current_refresh_machine_model",
-            "tests/ci/test_fly_ops_docs_contract.py::test_refresh_writer_gate_is_job_key_scoped_not_database_wide",
             "tests/ci/test_fly_ops_docs_contract.py::test_fly_runbook_documents_current_deploy_workflow_model",
             "tests/ci/test_fly_ops_docs_contract.py::test_fly_runbook_password_guidance_points_to_pgpass_owners",
             "tests/ci/test_fly_ops_docs_contract.py::test_stage_owned_runnable_docs_do_not_publish_password_prefix_commands",
@@ -208,19 +208,9 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             ),
             "tests/ci/test_fly_ops_docs_contract.py::test_aug03_batch_stage2_roadmap_reconciliation_is_falsifiable",
             "tests/ci/test_fly_ops_docs_contract.py::test_project_overview_current_scope_matches_implemented_fly_refresh_model",
-            "tests/ci/test_fly_ops_docs_contract.py::test_current_production_doctrine_fly_claim_helper_regressions",
-            "tests/ci/test_fly_ops_docs_contract.py::test_current_production_doctrine_legacy_helper_regressions",
             "tests/ci/test_fly_ops_docs_contract.py::test_current_production_doctrine_points_to_fly_and_parks_hetzner",
             "tests/ci/test_fly_ops_docs_contract.py::test_lane10_refresh_digest_proof_accepts_the_deployed_workflow_image",
             "tests/ci/test_fly_ops_docs_contract.py::test_lane10_refresh_digest_proof_rejects_old_image_after_unrelated_machine_update",
-            (
-                "tests/ci/test_fly_ops_docs_contract.py::"
-                "test_campaign_finance_runbook_routes_non_federal_refreshes_through_fly_proxy"
-            ),
-            (
-                "tests/ci/test_fly_ops_docs_contract.py::"
-                "test_campaign_finance_runbook_non_federal_run_is_executable_and_not_federally_scoped"
-            ),
         ),
     ),
     *_entries(
@@ -269,11 +259,39 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         ),
     ),
     *_entries(
-        private_asset="private detached-load docs under docs/howto/operations/, chats/, and ROADMAP.md",
+        private_asset="private detached-load docs under docs/howto/operations/, docs/protocols.md, chats/, and ROADMAP.md",
         owner="detached load documentation contract",
         node_ids=(
             "tests/infra/test_detached_load_documentation.py::test_detached_load_docs_use_one_canonical_runner_contract",
+            "tests/infra/test_detached_load_documentation.py::test_protocols_routes_bulk_load_work_to_detached_discipline",
             "tests/infra/test_detached_load_documentation.py::test_changed_detached_load_doc_links_resolve",
+        ),
+    ),
+    *_entries(
+        private_asset=(
+            "docs/live-state/2026_08_25_checkpoint_b_receipt.md, "
+            "chats/promotion/2026_08_launch_kit.md, and CAPABILITIES.md"
+        ),
+        owner="Checkpoint B receipt contract",
+        node_ids=(
+            "tests/test_checkpoint_b_receipt_contract.py::test_checkpoint_b_receipt_records_fresh_gate_evidence_and_red_menu",
+            "tests/test_checkpoint_b_receipt_contract.py::test_checkpoint_b_receipt_probes_first_post_sync_scheduled_nightly",
+            "tests/test_checkpoint_b_receipt_contract.py::test_bridge_claim_uses_the_assembly_time_execution_head",
+            (
+                "tests/test_checkpoint_b_receipt_contract.py::"
+                "test_checkpoint_b_promotion_is_limited_to_the_receipt_licensed_bridge_loop"
+            ),
+            (
+                "tests/test_checkpoint_b_receipt_contract.py::"
+                "test_autonomy_phrases_appear_only_in_explicitly_red_or_embargoed_context"
+            ),
+        ),
+    ),
+    *_entries(
+        private_asset="docs/live-state/2026_08_25_aug15_campaign_checkpoint_b_receipt.md",
+        owner="Checkpoint B receipt contract",
+        node_ids=(
+            "tests/test_checkpoint_b_receipt_contract.py::test_aug15_closeout_preserves_the_red_verdict_without_private_paths",
         ),
     ),
     *_entries(
@@ -321,6 +339,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         owner="Keel source registry contracts",
         node_ids=(
             "tests/keel/test_gate_l3.py::test_repo_sources_registry_registers_federal_chartered_sources",
+            "tests/keel/test_gate_l3.py::test_repo_sources_registry_wa_emits_four_source_attributed_prototyped_artifacts",
             "tests/keel/test_gate_l3.py::test_repo_sources_registry_passes_current_nc_roster_state_mix_contract",
             "tests/keel/test_gate_l3.py::test_repo_sources_registry_passes_current_phl_deferred_contract",
             "tests/keel/test_gate_l3.py::test_repo_sources_registry_ca_emits_single_expected_l3_artifact",
@@ -359,6 +378,11 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/test_doc_system_v2_layout.py::test_decisions_are_root_owned_with_frontmatter_and_line_budget",
             "tests/test_doc_system_v2_layout.py::test_docs_top_level_uses_only_v2_quadrants",
             "tests/test_doc_system_v2_layout.py::test_protocols_routes_resolve_to_v2_owners",
+            "tests/test_doc_system_v2_layout.py::test_codex_governance_routes_to_one_inactive_civibus_profile",
+            "tests/test_jurisdiction_authority_ledger_contract.py::test_autonomous_docs_have_no_stale_routine_approval_or_planned_registry_gate",
+            "tests/test_jurisdiction_authority_ledger_contract.py::test_canonical_docs_define_the_general_filing_authority_relation_contract",
+            "tests/test_jurisdiction_authority_ledger_contract.py::test_geography_owner_remains_separate_from_filing_authority",
+            "tests/test_jurisdiction_authority_ledger_contract.py::test_legacy_parent_boolean_bootstrap_evidence_is_explicit_debt",
             "tests/test_stage1_fec_schedule_b_source_contract.py::TestDocumentationHygiene::test_research_doc_oppexp_fields_match_schedule_b_columns",
             "tests/test_stage1_fec_schedule_e_format_outputs.py::test_schedule_e_research_docs_stay_empirical_and_cross_referenced",
             "tests/test_stage1_phl_full_backfill_closeout_doc_contract.py::test_stage1_phl_closeout_pins_exact_probe_command_shape_and_prior_facts",
@@ -383,6 +407,19 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         owner="Batman merge-validation gate contract",
         node_ids=(
             "tests/ci/test_ci_workflow_contract.py::test_batman_config_declares_qa_fast_merge_gate",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_rejects_symlinked_web_dependencies",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_preflights_each_required_command[make]",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_preflights_each_required_command[npm]",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_preflights_each_required_command[node]",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_preflights_each_required_command[uv]",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_preflights_each_required_command[git]",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_preflights_each_required_command[bd]",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_preflights_each_required_command[batman]",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_preflights_each_required_command[python3]",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_preflights_each_required_command[jq]",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_reports_all_missing_commands_before_work",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_gate_delegates_once_when_required_commands_resolve",
+            "tests/ci/test_ci_workflow_contract.py::test_qa_fast_prepare_only_does_not_require_full_gate_toolchain",
             "tests/ci/test_ci_workflow_contract.py::test_shadow_warning_is_executable_only_in_optional_make_test",
         ),
     ),

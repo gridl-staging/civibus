@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+from io import StringIO
 import os
 from pathlib import Path
 
@@ -69,6 +71,21 @@ def test_audit_method_returns_browser_verified_for_browser_evidence() -> None:
 
 def test_tracked_jurisdiction_master_csv_matches_generator() -> None:
     assert OUTPUT_PATH.read_bytes() == render_csv_text().encode()
+
+
+def test_master_csv_projects_typed_authority_without_flattening_overlaps() -> None:
+    rows = {row["jurisdiction_code"]: row for row in csv.DictReader(StringIO(render_csv_text()))}
+
+    assert rows["NY_NEW_YORK"]["authority_relation"] == "partitioned_overlapping"
+    assert rows["NY_NEW_YORK"]["filing_authorities"] == "state/NY;municipality/NY_NEW_YORK"
+    assert rows["NY_NEW_YORK"]["aggregation_disposition"] == "refuse_combination"
+    assert rows["WA_SEATTLE"]["authority_relation"] == "partitioned_overlapping"
+    assert rows["WA_SEATTLE"]["filing_authorities"] == (
+        "state/WA;named_other/WA_SEATTLE_CITY_CLERK (Seattle City Clerk);"
+        "named_other/WA_SEEC (Seattle Ethics and Elections Commission)"
+    )
+    assert rows["WA_SEATTLE"]["aggregation_disposition"] == "refuse_combination"
+    assert rows["WA_SEATTLE"]["municipal_compatibility_decision"] == "covered_by_parent"
 
 
 def test_output_is_stale_when_owned_input_is_newer(tmp_path: Path) -> None:

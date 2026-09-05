@@ -124,7 +124,7 @@ describe("charts/types", () => {
       }
     ];
 
-    expectTypeOf(receipts[0].denominator).toEqualTypeOf<number>();
+    expectTypeOf(receipts[0].denominator).toEqualTypeOf<number | null>();
     expectTypeOf(monthly[0].month).toEqualTypeOf<string>();
     expectTypeOf(cash[0].periodEnd).toEqualTypeOf<string>();
     expectTypeOf(bars[0].unit).toEqualTypeOf<HorizontalBarRow["unit"]>();

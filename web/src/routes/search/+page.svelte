@@ -74,11 +74,11 @@
       minlength={SEARCH_QUERY_MIN_LENGTH}
       value={viewModel.queryValue}
       placeholder={viewModel.queryPlaceholder}
-      aria-describedby={viewModel.inlineValidationMessage !== '' ? 'search-validation-message' : undefined}
-      aria-invalid={viewModel.inlineValidationMessage !== '' ? 'true' : undefined}
+      aria-describedby={viewModel.queryHasValidationError ? 'search-validation-message' : undefined}
+      aria-invalid={viewModel.queryHasValidationError ? 'true' : undefined}
     />
 
-    <label for="search-entity-type">Entity type</label>
+    <label for="search-entity-type">Search type</label>
     <select
       id="search-entity-type"
       name="entity_type"
@@ -115,6 +115,23 @@
   <p class="search__status" data-testid="search-status" role="status" aria-live="polite">
     {viewModel.statusMessage}
   </p>
+
+  {#if viewModel.regionalCards.length > 0}
+    <section aria-labelledby="regional-search-results">
+      <h3 id="regional-search-results">Regions</h3>
+      {#if viewModel.regionalCards.length > 0}
+        <ul class="search__results">
+          {#each viewModel.regionalCards as region (region.key)}
+            <li class="card search__result">
+              <h4><a href={region.href}>{region.name}</a></h4>
+              <p class="search__badge-row"><span class="search__badge">{region.routeLabel}</span></p>
+              <p class="search__context-line">{region.contextLine}</p>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+  {/if}
 
   <div data-testid="search-results-region" aria-busy={viewModel.showResultsSkeleton ? 'true' : 'false'}>
     {#if viewModel.showResultsSkeleton}

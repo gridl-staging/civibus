@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import inspect
 from datetime import date
 from decimal import Decimal
@@ -85,6 +86,70 @@ def test_ensure_durham_data_source_inserts_when_missing(monkeypatch: pytest.Monk
 
     assert data_source_id == inserted_id
     try_insert_data_source.assert_called_once()
+
+
+def _durham_config(**jurisdiction_overrides: object) -> dict[str, object]:
+    config = deepcopy(durham_source.load_durham_config())
+    jurisdiction = config["jurisdiction"]
+    assert isinstance(jurisdiction, dict)
+    jurisdiction.update(jurisdiction_overrides)
+    return config
+
+
+@pytest.mark.parametrize(
+    "jurisdiction_overrides",
+    (
+        {"type": "municipality"},
+        {"fips": "3706"},
+        {"fips": "3706A"},
+        {"fips": "٣٧٠٦٣"},
+    ),
+)
+def test_ensure_durham_jurisdiction_refuses_non_county_geoid_before_sql(
+    jurisdiction_overrides: dict[str, object],
+) -> None:
+    conn = MagicMock()
+
+    with pytest.raises(ValueError, match=r"Durham.*county_geoid"):
+        loader.ensure_durham_jurisdiction(conn, _durham_config(**jurisdiction_overrides))
+
+    conn.cursor.assert_not_called()
+
+
+def test_ensure_durham_jurisdiction_refuses_bare_fips_kind_or_state_conflict() -> None:
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = None
+
+    with pytest.raises(
+        ValueError,
+        match=r"bare-FIPS reinterpretation.*county_geoid=37063.*jurisdiction_type=county.*state=NC",
+    ):
+        loader.ensure_durham_jurisdiction(conn, _durham_config())
+
+    statement = cursor.execute.call_args.args[0]
+    assert "existing_jurisdiction.jurisdiction_type = EXCLUDED.jurisdiction_type" in statement
+    assert "existing_jurisdiction.state = EXCLUDED.state" in statement
+    update_assignments = statement.split("DO UPDATE SET", maxsplit=1)[1].split(
+        "WHERE existing_jurisdiction",
+        maxsplit=1,
+    )[0]
+    assert "jurisdiction_type" not in update_assignments
+    assert "state" not in update_assignments
+
+
+def test_ensure_durham_jurisdiction_reuses_compatible_county_geoid() -> None:
+    jurisdiction_id = uuid4()
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = (jurisdiction_id,)
+
+    assert loader.ensure_durham_jurisdiction(conn, _durham_config()) == jurisdiction_id
+
+    statement, params = cursor.execute.call_args.args
+    assert "fips, county_geoid" in " ".join(statement.split())
+    assert "county_geoid = EXCLUDED.county_geoid" in statement
+    assert params == ("Durham County", "county", "37063", "37063", "NC")
 
 
 def test_build_source_record_uses_reid_and_per_record_source_url() -> None:

@@ -106,6 +106,8 @@ _DATA_SOURCE_COLUMNS = (
     "id",
     "domain",
     "jurisdiction",
+    "filing_authority_type",
+    "filing_authority_code",
     "name",
     "source_url",
     "source_format",
@@ -154,6 +156,7 @@ _REFRESH_RUN_COLUMNS = (
     "domain",
     "jurisdiction",
     "data_source_names",
+    "execution_origin",
     "pull_status",
     "started_at",
     "completed_at",
@@ -178,6 +181,7 @@ _REFRESH_RUN_IMMUTABLE_COLUMNS = frozenset(
         "domain",
         "jurisdiction",
         "data_source_names",
+        "execution_origin",
         "started_at",
         "created_at",
     }
@@ -205,6 +209,8 @@ def resolve_person_by_name_and_zip(
     conn: psycopg.Connection,
     person: Person | None,
     address: Address | None,
+    *,
+    data_source_id: UUID | None = None,
 ) -> UUID | None:
     if person is None:
         return None
@@ -212,7 +218,13 @@ def resolve_person_by_name_and_zip(
     zip5 = address.zip5 if address is not None else None
     existing_person_id = None
     if person.last_name and person.first_name:
-        existing_person_id = find_person_by_name_and_zip(conn, person.last_name, person.first_name, zip5)
+        existing_person_id = find_person_by_name_and_zip(
+            conn,
+            person.last_name,
+            person.first_name,
+            zip5,
+            data_source_id=data_source_id,
+        )
     if existing_person_id is not None:
         return existing_person_id
 
@@ -255,11 +267,17 @@ def resolve_people_by_name_and_zip(
 def resolve_organization_by_canonical_name(
     conn: psycopg.Connection,
     organization: Organization | None,
+    *,
+    data_source_id: UUID | None = None,
 ) -> UUID | None:
     if organization is None:
         return None
 
-    existing_org_id = find_organization_by_canonical_name(conn, organization.canonical_name)
+    existing_org_id = find_organization_by_canonical_name(
+        conn,
+        organization.canonical_name,
+        data_source_id=data_source_id,
+    )
     if existing_org_id is not None:
         return existing_org_id
 
@@ -451,6 +469,8 @@ def _data_source_values(ds: DataSource) -> tuple[object, ...]:
         ds.id,
         ds.domain,
         ds.jurisdiction,
+        ds.filing_authority_type,
+        ds.filing_authority_code,
         ds.name,
         ds.source_url,
         ds.source_format,
@@ -743,7 +763,7 @@ def try_insert_data_source(conn: psycopg.Connection, ds: DataSource) -> UUID | N
         """
         INSERT INTO core.data_source ({columns})
         VALUES ({values})
-        ON CONFLICT (domain, jurisdiction, name)
+        ON CONFLICT (domain, filing_authority_type, filing_authority_code, name)
         DO NOTHING
         RETURNING id
         """
@@ -1000,6 +1020,7 @@ def _refresh_run_values(refresh_run: RefreshRun) -> tuple[object, ...]:
         refresh_run.domain,
         refresh_run.jurisdiction,
         refresh_run.data_source_names,
+        refresh_run.execution_origin,
         refresh_run.pull_status,
         refresh_run.started_at,
         refresh_run.completed_at,

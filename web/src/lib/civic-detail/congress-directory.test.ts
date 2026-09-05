@@ -340,6 +340,50 @@ describe("Congress directory presentation", () => {
     expect(directory.rows.map((row) => row.personName)).toEqual(expectedNames);
   });
 
+  it.each([
+    ["total_raised", "total_raised"],
+    ["outside_against", "ie_oppose_total"],
+    ["outside_support", "ie_support_total"],
+    ["cash_on_hand", "cash_on_hand"]
+  ] as const)("sorts close large %s values by their exact serialized amount", (sort, field) => {
+    const summaries = MONEY_SUMMARIES.slice(0, 2).map((summary, index) => ({
+      ...summary,
+      [field]: index === 0 ? "9007199254740993.02" : "9007199254740993.01"
+    }));
+
+    const directory = buildCongressDirectory(MEMBERS.slice(0, 2), {}, summaries, sort);
+
+    // Number() collapses both amounts to the same IEEE-754 value. The lower
+    // amount's name sorts first, so this oracle fails unless the money owner
+    // compares the serialized decimals before the name/id tie-break.
+    expect(directory.rows.map((row) => row.personName)).toEqual([
+      "Jane A. Representative",
+      "Alex Senator"
+    ]);
+  });
+
+  it("preserves descending positive, zero, negative, and null ordering", () => {
+    const signedSummaries: CongressMemberMoneySummary[] = [
+      { ...MONEY_SUMMARIES[0]!, person_id: MEMBERS[0]!.person_id, total_raised: "-1.25" },
+      { ...MONEY_SUMMARIES[1]!, person_id: MEMBERS[1]!.person_id, total_raised: "1.25" },
+      {
+        ...MONEY_SUMMARIES[1]!,
+        person_id: MEMBERS[2]!.person_id,
+        person_name: MEMBERS[2]!.person_name,
+        total_raised: "0.00"
+      }
+    ];
+
+    const directory = buildCongressDirectory(MEMBERS, {}, signedSummaries, "total_raised");
+
+    expect(directory.rows.map((row) => row.personName)).toEqual([
+      "Alex Senator",
+      "Maria Delegate",
+      "Jane A. Representative",
+      "Sam President"
+    ]);
+  });
+
   it("keeps a measured zero distinguishable from unknown money on every row field", () => {
     const rows = buildCongressDirectory(MEMBERS, {}, THREE_STATE_MONEY_SUMMARIES).rows;
     const byName = new Map(rows.map((row) => [row.personName, row]));

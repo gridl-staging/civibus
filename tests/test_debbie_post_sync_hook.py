@@ -71,6 +71,7 @@ def project_debbie_public_mirror(tmp_path: Path) -> ProjectedMirror:
     matt_repo = _write_fake_matt_repo(tmp_path / "gridl" / "mike_dev")
 
     env = os.environ.copy()
+    env.pop("UV_FROZEN", None)
     env["DEBBIE_TARGET_ROOT"] = str(target_root)
     env["MATT_REPO_ROOT"] = str(matt_repo)
     subprocess.run(["bash", str(POST_SYNC_SCRIPT)], cwd=REPO_ROOT, check=True, env=env)

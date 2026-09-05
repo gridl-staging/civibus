@@ -1,102 +1,96 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "svelte/server";
-import { buildMapLayerVisibilityDefaults, type CivicGeometryLevel } from "$lib/config/app";
-import type { CountySummaryLinkedCandidate } from "$lib/campaign-finance-detail/contract";
-import { buildTrustSection } from "$lib/detail-trust/presentation";
+import {
+  buildMapLayerVisibilityDefaults,
+  type CivicGeometryLevel,
+} from "$lib/config/app";
 import type { CivicGeometryFeatureCollection } from "$lib/server/api/civic-geometry";
 import CountyPage from "./+page.svelte";
+import { WAKE_NODE } from "$lib/regional-navigation/test-fixtures";
+
+let currentPageUrl = new URL("https://civibus.test/state/NC/county/wake");
+
+vi.mock("$env/dynamic/public", () => ({
+  env: { PUBLIC_ORIGIN: "https://civibus.test" },
+}));
+vi.mock("$app/stores", () => ({
+  page: {
+    subscribe(run: (value: { url: URL }) => void): () => void {
+      run({ url: currentPageUrl });
+      return () => {};
+    },
+  },
+}));
 
 function emptyFeatureCollection(): CivicGeometryFeatureCollection {
   return { type: "FeatureCollection", features: [] };
 }
 
-function countyPageData(topLinkedCandidates: CountySummaryLinkedCandidate[]) {
-  const geometryByLevel: Record<CivicGeometryLevel, CivicGeometryFeatureCollection> = {
+function countyPageData() {
+  const geometryByLevel: Record<
+    CivicGeometryLevel,
+    CivicGeometryFeatureCollection
+  > = {
     state: emptyFeatureCollection(),
     county: emptyFeatureCollection(),
-    congressional_district: emptyFeatureCollection()
+    congressional_district: emptyFeatureCollection(),
   };
 
   return {
     stateCode: "NC",
     countySlug: "wake",
-    countyName: "Wake",
+    countyName: "Wake County",
+    hasCountyGeometry: false,
     pageLevel: "county" as const,
     geometryByLevel,
     layerVisibilityDefaults: buildMapLayerVisibilityDefaults("county"),
-    donor_total_cents: 12345,
-    transaction_count: 2,
-    top_recipient_committees: [
-      {
-        committee_id: "11111111-1111-4111-8111-111111111111",
-        committee_name: "Committee A",
-        donor_total_cents: 12000,
-        transaction_count: 2
-      }
-    ],
-    top_linked_candidates: topLinkedCandidates,
-    trustSection: buildTrustSection([], { includeJurisdictionFreshnessNote: true })
+    navigationNode: WAKE_NODE,
+    proxySummary: null,
   };
 }
 
-function linkedCandidate(
-  overrides: Partial<CountySummaryLinkedCandidate> = {}
-): CountySummaryLinkedCandidate {
-  return {
-    candidate_id: "22222222-2222-4222-8222-222222222222",
-    candidate_name: "Jordan Candidate",
-    donor_total_cents: 12000,
-    transaction_count: 2,
-    identity_is_safe: true,
-    ...overrides
-  };
-}
-
-// Linked-candidate names come from cf.candidate.name — the raw FEC filing
-// string. These tests pin the identity-gated owner (formatCandidatePublicName)
-// on the rendered name. Specimens are ALL-CAPS on purpose: an already-cased
-// name passes through the formatter unchanged and can never prove formatting
-// happened (the documented mixed-case-fixture vacuous pass).
 describe("/state/[code]/county/[slug] route rendering", () => {
-  it("formats an identity-safe ALL-CAPS linked-candidate name through the shared owner", () => {
-    const rendered = render(CountyPage, {
-      props: {
-        data: countyPageData([linkedCandidate({ candidate_name: "OSSOFF, T. JONATHAN" })])
-      } as never
-    });
-
-    expect(rendered.body).toContain("<strong>Ossoff, T. Jonathan</strong>");
-    expect(rendered.body).not.toContain("OSSOFF, T. JONATHAN");
+  beforeEach(() => {
+    currentPageUrl = new URL("https://civibus.test/state/NC/county/wake");
   });
 
-  it("renders an identity-unsafe linked-candidate name as the raw filed string", () => {
+  it("separates unavailable county finance from the narrower, not-combined proxy control", () => {
     const rendered = render(CountyPage, {
-      props: {
-        data: countyPageData([
-          linkedCandidate({
-            // Address-like FEC source string; digits mark it identity-unsafe.
-            candidate_name: "212 MAIN AVE W. JOHN, RODNEY",
-            identity_is_safe: false
-          })
-        ])
-      } as never
+      props: { data: countyPageData() } as never,
     });
 
-    expect(rendered.body).toContain("<strong>212 MAIN AVE W. JOHN, RODNEY</strong>");
-    expect(rendered.body).not.toContain("212 Main Ave W. John, Rodney");
+    expect(rendered.body).toContain("Campaign finance unavailable");
+    expect(rendered.body).toContain(
+      "County boundary geometry is unavailable; this does not change the explicit finance refusal.",
+    );
+    expect(rendered.body).toContain("Ordinary-locality proxy control");
+    expect(rendered.body).toContain("Committee-city proxy");
+    expect(rendered.body).toContain("Mapped committee-city disbursements");
+    expect(rendered.body).toContain("Raleigh and Wake Forest committees");
+    expect(rendered.body).toContain(
+      "not combined with state or county-wide totals",
+    );
+    expect(rendered.body).toContain(
+      "No aggregate-complete, source-record-backed proxy result is available.",
+    );
+    expect(rendered.body).not.toContain("Donor total");
+    expect(rendered.body).not.toMatch(/\$[0-9]/);
   });
 
-  it("fails closed when the runtime identity flag is not a boolean", () => {
-    const malformedCandidate = {
-      ...linkedCandidate({ candidate_name: "212 MAIN AVE W. JOHN, RODNEY" }),
-      identity_is_safe: "false"
-    } as unknown as CountySummaryLinkedCandidate;
-
+  it("uses the same county crumbs for accessible UI and JSON-LD and stays noindex", () => {
     const rendered = render(CountyPage, {
-      props: { data: countyPageData([malformedCandidate]) } as never
+      props: { data: countyPageData() } as never,
     });
 
-    expect(rendered.body).toContain("<strong>212 MAIN AVE W. JOHN, RODNEY</strong>");
-    expect(rendered.body).not.toContain("212 Main Ave W. John, Rodney");
+    expect(rendered.body).toContain('nav aria-label="Breadcrumb"');
+    expect(rendered.body).toContain("Wake County · County");
+    expect(rendered.head).toContain('"@type":"BreadcrumbList"');
+    expect(rendered.head).toContain('"name":"Wake County · County"');
+    expect(rendered.head).toContain(
+      '<meta name="robots" content="noindex,follow"',
+    );
+    expect(rendered.head).toContain(
+      '<link rel="canonical" href="https://civibus.test/state/NC/county/wake"',
+    );
   });
 });

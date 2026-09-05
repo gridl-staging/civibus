@@ -67,6 +67,24 @@ function buildColumn(personId: string, name: string): CompareColumn {
 }
 
 describe("/compare page", () => {
+  it("renders the empty recovery prompt with a clean canonical URL and no unknown notice", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/compare");
+    const rendered = render(ComparePage, {
+      props: {
+        data: {
+          columns: [],
+          notices: [],
+          canonicalComparison: null,
+          prompt: { kind: "add-officeholder" }
+        }
+      }
+    });
+
+    expect(rendered.head).toContain('<link rel="canonical" href="https://civibus.test/compare"');
+    expect(rendered.body).toContain("Choose at least two officeholders to compare campaign finance.");
+    expect(rendered.body).not.toContain("could not be found");
+  });
+
   it("renders clean compare SEO, breadcrumb, notices, chips, add-search controls, and per-column skeletons", () => {
     currentPageUrl = new URL("https://preview.internal:5173/compare?people=ada,ben&notice=max-4");
     const rendered = render(ComparePage, {
@@ -184,6 +202,7 @@ describe("/compare page", () => {
         `Shared scale maximum: {presentation.chartScales.${scaleKey}.maxLabel}`
       );
     }
+    expect(source).toContain("widthPercentage: cell.widthPercentage ?? undefined");
   });
 
   it("keeps the compare page on one settled-grid path instead of independent per-column scales", () => {

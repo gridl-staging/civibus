@@ -676,7 +676,7 @@ def test_upsert_transaction_bulk_uses_sub_id_seam_for_unique_dual_key_rows(
         *,
         transactions: list[Transaction],
         conflict_mode: str,
-    ) -> list[tuple[UUID, bool, int | None, UUID, str | None]]:
+    ) -> list[tuple[UUID, bool, int | None, UUID, str | None, UUID | None, str | None]]:
         del conn
         bulk_calls.append(
             (
@@ -699,6 +699,8 @@ def test_upsert_transaction_bulk_uses_sub_id_seam_for_unique_dual_key_rows(
                 transaction.sub_id,
                 transaction.filing_id,
                 transaction.transaction_identifier,
+                transaction.data_source_id,
+                transaction.native_transaction_id,
             )
             for (stubbed_transaction_id, inserted), transaction in zip(stubbed_rows, transactions, strict=True)
         ]
@@ -755,24 +757,49 @@ def test_bulk_statement_templates_are_reused_for_stable_batch_shapes() -> None:
     assert different_values != first_values
 
     first_statement = filing_loader_bulk._transaction_upsert_statement(
-        row_count=2,
-        column_count=31,
         conflict_mode="sub_id",
     )
     second_statement = filing_loader_bulk._transaction_upsert_statement(
-        row_count=2,
-        column_count=31,
         conflict_mode="sub_id",
     )
     other_conflict_statement = filing_loader_bulk._transaction_upsert_statement(
-        row_count=2,
-        column_count=31,
         conflict_mode="filing_identifier",
     )
 
     assert first_statement is second_statement
-    assert "ON CONFLICT (sub_id) WHERE sub_id IS NOT NULL" in first_statement
+    assert first_statement.count("%s::") == 33
+    assert "ON CONFLICT (sub_id) WHERE data_source_id IS NULL AND sub_id IS NOT NULL" in first_statement
     assert "ON CONFLICT (filing_id, transaction_identifier)" in other_conflict_statement
+
+
+def test_bulk_transaction_copy_stage_persists_unique_rows(
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "Bulk COPY Stage", suffix=46)
+    filing_id = _insert_test_filing(db_conn, committee_id, "bulk-copy-stage")
+    transactions = [
+        _build_test_transaction(
+            filing_id,
+            committee_id,
+            amount,
+            sub_id=_TEST_SUB_ID_BASE + offset,
+        )
+        for offset, amount in ((46, "46.00"), (47, "47.00"))
+    ]
+    monkeypatch.setattr(filing_loader_bulk, "_TRANSACTION_COPY_MIN_ROWS", 2)
+
+    results = upsert_transactions_with_status_bulk(db_conn, transactions)
+
+    assert [result.inserted for result in results] == [True, True]
+    assert [result.transaction_id for result in results] == [transaction.id for transaction in transactions]
+    assert (
+        db_conn.execute(
+            "SELECT count(*) FROM cf.transaction WHERE sub_id = ANY(%s)",
+            ([transaction.sub_id for transaction in transactions],),
+        ).fetchone()[0]
+        == 2
+    )
 
 
 def test_upsert_transaction_persists_back_ref_transaction_id(db_conn: psycopg.Connection) -> None:

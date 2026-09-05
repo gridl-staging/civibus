@@ -82,6 +82,7 @@ test.describe("launch hygiene", () => {
         "/about",
         "/contact",
         "/privacy",
+        "/methodology",
         SMOKE_ELECTION_ROUTE_PATH
       ])
     );

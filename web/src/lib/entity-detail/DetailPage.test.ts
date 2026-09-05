@@ -866,6 +866,26 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).not.toContain("Total receipts");
   });
 
+  it("omits a cycle claim when an omitted-cycle money request has no backend cycle metadata", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personMoneyHeadline: {
+            kind: "temporarily_unavailable",
+            message: "Selected-cycle money summary is temporarily unavailable."
+          },
+          personFinanceSections: new Promise(() => {})
+        })
+      }
+    });
+
+    const moneyGlance = extractMoneyGlanceSection(rendered.body);
+    expect(moneyGlance).toContain("Selected-cycle money summary is temporarily unavailable.");
+    expect(moneyGlance).not.toMatch(/\b\d{4} cycle\b/);
+    expect(moneyGlance).not.toContain("undefined cycle");
+    expect(moneyGlance).not.toContain("<p> cycle</p>");
+  });
+
   it("renders not-loaded Money at a glance copy with no dollar figures at all", () => {
     // person_detail.md: when fundraising coverage is `not_loaded`, Money at a glance
     // must say a linked FEC candidate exists but Civibus has not loaded authoritative
@@ -1055,7 +1075,7 @@ describe("entity detail page rendering", () => {
     expect(rendered.body.split("<h3>Campaign finance</h3>").length - 1).toBe(1);
   });
 
-  it("keeps the outside-spending anchor unique across multiple candidacies", () => {
+  it("keeps the outside-spending anchor and disclosure names unique across multiple candidacies", () => {
     const rendered = render(DetailPage, {
       props: {
         data: buildPersonPageBundle({
@@ -1076,6 +1096,19 @@ describe("entity detail page rendering", () => {
 
     expect(rendered.body.match(/\sid="person-outside-spending"/g)).toHaveLength(1);
     expect(rendered.body.match(/>Outside spending<\/h4>/g)).toHaveLength(2);
+    const disclosureNames = Array.from(
+      rendered.body.matchAll(/<summary[^>]*aria-label="([^"]+)"[^>]*>View chart data<\/summary>/g),
+      (match) => match[1]
+    );
+    expect(disclosureNames).toEqual([
+      "View chart data: Sources of receipts for Jane Doe, 2026 cycle",
+      "View chart data: Itemized individual contributions by month for Jane Doe, 2026 cycle",
+      "View chart data: Itemized contribution-size buckets for Jane Doe, 2026 cycle",
+      "View chart data: Geography for Jane Doe, 2026 cycle",
+      "View chart data: Outside spending for Candidate One (candidacy 1), 2026 cycle",
+      "View chart data: Outside spending for Candidate Two (candidacy 2), 2026 cycle"
+    ]);
+    expect(new Set(disclosureNames)).toHaveProperty("size", 6);
   });
 
   it("keeps the fundraising detail heading unique while contribution insights stream", () => {

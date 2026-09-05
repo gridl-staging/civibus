@@ -15,6 +15,7 @@ from psycopg_pool import ConnectionPool
 
 from api import health_content as _health_content_module
 from api import health_version as _health_version_module
+from api.middleware.logging import record_handled_exception_type
 
 from api.middleware import (
     API_KEY_HEADER_NAME,
@@ -39,6 +40,7 @@ from api.routes.metadata import router as metadata_router
 from api.routes.portrait_admin import router as portrait_admin_router
 from api.routes.property import router as property_router
 from api.routes.public_federal import router as public_federal_router
+from api.routes.regional_navigation import router as regional_navigation_router
 from api.routes.search import router as search_router
 from core.db import build_connection_parameters
 from core.graph import age_post_connect
@@ -62,6 +64,7 @@ def _v1_routers() -> tuple[APIRouter, ...]:
         graph_router,
         search_router,
         donors_router,
+        regional_navigation_router,
     )
 
 
@@ -212,6 +215,9 @@ def create_app() -> FastAPI:
         max_requests=rate_limit_requests,
         window_seconds=rate_limit_window_seconds,
     )
+    # Keep CORS outside responses synthesized by the request logger so browser
+    # clients can read allowed-origin failures and their request IDs.
+    app.add_middleware(RequestLoggingMiddleware)
     environment = os.getenv("CIVIBUS_ENV", "").strip().lower()
     configured_cors_origin = os.getenv("CIVIBUS_CORS_ORIGIN", "").strip()
     if environment == "development":
@@ -238,8 +244,6 @@ def create_app() -> FastAPI:
             if request_origin is not None and request_origin != configured_cors_origin:
                 _strip_cors_headers(response)
             return response
-
-    app.add_middleware(RequestLoggingMiddleware)
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -278,12 +282,12 @@ def create_app() -> FastAPI:
             with pool.connection() as connection:
                 failures = _health_content_module.evaluate_content_health(connection)
         except Exception as exc:  # noqa: BLE001 — probe must catch broadly.
+            record_handled_exception_type(request, exc)
             return JSONResponse(
                 status_code=503,
                 content={
                     "healthy": False,
                     "error": "db_unreachable",
-                    "detail": str(exc),
                 },
             )
         if failures:

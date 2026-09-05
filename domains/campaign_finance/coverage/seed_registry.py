@@ -6,14 +6,14 @@ import argparse
 import sys
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Iterable
 
-from core.refresh.runner import _CADENCE_INTERVALS, _SUPPORTED_STATE_CODES
+from core.refresh.runner import _CADENCE_INTERVALS
 from domains.campaign_finance.jurisdictions.config_schema import (
     JurisdictionConfig,
     discover_jurisdiction_configs,
     load_jurisdiction_config,
 )
+from domains.campaign_finance.jurisdictions.refresh_registry import load_validated_refresh_registrations
 
 from .registry import DEFAULT_REGISTRY_PATH, CoverageRegistry, CoverageRegistryRow, load_registry, write_registry
 
@@ -26,6 +26,7 @@ _PRESERVED_REGISTRY_FIELDS = (
     "next_action",
     "evidence_date",
     "ie_coverage_available",
+    "authority_relation",
 )
 
 
@@ -73,12 +74,14 @@ def _derive_state_registry_row(
 
 def derive_state_registry_rows(
     jurisdictions_root: Path | None = None,
-    *,
-    supported_state_codes: Iterable[str] = _SUPPORTED_STATE_CODES,
 ) -> list[CoverageRegistryRow]:
     """Discover all state configs and return sorted registry rows."""
     resolved_root = jurisdictions_root or _DEFAULT_JURISDICTIONS_ROOT
-    runner_supported_state_codes = set(supported_state_codes)
+    runner_supported_state_codes = {
+        code
+        for jurisdiction_type, code in (item.identity for item in load_validated_refresh_registrations(resolved_root))
+        if jurisdiction_type == "state"
+    }
 
     rows: list[CoverageRegistryRow] = []
     for config_path in discover_jurisdiction_configs(resolved_root):
@@ -147,7 +150,10 @@ def merge_seed_registry(
     for jurisdiction_code in sorted(seeded_rows_by_code):
         merged_rows.append(seeded_rows_by_code[jurisdiction_code])
 
-    return CoverageRegistry(rows=merged_rows)
+    return CoverageRegistry(
+        identity_translations=existing_registry.identity_translations,
+        rows=merged_rows,
+    )
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:

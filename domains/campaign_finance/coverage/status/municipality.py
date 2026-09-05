@@ -31,7 +31,11 @@ from domains.campaign_finance.coverage.lifecycle import (
     ImplementedRegionLifecycleRegistry,
     ImplementedRegionLifecycleRow,
 )
-from domains.campaign_finance.coverage.registry import CoverageRegistry, CoverageRegistryRow
+from domains.campaign_finance.coverage.registry import (
+    CoverageRegistry,
+    CoverageRegistryRow,
+    coverage_parent_linkage_error,
+)
 from domains.campaign_finance.coverage.status.models import (
     OriginLiteral,
     Refusal,
@@ -154,6 +158,14 @@ def select_registry_owners_from_index(
         return refuse(
             scope=jurisdiction_code,
             reason=f"no coverage-registry row for '{jurisdiction_code}'",
+            canonical_owner=COVERAGE_REGISTRY_OWNER,
+        )
+
+    linkage_error = coverage_parent_linkage_error(identity_row, index.registry_by_code)
+    if linkage_error is not None:
+        return refuse(
+            scope=jurisdiction_code,
+            reason=linkage_error,
             canonical_owner=COVERAGE_REGISTRY_OWNER,
         )
 

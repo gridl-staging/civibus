@@ -12,8 +12,11 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api.deps import get_db
+from api.routes import civics as civics_routes
 from api.test_campaign_finance_support import (
     CandidateRowSeed,
     CommitteeRowSeed,
@@ -361,6 +364,21 @@ def _clock_filtered_election_fixture_fuses(module_path: Path, database_current_d
             if fuse is not None:
                 fixtures_with_fuses.append(fuse)
     return fixtures_with_fuses
+
+
+@pytest.fixture
+def _without_persisted_election_date_contests(db_conn: psycopg.Connection) -> None:
+    """Hide committed same-date contests inside the test's rollback transaction."""
+    election_date = date(2026, 11, 3)
+    db_conn.execute(
+        "UPDATE civic.contest SET election_date = NULL WHERE election_date = %s",
+        (election_date,),
+    )
+    remaining = db_conn.execute(
+        "SELECT COUNT(*) FROM civic.contest WHERE election_date = %s",
+        (election_date,),
+    ).fetchone()
+    assert remaining == (0,)
 
 
 def _insert_contest(conn: psycopg.Connection, **kwargs) -> UUID:
@@ -1810,7 +1828,10 @@ class TestElectionContracts:
         assert response.status_code == 422
 
     def test_election_date_returns_exact_date_aggregate(
-        self, api_client: TestClient, db_conn: psycopg.Connection
+        self,
+        api_client: TestClient,
+        db_conn: psycopg.Connection,
+        _without_persisted_election_date_contests: None,
     ) -> None:
         office_wa = _insert_office(
             db_conn,
@@ -2364,6 +2385,34 @@ class TestContactEndpoint:
 
 
 class TestCivicsGeometryEndpoint:
+    def test_returns_documented_404_when_requested_geometry_is_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Missing geometry is an unavailable resource, not a successful empty map."""
+        monkeypatch.setattr(civics_routes, "fetch_electoral_division_geometries", lambda *args, **kwargs: [])
+        app = FastAPI()
+        app.include_router(civics_routes.router, prefix="/v1")
+        app.dependency_overrides[get_db] = lambda: object()
+
+        with TestClient(app) as client:
+            response = client.get("/v1/civics/geometry", params={"level": "county", "state": "TX"})
+
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Geometry not found for county in state TX"}
+        assert app.openapi()["paths"]["/v1/civics/geometry"]["get"]["responses"]["404"] == {
+            "description": "No geometry is available for the requested level and state.",
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {"detail": {"type": "string"}},
+                        "required": ["detail"],
+                        "additionalProperties": False,
+                    }
+                }
+            },
+        }
+
     @pytest.mark.parametrize(
         ("level", "name", "division_type", "district_number"),
         [
@@ -2809,6 +2858,20 @@ class TestContestCandidateMoney:
         # Suffixed ids that cannot collide with the bundled FEC sample data.
         committee_id = UUID("c0000000-0000-0000-0000-0000000009e1")
         filing_id = UUID("c0000000-0000-0000-0000-0000000009e2")
+        source_record_id = UUID("c0000000-0000-0000-0000-0000000009e5")
+        fec_data_source = insert_data_source_for_test(
+            db_conn,
+            jurisdiction="federal/fec",
+            name_suffix="race-ie-window-evidence",
+        )
+        insert_source_record_for_test(
+            db_conn,
+            source_record_id=source_record_id,
+            data_source_id=fec_data_source.id,
+            source_record_key="schedule-e-race-window-evidence",
+            source_url="https://www.fec.gov/data/independent-expenditures/",
+            pull_date=datetime(2026, 8, 28, tzinfo=timezone.utc),
+        )
         insert_committee_row(
             db_conn,
             CommitteeRowSeed(id=committee_id, fec_committee_id="C99900901", name="Race IE Coverage Spender"),
@@ -2830,6 +2893,7 @@ class TestContestCandidateMoney:
                     transaction_type="24E",
                     amount=amount,
                     amendment_indicator="N",
+                    source_record_id=source_record_id,
                     transaction_date=date(2026, 3, 1),
                     recipient_candidate_id=incumbent_candidate_id,
                     support_oppose=support_oppose,

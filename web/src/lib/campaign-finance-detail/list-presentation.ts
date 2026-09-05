@@ -14,6 +14,12 @@ export type CandidateListItemPresentation = {
    * candidate has no loaded total. Never `$0.00` for a missing total.
    */
   totalRaisedValue: string;
+  /**
+   * Candidate-scoped official FEC summary end, or honest unavailable copy for
+   * a numeric total without that evidence. Null when total receipts itself is
+   * unavailable, because another summary measure's date must not qualify it.
+   */
+  totalRaisedPeriodLabel: string | null;
 };
 
 export type CommitteeListItemPresentation = {
@@ -43,6 +49,12 @@ export function buildCandidateListItemPresentation(
   const contextLine = [item.party, item.office, location]
     .filter(Boolean)
     .join(" \u00b7 ");
+  const hasTotalReceipts = item.total_receipts !== null && item.total_receipts !== undefined;
+  const totalRaisedPeriodLabel = hasTotalReceipts
+    ? item.summary_coverage_end_date
+      ? `Official FEC summary through ${item.summary_coverage_end_date}`
+      : "Official FEC summary coverage end not available"
+    : null;
 
   return {
     // cf.candidate.name arrives as the raw FEC filing string, which is shouted
@@ -58,7 +70,8 @@ export function buildCandidateListItemPresentation(
     totalRaisedLabel: CANDIDATE_TOTAL_RAISED_LABEL,
     // Delegates to the shared money owner so the browse list, the detail page,
     // and every other surface agree on formatting and on the unknown copy.
-    totalRaisedValue: formatOptionalCurrency(item.total_receipts)
+    totalRaisedValue: formatOptionalCurrency(item.total_receipts),
+    totalRaisedPeriodLabel
   };
 }
 

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from domains.campaign_finance.coverage.registry import CoverageRegistryRow
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
@@ -176,7 +178,19 @@ def test_stage5_in_verdict_is_launch_ready_in_registry_and_matrix() -> None:
     assert "Ship with freshness warning" not in in_row["next_action"]
 
     matrix_line = _matrix_row_line("IN")
-    assert "| IN | state | launch-support candidate | weekly | yes |" in matrix_line
+    # The matrix is a derived view rendered from the registry, so every projected cell is
+    # asserted against its canonical registry value in the rendered column order. The
+    # authority-relation cell has no raw JSON field: legacy rows resolve it through the
+    # typed registry owner, which is the only place that decision lives.
+    assert [cell.strip() for cell in matrix_line.strip().strip("|").split("|")] == [
+        in_row["jurisdiction_code"],
+        in_row["jurisdiction_type"],
+        CoverageRegistryRow.model_validate(in_row).authority_relation.relation,
+        in_row["tier"],
+        in_row["best_update_frequency"],
+        "yes" if in_row["runner_wired"] else "no",
+        in_row["next_action"],
+    ]
     assert "Ship with freshness warning" not in matrix_line
 
     for child_code in ("IN_FORT_WAYNE", "IN_INDIANAPOLIS_CITY_BALANCE"):

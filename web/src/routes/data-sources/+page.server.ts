@@ -6,7 +6,7 @@ const DATA_SOURCES_CACHE_CONTROL = "public, max-age=300, s-maxage=300, stale-whi
 
 export const load: PageServerLoad = ({ locals, setHeaders }) =>
   withApiResponseErrorHandling(async () => {
-    setHeaders({ "cache-control": DATA_SOURCES_CACHE_CONTROL });
     const dataSources = await fetchDataSourcesMetadata(locals.api);
+    setHeaders({ "cache-control": DATA_SOURCES_CACHE_CONTROL });
     return { dataSources };
   }, "Backend data-sources request failed.");

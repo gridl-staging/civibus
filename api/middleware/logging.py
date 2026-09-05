@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Callable
@@ -16,12 +17,27 @@ from starlette.responses import PlainTextResponse
 
 REQUEST_ID_HEADER_NAME = "X-Request-ID"
 _API_LOGGER_NAME = "civibus.api"
+_HANDLED_EXCEPTION_TYPE_ATTRIBUTE = "civibus_handled_exception_type"
+# Caller IDs remain opaque correlations, but must be singleton RFC 9110 tokens.
+# This local limit retains UUIDs and known callers while bounding response/log reflection.
+_MAX_REQUEST_ID_LENGTH = 128
+_REQUEST_ID_TOKEN_PATTERN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+
+
+def record_handled_exception_type(request: Request, exception: BaseException) -> None:
+    """Attach a safe exception classification to the request's structured log."""
+    setattr(request.state, _HANDLED_EXCEPTION_TYPE_ATTRIBUTE, type(exception).__name__)
 
 
 def _request_id_from_headers(request: Request) -> str:
-    supplied_request_id = request.headers.get(REQUEST_ID_HEADER_NAME)
-    if supplied_request_id:
-        return supplied_request_id
+    supplied_request_ids = request.headers.getlist(REQUEST_ID_HEADER_NAME)
+    if len(supplied_request_ids) == 1:
+        supplied_request_id = supplied_request_ids[0]
+        if (
+            0 < len(supplied_request_id) <= _MAX_REQUEST_ID_LENGTH
+            and _REQUEST_ID_TOKEN_PATTERN.fullmatch(supplied_request_id) is not None
+        ):
+            return supplied_request_id
     return str(uuid.uuid4())
 
 
@@ -118,5 +134,6 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             path=request.url.path,
             status_code=response.status_code,
             duration_ms=duration_ms,
+            exception_type=getattr(request.state, _HANDLED_EXCEPTION_TYPE_ATTRIBUTE, None),
         )
         return response

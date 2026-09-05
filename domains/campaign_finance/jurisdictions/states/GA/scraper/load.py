@@ -21,6 +21,7 @@ from core.db import (
     insert_entity_source,
     insert_organization,
     insert_person,
+    resolve_organization_by_canonical_name,
     try_insert_source_record,
     upsert_address,
 )
@@ -33,7 +34,7 @@ from core.types.python.models import (
     utc_now,
 )
 from domains.campaign_finance.ingest.filing_loader import (
-    ensure_state_committee,
+    ensure_authority_committee,
     resolve_transaction_counterparty_ids,
     upsert_filing,
     upsert_transaction,
@@ -181,14 +182,24 @@ def _resolve_ga_filing_committee_id(
     conn: psycopg.Connection,
     row: Mapping[str, object],
     data_type: str,
+    *,
+    data_source_id: UUID,
+    source_record_id: UUID,
 ) -> UUID:
     extracted = _ga_extract_row(row, data_type)
-    organization_id = _resolve_ga_committee_id(conn, extracted["committee"])
-    return ensure_state_committee(
+    organization_id = _resolve_ga_committee_id(
         conn,
-        state="GA",
+        extracted["committee"],
+        data_source_id=data_source_id,
+    )
+    return ensure_authority_committee(
+        conn,
+        data_source_id=data_source_id,
+        authority_type="state",
+        authority_code="GA",
         native_committee_id=require_ga_text(row.get("FilerID"), "FilerID"),
         organization_id=organization_id,
+        source_record_id=source_record_id,
     )
 
 
@@ -197,11 +208,14 @@ def build_ga_filing(
     *,
     committee_id: UUID,
     source_record_id: UUID,
+    data_source_id: UUID,
     data_type: str,
 ) -> Filing:
     filing_date = parse_ga_row_date(row.get(_GA_TRANSACTION_DATE_FIELD))
     return Filing(
         filing_fec_id=_build_ga_filing_fec_id(row, data_type),
+        data_source_id=data_source_id,
+        native_filing_id=_build_ga_filing_fec_id(row, data_type),
         committee_id=committee_id,
         report_type=data_type,
         amendment_indicator="N",
@@ -242,6 +256,7 @@ def _upsert_ga_transaction_with_filing(
     filing_id: UUID,
     committee_id: UUID,
     source_record_id: UUID,
+    data_source_id: UUID,
     data_type: str,
 ) -> None:
     person_roles, organization_roles = _GA_COUNTERPARTY_ROLES_BY_TYPE[data_type]
@@ -257,6 +272,8 @@ def _upsert_ga_transaction_with_filing(
         Transaction(
             filing_id=filing_id,
             committee_id=committee_id,
+            data_source_id=data_source_id,
+            native_transaction_id=ga_source_record_key(row),
             transaction_type=require_ga_text(row.get(_GA_TRANSACTION_TYPE_FIELD), _GA_TRANSACTION_TYPE_FIELD),
             transaction_identifier=ga_source_record_key(row),
             transaction_date=parse_ga_row_date(row.get(_GA_TRANSACTION_DATE_FIELD)),
@@ -280,6 +297,8 @@ def _resolve_ga_person_id(
     conn: psycopg.Connection,
     person: Person | None,
     address: Address | None,
+    *,
+    data_source_id: UUID,
 ) -> UUID | None:
     if person is None:
         return None
@@ -287,14 +306,25 @@ def _resolve_ga_person_id(
     zip5 = address.zip5 if address is not None else None
     existing_person_id = None
     if person.last_name and person.first_name and zip5 is not None:
-        existing_person_id = find_person_by_name_and_zip(conn, person.last_name, person.first_name, zip5)
+        existing_person_id = find_person_by_name_and_zip(
+            conn,
+            person.last_name,
+            person.first_name,
+            zip5,
+            data_source_id=data_source_id,
+        )
     if existing_person_id is not None:
         return existing_person_id
 
     return insert_person(conn, person)
 
 
-def _resolve_ga_committee_id(conn: psycopg.Connection, committee: Organization) -> UUID:
+def _resolve_ga_committee_id(
+    conn: psycopg.Connection,
+    committee: Organization,
+    *,
+    data_source_id: UUID,
+) -> UUID:
     """Find or insert a GA committee, serialized by advisory lock to prevent deadlocks.
 
     When multiple concurrent A-Z letter iterations try to insert the same committee,
@@ -307,41 +337,35 @@ def _resolve_ga_committee_id(conn: psycopg.Connection, committee: Organization) 
         # pg_advisory_xact_lock is released automatically at transaction end.
         lock_key = hash(f"ga_committee:{committee_identifier}") & 0x7FFFFFFFFFFFFFFF
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
-        existing_org_id = find_organization_by_identifier(conn, "ga_filer_id", committee_identifier)
+        existing_org_id = find_organization_by_identifier(
+            conn,
+            "ga_filer_id",
+            committee_identifier,
+            data_source_id=data_source_id,
+        )
         if existing_org_id is not None:
             return existing_org_id
 
     return insert_organization(conn, committee)
 
 
-def _find_organization_id_by_canonical_name(
-    conn: psycopg.Connection,
-    canonical_name: str,
-) -> UUID | None:
-    row = conn.execute(
-        "SELECT id FROM core.organization WHERE canonical_name = %s LIMIT 1",
-        (canonical_name,),
-    ).fetchone()
-    return row[0] if row is not None else None
-
-
 def _resolve_ga_named_org_id(
     conn: psycopg.Connection,
     organization: Organization | None,
+    *,
+    data_source_id: UUID,
 ) -> UUID | None:
-    if organization is None:
-        return None
-
-    existing_org_id = _find_organization_id_by_canonical_name(conn, organization.canonical_name)
-    if existing_org_id is not None:
-        return existing_org_id
-
-    return insert_organization(conn, organization)
+    return resolve_organization_by_canonical_name(
+        conn,
+        organization,
+        data_source_id=data_source_id,
+    )
 
 
 def _load_ga_transaction_entities(
     conn: psycopg.Connection,
     source_record_id: UUID,
+    data_source_id: UUID,
     entities: _GATransactionEntities,
     roles: _GATransactionRoles,
 ) -> None:
@@ -350,22 +374,40 @@ def _load_ga_transaction_entities(
         address_id = upsert_address(conn, entities.address)
         insert_entity_source(conn, "address", address_id, source_record_id, roles.address)
 
-    person_id = _resolve_ga_person_id(conn, entities.person, entities.address)
+    person_id = _resolve_ga_person_id(
+        conn,
+        entities.person,
+        entities.address,
+        data_source_id=data_source_id,
+    )
     if person_id is not None:
         insert_entity_source(conn, "person", person_id, source_record_id, roles.person)
         if address_id is not None:
             insert_entity_address(conn, "person", person_id, address_id, source_record_id, "mailing")
 
-    committee_id = _resolve_ga_committee_id(conn, entities.committee)
+    committee_id = _resolve_ga_committee_id(
+        conn,
+        entities.committee,
+        data_source_id=data_source_id,
+    )
     insert_entity_source(conn, "organization", committee_id, source_record_id, roles.committee)
 
-    organization_id = _resolve_ga_named_org_id(conn, entities.organization)
+    organization_id = _resolve_ga_named_org_id(
+        conn,
+        entities.organization,
+        data_source_id=data_source_id,
+    )
     if organization_id is not None:
         insert_entity_source(conn, "organization", organization_id, source_record_id, roles.organization)
         if address_id is not None:
             insert_entity_address(conn, "organization", organization_id, address_id, source_record_id, "mailing")
 
-    candidate_id = _resolve_ga_person_id(conn, entities.candidate, None)
+    candidate_id = _resolve_ga_person_id(
+        conn,
+        entities.candidate,
+        None,
+        data_source_id=data_source_id,
+    )
     if candidate_id is not None:
         insert_entity_source(conn, "person", candidate_id, source_record_id, roles.candidate)
 
@@ -393,6 +435,7 @@ def _load_ga_transaction_row(
     _load_ga_transaction_entities(
         conn,
         source_record_id=source_record_id,
+        data_source_id=data_source_id,
         entities=entities,
         roles=roles,
     )
@@ -605,13 +648,20 @@ def _upsert_ga_filing(
     row: Mapping[str, object],
     *,
     source_record_id: UUID,
+    data_source_id: UUID,
     data_type: str,
     filing_lookup: dict[str, _GAFilingLookupEntry],
 ) -> _GAFilingLookupEntry:
     filing_fec_id = _build_ga_filing_fec_id(row, data_type)
     existing_entry = filing_lookup.get(filing_fec_id)
     if existing_entry is None:
-        committee_id = _resolve_ga_filing_committee_id(conn, row, data_type)
+        committee_id = _resolve_ga_filing_committee_id(
+            conn,
+            row,
+            data_type,
+            data_source_id=data_source_id,
+            source_record_id=source_record_id,
+        )
         filing_source_record_id = source_record_id
     else:
         committee_id = existing_entry.committee_id
@@ -621,6 +671,7 @@ def _upsert_ga_filing(
         row,
         committee_id=committee_id,
         source_record_id=filing_source_record_id,
+        data_source_id=data_source_id,
         data_type=data_type,
     )
     filing_id = upsert_filing(conn, filing)
@@ -669,6 +720,7 @@ def _load_ga_relational_transactions(
                     conn,
                     row,
                     source_record_id=source_record_id,
+                    data_source_id=data_source_id,
                     data_type=data_type,
                     filing_lookup=filing_lookup,
                 )
@@ -678,6 +730,7 @@ def _load_ga_relational_transactions(
                     filing_id=filing_entry.filing_id,
                     committee_id=filing_entry.committee_id,
                     source_record_id=source_record_id,
+                    data_source_id=data_source_id,
                     data_type=data_type,
                 )
 

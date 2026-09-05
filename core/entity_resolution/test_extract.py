@@ -48,6 +48,7 @@ _PERSON_OUTPUT_COLUMNS = {
     "employer",
     "occupation",
     "identifier_key",
+    "filing_authority_scopes",
 }
 
 _ORGANIZATION_OUTPUT_COLUMNS = {
@@ -62,6 +63,7 @@ _ORGANIZATION_OUTPUT_COLUMNS = {
     "ein",
     "fec_committee_id",
     "registered_agent_name",
+    "filing_authority_scopes",
 }
 
 _DONOR_IDENTITY_OUTPUT_COLUMNS = {
@@ -542,6 +544,7 @@ def test_extract_persons_for_matching_filters_blank_stable_identifiers(
             "employer": "Acme Corp",
             "occupation": None,
             "identifier_key": "voter_reg_id:VR-123",
+            "filing_authority_scopes": [],
         }
     ]
 

@@ -84,11 +84,22 @@ def _try_insert_schedule_e_source_record(
     return source_record_key, source_record_id
 
 
-def _select_filing_id_by_fec_id(conn: psycopg.Connection, filing_fec_id: str) -> UUID | None:
+def _select_filing_id_by_fec_id(
+    conn: psycopg.Connection,
+    filing_fec_id: str,
+    *,
+    data_source_id: UUID,
+) -> UUID | None:
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT id FROM cf.filing WHERE filing_fec_id = %s LIMIT 1",
-            (filing_fec_id,),
+            """
+            SELECT id
+            FROM cf.filing
+            WHERE (data_source_id = %s AND native_filing_id = %s)
+               OR (data_source_id IS NULL AND filing_fec_id = %s)
+            LIMIT 1
+            """,
+            (data_source_id, filing_fec_id, filing_fec_id),
         )
         row = cursor.fetchone()
     if row is None:
@@ -103,15 +114,23 @@ def _build_schedule_e_filing(
     committee_id: UUID,
     candidate_id: UUID | None,
     source_record_id: UUID,
+    data_source_id: UUID,
     amendment_indicator: str,
 ) -> Filing:
     previous_filing_fec_id = _normalize_optional_text(row.get("prev_file_num"))
     amended_from_filing_id = None
     if previous_filing_fec_id is not None:
-        amended_from_filing_id = _select_filing_id_by_fec_id(conn, previous_filing_fec_id)
+        amended_from_filing_id = _select_filing_id_by_fec_id(
+            conn,
+            previous_filing_fec_id,
+            data_source_id=data_source_id,
+        )
 
+    filing_fec_id = _require_text(row, "file_num")
     return Filing(
-        filing_fec_id=_require_text(row, "file_num"),
+        filing_fec_id=filing_fec_id,
+        data_source_id=data_source_id,
+        native_filing_id=filing_fec_id,
         committee_id=committee_id,
         candidate_id=candidate_id,
         report_type="schedule_e",
@@ -131,6 +150,7 @@ def _build_schedule_e_transaction(
     committee_id: UUID,
     recipient_candidate_id: UUID | None,
     source_record_id: UUID,
+    data_source_id: UUID,
     source_record_key: str,
     amendment_indicator: str,
 ) -> Transaction:
@@ -142,6 +162,8 @@ def _build_schedule_e_transaction(
     return Transaction(
         filing_id=filing_id,
         committee_id=committee_id,
+        data_source_id=data_source_id,
+        native_transaction_id=source_record_key,
         transaction_type="Independent Expenditure",
         transaction_identifier=transaction_identifier,
         transaction_date=_optional_date(row, "exp_date"),
@@ -185,7 +207,11 @@ def load_schedule_e(
             cursor.execute(f"SAVEPOINT {_SCHEDULE_E_ROW_SAVEPOINT}")
             try:
                 committee_fec_id = _require_text(row, "spe_id")
-                committee_id = find_committee_id_by_fec_id(conn, committee_fec_id)
+                committee_id = find_committee_id_by_fec_id(
+                    conn,
+                    committee_fec_id,
+                    data_source_id=data_source_id,
+                )
                 if committee_id is None:
                     if not has_active_committee_master_source_record(
                         conn,
@@ -204,7 +230,9 @@ def load_schedule_e(
 
                 candidate_fec_id = _normalize_optional_text(row.get("cand_id"))
                 candidate_id = (
-                    find_candidate_id_by_fec_id(conn, candidate_fec_id) if candidate_fec_id is not None else None
+                    find_candidate_id_by_fec_id(conn, candidate_fec_id, data_source_id=data_source_id)
+                    if candidate_fec_id is not None
+                    else None
                 )
                 amendment_indicator = _normalize_amendment_indicator(row.get("amndt_ind"))
 
@@ -227,6 +255,7 @@ def load_schedule_e(
                     committee_id=committee_id,
                     candidate_id=candidate_id,
                     source_record_id=source_record_id,
+                    data_source_id=data_source_id,
                     amendment_indicator=amendment_indicator,
                 )
                 filing_id = upsert_filing(conn, filing)
@@ -237,6 +266,7 @@ def load_schedule_e(
                     committee_id=committee_id,
                     recipient_candidate_id=candidate_id,
                     source_record_id=source_record_id,
+                    data_source_id=data_source_id,
                     source_record_key=source_record_key,
                     amendment_indicator=amendment_indicator,
                 )

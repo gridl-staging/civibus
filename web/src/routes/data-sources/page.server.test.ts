@@ -72,7 +72,7 @@ describe("/data-sources +page.server load", () => {
       })
     );
 
-    const { event } = createLoadEvent();
+    const { event, setHeaders } = createLoadEvent();
 
     await expect(load(event)).rejects.toMatchObject({
       status: 422,
@@ -80,5 +80,6 @@ describe("/data-sources +page.server load", () => {
         detail: [{ loc: ["query", "limit"], msg: "Input should be less than or equal to 200" }]
       }
     });
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 });

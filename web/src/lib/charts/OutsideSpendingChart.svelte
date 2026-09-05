@@ -11,6 +11,7 @@
   import type { ChartHeadingLevel, ChartFrameProps, ChartSeries, ExactDisclosureRow, OutsideSpendingRow } from "./types";
 
   export let testId: string;
+  export let disclosureContext: string;
   export let cycle: number;
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
@@ -129,6 +130,7 @@
 
 <ChartFrame
   {testId}
+  {disclosureContext}
   title="Outside spending"
   unit="dollars"
   {cycle}

@@ -4,18 +4,135 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      authority_promotion_artifact_run_id:
+        description: Source workflow run ID for one immutable authority-promotion bundle
+        required: false
+        type: string
+        default: ""
+      authority_promotion_artifact_name:
+        description: Exact artifact name containing authority-promotion-bundle.tar
+        required: false
+        type: string
+        default: ""
+      authority_promotion_evidence_run_id:
+        description: Completed source run ID containing the validated authority-promotion evidence tree
+        required: false
+        type: string
+        default: ""
+      authority_promotion_evidence_artifact_name:
+        description: Source artifact containing the exact app/private/civibus/authority-promotion tree
+        required: false
+        type: string
+        default: ""
+      authority_promotion_bundle_artifact_name:
+        description: Immutable output artifact name later supplied to this workflow's deploy consumer
+        required: false
+        type: string
+        default: "authority-promotion-bundle"
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  promotion_bundle:
+    name: produce-authority-promotion-bundle
+    if: github.repository == 'gridl-hq/civibus' && github.event_name == 'workflow_dispatch' && (inputs.authority_promotion_evidence_run_id != '' || inputs.authority_promotion_evidence_artifact_name != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+        with:
+          python-version: "3.12"
+
+      - name: Resolve authority promotion producer input
+        id: promotion_producer_input
+        shell: bash
+        env:
+          EVIDENCE_RUN_ID: ${{ inputs.authority_promotion_evidence_run_id }}
+          EVIDENCE_ARTIFACT_NAME: ${{ inputs.authority_promotion_evidence_artifact_name }}
+          BUNDLE_ARTIFACT_NAME: ${{ inputs.authority_promotion_bundle_artifact_name }}
+          CONSUMER_RUN_ID: ${{ inputs.authority_promotion_artifact_run_id }}
+          CONSUMER_ARTIFACT_NAME: ${{ inputs.authority_promotion_artifact_name }}
+        run: |
+          set -euo pipefail
+          [[ -z "$CONSUMER_RUN_ID" && -z "$CONSUMER_ARTIFACT_NAME" ]] || {
+            echo "Authority promotion production and deploy consumption are mutually exclusive" >&2
+            exit 1
+          }
+          [[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Authority promotion evidence run ID must be a positive decimal integer" >&2
+            exit 1
+          }
+          for artifact_name in "$EVIDENCE_ARTIFACT_NAME" "$BUNDLE_ARTIFACT_NAME"; do
+            [[ "$artifact_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+              echo "Authority promotion artifact name contains unsupported characters" >&2
+              exit 1
+            }
+          done
+
+      - name: Download validated authority promotion evidence tree
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.authority_promotion_evidence_artifact_name }}
+          path: ${{ runner.temp }}/authority-promotion-evidence
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.authority_promotion_evidence_run_id }}
+
+      - name: Build deterministic authority promotion bundle
+        id: promotion_bundle_build
+        shell: bash
+        env:
+          BUNDLE_ARTIFACT_NAME: ${{ inputs.authority_promotion_bundle_artifact_name }}
+        run: |
+          set -euo pipefail
+          manifest="$GITHUB_WORKSPACE/.debbie/sync_manifest.json"
+          dev_sha="$(jq -r '.dev_sha // ""' "$manifest")"
+          [[ "$dev_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "Authority promotion producer requires an exact dev_sha" >&2
+            exit 1
+          }
+          evidence_root="$RUNNER_TEMP/authority-promotion-evidence"
+          receipt="$evidence_root/app/private/civibus/authority-promotion/authority-promotion-receipt.json"
+          artifact_root="$RUNNER_TEMP/authority-promotion-artifact"
+          build_receipt="$RUNNER_TEMP/authority-promotion-bundle-build-receipt.json"
+          mkdir -p "$artifact_root"
+          uv sync --frozen --extra api
+          "$GITHUB_WORKSPACE/.venv/bin/python" -m domains.campaign_finance.coverage.lifecycle \
+            --promotion-receipt-json "$receipt" \
+            --promotion-filesystem-root "$evidence_root" \
+            --promotion-artifact-output-directory "$artifact_root" \
+            --promotion-build-receipt-json "$build_receipt" \
+            --promotion-run-id "$GITHUB_RUN_ID" \
+            --promotion-run-name "deploy.yml" \
+            --promotion-artifact-name "$BUNDLE_ARTIFACT_NAME" \
+            --promotion-source-revision "$dev_sha" \
+            --promotion-api-revision "$dev_sha" \
+            --promotion-web-revision "$dev_sha"
+          jq -c '{run_id,run_name,artifact_name,archive_name,archive_sha256,source_revision,api_revision,web_revision,embedded_build_receipt_path,embedded_build_receipt_sha256,members}' \
+            "$build_receipt" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload authority promotion bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.authority_promotion_bundle_artifact_name }}
+          path: ${{ runner.temp }}/authority-promotion-artifact/authority-promotion-bundle.tar
+          if-no-files-found: error
+          retention-days: 14
+
   deploy:
     name: deploy
-    if: github.repository == 'gridl-hq/civibus'
+    if: github.repository == 'gridl-hq/civibus' && (github.event_name == 'push' || (inputs.authority_promotion_evidence_run_id == '' && inputs.authority_promotion_evidence_artifact_name == ''))
     runs-on: ubuntu-latest
     environment: production
     permissions:
       contents: read
+      actions: read
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       PROD_SMOKE_BASE_URL: ${{ vars.PROD_SMOKE_BASE_URL }}
@@ -27,6 +144,11 @@ jobs:
       - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
         with:
           python-version: "3.12"
+
+      - name: Set up exact web Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web/package.json
 
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
         env:
@@ -56,6 +178,134 @@ jobs:
           built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "dev_sha=$dev_sha" >> "$GITHUB_OUTPUT"
           echo "built_at=$built_at" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve authority promotion bundle input
+        id: promotion_input
+        shell: bash
+        env:
+          FLY_API_TOKEN: ""
+          PROMOTION_ARTIFACT_RUN_ID: ${{ inputs.authority_promotion_artifact_run_id }}
+          PROMOTION_ARTIFACT_NAME: ${{ inputs.authority_promotion_artifact_name }}
+        run: |
+          set -euo pipefail
+          run_id="$PROMOTION_ARTIFACT_RUN_ID"
+          artifact_name="$PROMOTION_ARTIFACT_NAME"
+          if [[ -z "$run_id" && -z "$artifact_name" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ -n "$run_id" && -n "$artifact_name" ]] || {
+            echo "Authority promotion run ID and artifact name must be supplied together" >&2
+            exit 1
+          }
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Authority promotion run ID must be a positive decimal integer" >&2
+            exit 1
+          }
+          [[ "$artifact_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+            echo "Authority promotion artifact name contains unsupported characters" >&2
+            exit 1
+          }
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download authority promotion bundle
+        if: ${{ steps.promotion_input.outputs.enabled == 'true' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ inputs.authority_promotion_artifact_name }}
+          path: ${{ runner.temp }}/authority-promotion-download
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.authority_promotion_artifact_run_id }}
+
+      - name: Validate and stage authority promotion bundle
+        if: ${{ steps.promotion_input.outputs.enabled == 'true' }}
+        shell: bash
+        env:
+          FLY_API_TOKEN: ""
+        run: |
+          set -euo pipefail
+          uv sync --frozen --extra api
+          "$GITHUB_WORKSPACE/.venv/bin/python" -m domains.campaign_finance.coverage.lifecycle \
+            --promotion-artifact-directory "$RUNNER_TEMP/authority-promotion-download" \
+            --promotion-destination-directory "$GITHUB_WORKSPACE/infra/api/authority_promotion_bundle" \
+            --expected-source-revision "${{ steps.provenance.outputs.dev_sha }}" \
+            --expected-promotion-run-id "${{ inputs.authority_promotion_artifact_run_id }}" \
+            --expected-promotion-run-name "deploy.yml" \
+            --expected-promotion-artifact-name "${{ inputs.authority_promotion_artifact_name }}"
+
+      - name: Resolve deployed parity evidence identity
+        id: parity_evidence_context
+        if: ${{ steps.promotion_input.outputs.enabled == 'true' }}
+        shell: bash
+        env:
+          FLY_API_TOKEN: ""
+        run: |
+          set -euo pipefail
+          install_root="$GITHUB_WORKSPACE/infra/api/authority_promotion_bundle"
+          receipt="$install_root/authority-promotion-receipt.json"
+          archive="$RUNNER_TEMP/authority-promotion-download/authority-promotion-bundle.tar"
+          install_prefix="/app/private/civibus/authority-promotion/"
+          resolve_installed_reference() {
+            local reference="$1"
+            local relative
+            [[ "$reference" == "$install_prefix"* ]] || {
+              echo "Promotion evidence reference is outside the installed namespace" >&2
+              return 1
+            }
+            relative="${reference#"$install_prefix"}"
+            [[ -n "$relative" && "$relative" != /* && "$relative" != *".."* ]] || {
+              echo "Promotion evidence reference is unsafe" >&2
+              return 1
+            }
+            printf '%s/%s\n' "$install_root" "$relative"
+          }
+          serving_reference="$(jq -er '.canonical_evidence[] | select(.kind == "serving_deploy") | .path' "$receipt")"
+          canary_reference="$(jq -er '.canonical_evidence[] | select(.kind == "canary_ledger") | .path' "$receipt")"
+          serving="$(resolve_installed_reference "$serving_reference")"
+          canary="$(resolve_installed_reference "$canary_reference")"
+          federal_reference="$(jq -er '.federal_invariance_after.path' "$canary")"
+          federal="$(resolve_installed_reference "$federal_reference")"
+          for path in "$receipt" "$archive" "$serving" "$canary" "$federal"; do
+            [[ -f "$path" && ! -L "$path" ]] || {
+              echo "Promotion evidence context contains a missing or unsafe file" >&2
+              exit 1
+            }
+          done
+          candidate_receipt_sha256="$(jq -er '.candidate_receipt_file_sha256' "$serving")"
+          candidate_tree_git_sha="$(jq -er '.candidate_tree_git_sha' "$serving")"
+          qualified_image="$(jq -er '.qualified_image' "$serving")"
+          federal_identity_sha256="$(jq -er '.identity_sha256' "$federal")"
+          bundle_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          source_revision="$(jq -er '.source_revision' "$serving")"
+          api_revision="$(jq -er '.api_revision' "$serving")"
+          web_revision="$(jq -er '.web_revision' "$serving")"
+          [[ "$candidate_receipt_sha256" =~ ^[0-9a-f]{64}$ \
+            && "$candidate_tree_git_sha" =~ ^[0-9a-f]{40}$ \
+            && "$federal_identity_sha256" =~ ^[0-9a-f]{64}$ \
+            && "$bundle_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Promotion evidence context has an invalid digest identity" >&2
+            exit 1
+          }
+          [[ "$qualified_image" =~ ^registry\.fly\.io/[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]] || {
+            echo "Promotion evidence context has an invalid qualified image" >&2
+            exit 1
+          }
+          [[ "$source_revision" == "${{ steps.provenance.outputs.dev_sha }}" \
+            && "$api_revision" == "$source_revision" \
+            && "$web_revision" == "$source_revision" ]] || {
+            echo "Promotion evidence context has split or foreign serving revisions" >&2
+            exit 1
+          }
+          evidence_root="$RUNNER_TEMP/deployed_surface_parity_evidence"
+          mkdir -m 0700 "$evidence_root"
+          printf 'candidate_receipt_sha256=%s\n' "$candidate_receipt_sha256" >> "$GITHUB_OUTPUT"
+          printf 'candidate_tree_git_sha=%s\n' "$candidate_tree_git_sha" >> "$GITHUB_OUTPUT"
+          printf 'qualified_image=%s\n' "$qualified_image" >> "$GITHUB_OUTPUT"
+          printf 'promotion_bundle_sha256=%s\n' "$bundle_sha256" >> "$GITHUB_OUTPUT"
+          printf 'federal_identity_sha256=%s\n' "$federal_identity_sha256" >> "$GITHUB_OUTPUT"
+          printf 'raw_api_output=%s/raw-api.json\n' "$evidence_root" >> "$GITHUB_OUTPUT"
+          printf 'raw_browser_output=%s/raw-browser.json\n' "$evidence_root" >> "$GITHUB_OUTPUT"
+          printf 'parity_artifact_output=%s/surface-parity.json\n' "$evidence_root" >> "$GITHUB_OUTPUT"
 
       - name: Capture pre-deploy serving images
         id: pre_deploy
@@ -153,6 +403,12 @@ jobs:
         shell: bash
         env:
           FLY_API_TOKEN: ""
+          CIVIBUS_SURFACE_PARITY_RAW_API_OUTPUT: ${{ steps.parity_evidence_context.outputs.raw_api_output }}
+          CIVIBUS_CANDIDATE_RECEIPT_SHA256: ${{ steps.parity_evidence_context.outputs.candidate_receipt_sha256 }}
+          CIVIBUS_CANDIDATE_TREE_GIT_SHA: ${{ steps.parity_evidence_context.outputs.candidate_tree_git_sha }}
+          CIVIBUS_QUALIFIED_IMAGE: ${{ steps.parity_evidence_context.outputs.qualified_image }}
+          CIVIBUS_PROMOTION_BUNDLE_SHA256: ${{ steps.parity_evidence_context.outputs.promotion_bundle_sha256 }}
+          CIVIBUS_FEDERAL_IDENTITY_SHA256: ${{ steps.parity_evidence_context.outputs.federal_identity_sha256 }}
         run: |
           set -euo pipefail
           # jul30_10pm_8 promotes the money gate; PROMOTED_FATAL_ASSERTIONS in
@@ -178,6 +434,13 @@ jobs:
         working-directory: web
         env:
           FLY_API_TOKEN: ""
+          CIVIBUS_EXPECTED_SHA: ${{ steps.provenance.outputs.dev_sha }}
+          CIVIBUS_SURFACE_PARITY_RAW_BROWSER_OUTPUT: ${{ steps.parity_evidence_context.outputs.raw_browser_output }}
+          CIVIBUS_CANDIDATE_RECEIPT_SHA256: ${{ steps.parity_evidence_context.outputs.candidate_receipt_sha256 }}
+          CIVIBUS_CANDIDATE_TREE_GIT_SHA: ${{ steps.parity_evidence_context.outputs.candidate_tree_git_sha }}
+          CIVIBUS_QUALIFIED_IMAGE: ${{ steps.parity_evidence_context.outputs.qualified_image }}
+          CIVIBUS_PROMOTION_BUNDLE_SHA256: ${{ steps.parity_evidence_context.outputs.promotion_bundle_sha256 }}
+          CIVIBUS_FEDERAL_IDENTITY_SHA256: ${{ steps.parity_evidence_context.outputs.federal_identity_sha256 }}
         run: |
           set -euo pipefail
           if [[ -z "${PROD_SMOKE_BASE_URL}" ]]; then
@@ -185,11 +448,24 @@ jobs:
             exit 1
           fi
           SMOKE_MODE=production SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}" \
-            bash ./tests/smoke/run-playwright.sh -- tests/smoke/production_deploy.spec.ts tests/smoke/production_finance_visuals.spec.ts tests/smoke/primary_nav_nonempty.spec.ts --reporter=line
+            bash ./tests/smoke/run-playwright.sh -- tests/smoke/production_deploy.spec.ts tests/smoke/production_finance_visuals.spec.ts tests/smoke/primary_nav_nonempty.spec.ts tests/smoke/state_detail.spec.ts --reporter=line
+
+      - name: Build fresh deployed surface parity artifact
+        id: parity_artifact
+        if: ${{ !cancelled() && steps.parity_evidence_context.outcome == 'success' && steps.parity_gate.outcome == 'success' && steps.smoke_gate.outcome == 'success' }}
+        shell: bash
+        env:
+          FLY_API_TOKEN: ""
+        run: |
+          set -euo pipefail
+          uv run --frozen --extra api python -m domains.campaign_finance.coverage.lifecycle \
+            --surface-parity-raw-api-json "${{ steps.parity_evidence_context.outputs.raw_api_output }}" \
+            --surface-parity-raw-browser-json "${{ steps.parity_evidence_context.outputs.raw_browser_output }}" \
+            --surface-parity-output-json "${{ steps.parity_evidence_context.outputs.parity_artifact_output }}"
 
       - name: Roll back serving apps on failed production verification
         id: rollback
-        if: ${{ always() && steps.pre_deploy.outcome == 'success' && (steps.deploy_api.outcome == 'failure' || steps.deploy_web.outcome == 'failure' || steps.deploy_caddy.outcome == 'failure' || steps.verify_sha.outcome == 'failure' || steps.parity_gate.outcome == 'failure' || steps.smoke_gate.outcome == 'failure') }}
+        if: ${{ always() && steps.pre_deploy.outcome == 'success' && (steps.deploy_api.outcome == 'failure' || steps.deploy_web.outcome == 'failure' || steps.deploy_caddy.outcome == 'failure' || steps.verify_sha.outcome == 'failure' || steps.parity_gate.outcome == 'failure' || steps.smoke_gate.outcome == 'failure' || steps.parity_artifact.outcome == 'failure') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -203,6 +479,17 @@ jobs:
           # deploy. `steps.smoke_deps` is absent for the same reason -- an npm
           # install failure is a tooling problem, not evidence about production.
           bash infra/scripts/rollback_serving_apps.sh restore "$RUNNER_TEMP/pre_deploy_images.txt"
+
+      - name: Persist deployed surface parity evidence
+        if: ${{ always() && steps.parity_artifact.outcome == 'success' }}
+        env:
+          FLY_API_TOKEN: ""
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deployed_surface_parity_evidence
+          path: ${{ runner.temp }}/deployed_surface_parity_evidence
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Deploy refresh machine
         id: deploy_refresh

@@ -6,8 +6,12 @@ import pytest
 
 from domains.campaign_finance.jurisdictions._test_helpers import nested_keys, read, source_block_by_name
 from domains.campaign_finance.jurisdictions.states.WA.scraper import (
+    _load_bulk_download_url_for_data_type,
     _load_column_for_semantic_path,
     _load_columns_for_data_type,
+    _load_data_source_name_for_data_type,
+    _load_data_source_url_for_data_type,
+    _load_dataset_id_for_data_type,
     _load_wa_config,
     _load_wa_data_source_blocks,
 )
@@ -43,6 +47,37 @@ def test_data_source_blocks_include_expected_transaction_types() -> None:
         "WA PDC Independent Expenditures",
         "WA PDC Loans",
     }
+
+
+@pytest.mark.parametrize(
+    ("data_type", "dataset_id"),
+    [
+        ("contributions", "kv7h-kjye"),
+        ("expenditures", "tijg-9zyp"),
+        ("independent_expenditures", "67cp-h962"),
+        ("loans", "d2ig-r3q4"),
+    ],
+)
+def test_dataset_id_derives_from_configured_bulk_download_url(data_type: str, dataset_id: str) -> None:
+    assert _load_dataset_id_for_data_type(data_type) == dataset_id
+
+
+@pytest.mark.parametrize(
+    ("data_type", "source_name"),
+    [
+        ("contributions", "WA PDC Contributions"),
+        ("expenditures", "WA PDC Expenditures"),
+        ("independent_expenditures", "WA PDC Independent Expenditures"),
+        ("loans", "WA PDC Loans"),
+    ],
+)
+def test_data_source_identity_helpers_derive_from_config(data_type: str, source_name: str) -> None:
+    config_source = next(source for source in _load_wa_config().data_sources if source.name == source_name)
+
+    assert config_source.coverage.transaction_types == [data_type]
+    assert _load_data_source_name_for_data_type(data_type) == config_source.name
+    assert _load_data_source_url_for_data_type(data_type) == config_source.url
+    assert _load_bulk_download_url_for_data_type(data_type) == config_source.bulk_download_url
 
 
 def test_columns_for_contributions_derive_from_config_order() -> None:

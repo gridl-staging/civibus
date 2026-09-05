@@ -1,7 +1,7 @@
 import { expect, test } from "playwright/test";
 import {
-  SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME,
   SMOKE_NC_SHOWCASE_COUNTY_HEADING,
+  SMOKE_NC_SHOWCASE_COUNTY_LINK_NAME,
   SMOKE_NC_SHOWCASE_COUNTY_SLUG
 } from "./fixtures";
 
@@ -10,7 +10,7 @@ test.describe("NC county map toggle smoke", () => {
     await page.goto("/state/NC");
 
     await expect(page.getByRole("heading", { name: "NC map context" })).toBeVisible();
-    await expect(page.getByRole("link", { name: SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME })).toHaveAttribute(
+    await expect(page.getByRole("link", { name: SMOKE_NC_SHOWCASE_COUNTY_LINK_NAME })).toHaveAttribute(
       "href",
       `/state/NC/county/${SMOKE_NC_SHOWCASE_COUNTY_SLUG}`
     );
@@ -21,7 +21,7 @@ test.describe("NC county map toggle smoke", () => {
     await districtToggle.uncheck();
     await expect(districtToggle).not.toBeChecked();
 
-    await page.getByRole("link", { name: SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME }).click();
+    await page.getByRole("link", { name: SMOKE_NC_SHOWCASE_COUNTY_LINK_NAME }).click();
     await expect(page).toHaveURL(new RegExp(`/state/NC/county/${SMOKE_NC_SHOWCASE_COUNTY_SLUG}$`));
     await expect(page.getByRole("heading", { name: SMOKE_NC_SHOWCASE_COUNTY_HEADING })).toBeVisible();
   });

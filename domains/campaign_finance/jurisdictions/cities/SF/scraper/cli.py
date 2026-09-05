@@ -71,7 +71,14 @@ def _resolve_input_path(args: argparse.Namespace) -> tuple[Path, tempfile.Tempor
 
     temp_dir = tempfile.TemporaryDirectory(prefix=f"sf-{args.data_type}-")
     try:
-        download_path = download_sf_csv(args.data_type, dest_dir=Path(temp_dir.name))
+        # Keep ``--limit`` as an acquisition boundary too. Downloading the full
+        # source before limiting the parser makes small production probes transfer
+        # hundreds of megabytes and invalidates their throughput measurement.
+        download_path = download_sf_csv(
+            args.data_type,
+            dest_dir=Path(temp_dir.name),
+            limit=args.limit,
+        )
         return download_path, temp_dir
     except Exception:
         temp_dir.cleanup()

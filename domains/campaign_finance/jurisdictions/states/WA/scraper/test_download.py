@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,7 +9,10 @@ import pytest
 
 from domains.campaign_finance.jurisdictions.config_schema import load_jurisdiction_config
 from domains.campaign_finance.jurisdictions.states.WA.scraper.download import (
+    WASourceSnapshot,
+    build_wa_change_count_url,
     build_wa_download_url,
+    build_wa_snapshot_url,
     download_wa_csv,
 )
 
@@ -61,6 +64,50 @@ def test_build_wa_download_url_uses_configured_bulk_urls(data_type: str, expecte
 
 def test_build_wa_download_url_adds_limit_query() -> None:
     assert build_wa_download_url("contributions", limit=50) == "https://data.wa.gov/resource/kv7h-kjye.csv?$limit=50"
+
+
+def test_contributions_snapshot_and_delta_urls_are_bounded_to_one_stable_source_watermark() -> None:
+    lower = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
+    upper = datetime(2026, 8, 29, 23, 30, tzinfo=timezone.utc)
+
+    snapshot_url = build_wa_snapshot_url("contributions")
+    change_count_url = build_wa_change_count_url(
+        "contributions",
+        updated_after=lower,
+        updated_through=upper,
+    )
+    page_url = build_wa_download_url(
+        "contributions",
+        limit=50_000,
+        offset=100_000,
+        updated_after=lower,
+        updated_through=upper,
+    )
+
+    assert (
+        "$select=count(*) as row_count,max(:updated_at) as max_updated_at,sum(:version) as version_sum" in snapshot_url
+    )
+    assert "$select=count(*) as row_count" in change_count_url
+    assert ":updated_at >= '2026-08-25T12:00:00.000Z'" in change_count_url
+    assert ":updated_at <= '2026-08-29T23:30:00.000Z'" in change_count_url
+    assert "$limit=50000" in page_url
+    assert "$offset=100000" in page_url
+    assert "$order=:updated_at,:id" in page_url
+    assert ":updated_at >= '2026-08-25T12:00:00.000Z'" in page_url
+    assert ":updated_at <= '2026-08-29T23:30:00.000Z'" in page_url
+
+
+def test_source_snapshot_rejects_missing_or_non_monotonic_completeness_fields() -> None:
+    with pytest.raises(ValueError, match="row_count"):
+        WASourceSnapshot.from_payload([{"max_updated_at": "1788046200", "version_sum": "900"}])
+    with pytest.raises(ValueError, match="max_updated_at"):
+        WASourceSnapshot.from_payload([{"row_count": "6358218", "version_sum": "900"}])
+    with pytest.raises(ValueError, match="version_sum"):
+        WASourceSnapshot.from_payload([{"row_count": "6358218", "max_updated_at": "1788046200"}])
+    with pytest.raises(ValueError, match="row_count"):
+        WASourceSnapshot.from_payload([{"row_count": True, "max_updated_at": "1788046200", "version_sum": "900"}])
+    with pytest.raises(ValueError, match="non-negative"):
+        WASourceSnapshot.from_payload([{"row_count": "-1", "max_updated_at": "1788046200", "version_sum": "900"}])
 
 
 def test_build_wa_download_url_raises_for_unsupported_data_type() -> None:

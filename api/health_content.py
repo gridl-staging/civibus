@@ -478,12 +478,12 @@ def _confirm_transaction_total(cursor: _HealthCursor) -> int:
     return actual
 
 
-def _to_utc_epoch_seconds(value: object) -> int | None:
+def _to_utc_datetime(value: object) -> datetime | None:
     if not isinstance(value, datetime):
         return None
     if value.tzinfo is None or value.utcoffset() is None:
         return None
-    return int(value.astimezone(timezone.utc).timestamp())
+    return value.astimezone(timezone.utc)
 
 
 def _resolve_health_now(now: datetime | None) -> datetime:
@@ -512,14 +512,14 @@ def _stale_timestamp_failure(
     integers and serialise identically to the count-based checks.
     """
     cutoff_epoch = int((now - max_age).timestamp())
-    now_epoch = int(now.timestamp())
-    source_epoch = _to_utc_epoch_seconds(value)
-    if source_epoch is None or source_epoch > now_epoch:
+    source_time = _to_utc_datetime(value)
+    if source_time is None or source_time > now:
         return ContentHealthFailure(
             check=check,
             actual=_FEC_BULK_FRESHNESS_INDETERMINATE_ACTUAL,
             floor=cutoff_epoch,
         )
+    source_epoch = int(source_time.timestamp())
     if source_epoch < cutoff_epoch:
         return ContentHealthFailure(check=check, actual=source_epoch, floor=cutoff_epoch)
     return None

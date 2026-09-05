@@ -386,6 +386,36 @@ _EXPECTED_PHASE2_JURISDICTIONS = {
             },
         },
     },
+    "WA": {
+        "phase": "Phase 2",
+        "ownership_contains": "project-local",
+        "sources": {
+            "wa_contributions": {
+                "current_state": "prototyped",
+                "required_evidence": {
+                    ("docs", "WA_contributions_bounded_manual_receipt_2026_08_26"),
+                },
+            },
+            "wa_expenditures": {
+                "current_state": "prototyped",
+                "required_evidence": {
+                    ("docs", "WA_expenditures_bounded_manual_receipt_2026_08_24"),
+                },
+            },
+            "wa_independent_expenditures": {
+                "current_state": "prototyped",
+                "required_evidence": {
+                    ("docs", "WA_independent_expenditures_bounded_degraded_receipt_2026_08_23"),
+                },
+            },
+            "wa_loans": {
+                "current_state": "prototyped",
+                "required_evidence": {
+                    ("docs", "WA_loans_bounded_manual_receipt_2026_08_26"),
+                },
+            },
+        },
+    },
     "CA": {
         "phase": "Phase 2",
         "ownership_contains": "project-local",
@@ -400,7 +430,7 @@ _EXPECTED_PHASE2_JURISDICTIONS = {
     },
 }
 
-_EXPECTED_SCOPE_ORDER = ["NC", "PHL", "NY", "MA", "IN", "MN", "NJ", "CA", "FEDERAL"]
+_EXPECTED_SCOPE_ORDER = ["NC", "PHL", "NY", "MA", "IN", "MN", "NJ", "CA", "WA", "FEDERAL"]
 
 _EXPECTED_IN_MN_NJ_MINIMAL_SOURCES = {
     "IN": {
@@ -549,6 +579,54 @@ def test_sources_registry_includes_minimal_in_mn_nj_entries() -> None:
         if "required_docs_scopes" in expected:
             docs_scopes = {evidence_ref["scope"] for evidence_ref in docs_refs}
             assert docs_scopes >= expected["required_docs_scopes"]
+
+
+def test_wa_l3_money_sources_map_once_to_configured_source_contracts() -> None:
+    repo_root = _repo_root()
+    registry = _load_registry()
+    jurisdictions = {entry["scope"]: entry for entry in registry["jurisdictions"]}
+    wa_sources = jurisdictions["WA"]["sources"]
+    source_ids = [source["source_id"] for source in wa_sources]
+    expected_data_types = [
+        "contributions",
+        "expenditures",
+        "independent_expenditures",
+        "loans",
+    ]
+
+    assert source_ids == [f"wa_{data_type}" for data_type in expected_data_types]
+    assert {source["current_state"] for source in wa_sources} == {"prototyped"}
+
+    wa_config = _load_yaml(repo_root / "domains/campaign_finance/jurisdictions/states/WA/config.yaml")
+    config_sources_by_data_type = {}
+    for config_source in wa_config["data_sources"]:
+        transaction_types = config_source["coverage"]["transaction_types"]
+        matching_types = set(transaction_types) & set(expected_data_types)
+        if not matching_types:
+            continue
+        assert len(transaction_types) == 1
+        data_type = transaction_types[0]
+        assert data_type not in config_sources_by_data_type
+        config_sources_by_data_type[data_type] = config_source
+
+    assert list(config_sources_by_data_type) == expected_data_types
+    assert len({source["name"] for source in config_sources_by_data_type.values()}) == 4
+    assert len({source["bulk_download_url"] for source in config_sources_by_data_type.values()}) == 4
+
+
+def test_wa_ie_l3_contract_preserves_one_source_and_three_distinct_record_classes() -> None:
+    registry = _load_registry()
+    jurisdictions = {entry["scope"]: entry for entry in registry["jurisdictions"]}
+    wa_sources = {source["source_id"]: source for source in jurisdictions["WA"]["sources"]}
+
+    ie_source = wa_sources["wa_independent_expenditures"]
+    assert all(
+        f"wa_independent_expenditures_{record_class}" not in wa_sources for record_class in ("C6_2", "C6_3", "C6_5")
+    )
+    assert "C6.2 itemized expenditures" in ie_source["coverage_boundary"]
+    assert "C6.3 identified-entity attribution" in ie_source["coverage_boundary"]
+    assert "C6.5 funding-source disclosures" in ie_source["coverage_boundary"]
+    assert "do not land in cf.transaction" in ie_source["coverage_boundary"]
 
 
 def test_sources_registry_evidence_refs_point_to_real_matching_artifacts() -> None:

@@ -23,6 +23,14 @@ WRAPPER_READY_ATTEMPTS=100
 CLEANUP_RECEIPT_ATTEMPTS=10
 CLEANUP_PROCESS_EXIT_ATTEMPTS=10
 
+# The wrapper is a re-exec of the runner, so it must run under the interpreter
+# already running the runner rather than whatever `bash` PATH resolves to. The
+# two need not be the same shell: on stock macOS the first bash on PATH is
+# /bin/bash 3.2 even when an operator explicitly selected a newer interpreter.
+# ${BASH} is the absolute path of the running instance, which by definition
+# already runs this code with the same supported options and semantics.
+wrapper_interpreter="${BASH}"
+
 wrapper_ready_matches() {
   local directory="$1" wrapper_pid="$2"
   [[ "$(read_first_line_or_empty "${directory}/wrapper_ready")" == "${wrapper_pid} ready" ]]
@@ -35,18 +43,19 @@ wait_for_wrapper_ready() {
 launch_python_session_wrapper() {
   local directory="$1"
   shift
-  python3 - "${runner_script}" "${directory}" "$@" <<'PY'
+  python3 - "${wrapper_interpreter}" "${runner_script}" "${directory}" "$@" <<'PY'
 import os
 import subprocess
 import sys
 
-script_path = sys.argv[1]
-job_directory = sys.argv[2]
-command = sys.argv[3:]
+interpreter = sys.argv[1]
+script_path = sys.argv[2]
+job_directory = sys.argv[3]
+command = sys.argv[4:]
 devnull = os.open(os.devnull, os.O_RDWR)
 try:
     process = subprocess.Popen(
-        ["bash", script_path, "__run_wrapper", job_directory, "--require-launch-approval", "--", *command],
+        [interpreter, script_path, "__run_wrapper", job_directory, "--require-launch-approval", "--", *command],
         stdin=devnull,
         stdout=devnull,
         stderr=devnull,
@@ -71,7 +80,7 @@ launch_isolated_wrapper() {
     fi
     LAUNCHED_WRAPPER_PID="$(launch_python_session_wrapper "${directory}" "$@")"
   elif command -v setsid >/dev/null 2>&1; then
-    setsid bash "${runner_script}" __run_wrapper "${directory}" --require-launch-approval -- "$@" </dev/null >/dev/null 2>&1 &
+    setsid "${wrapper_interpreter}" "${runner_script}" __run_wrapper "${directory}" --require-launch-approval -- "$@" </dev/null >/dev/null 2>&1 &
     LAUNCHED_WRAPPER_PID=$!
   elif command -v python3 >/dev/null 2>&1; then
     LAUNCHED_WRAPPER_PID="$(launch_python_session_wrapper "${directory}" "$@")"
@@ -156,4 +165,3 @@ exact_processes_exited() {
   fi
   [[ "${wrapper_live}" == "false" && "${child_live}" == "false" ]]
 }
-

@@ -12,6 +12,7 @@ import psycopg
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from core.db import select_active_source_record_by_key
+from core.db_ingest import AuthorityScopedIdentityAmbiguityError
 from core.people.federal_officeholders import active_federal_candidate_scope_cte
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
 
@@ -137,14 +138,37 @@ def resolve_federal_officeholder_fec_candidate_ids(
     return resolved_ids
 
 
-def find_committee_id_by_fec_id(conn: psycopg.Connection, fec_id: str) -> UUID | None:
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT id FROM cf.committee WHERE fec_committee_id = %s LIMIT 1", (fec_id,))
-        row = cursor.fetchone()
+def _unique_scoped_identity(rows: list[tuple[UUID]], *, label: str) -> UUID | None:
+    identity_ids = {row[0] for row in rows}
+    if len(identity_ids) > 1:
+        raise AuthorityScopedIdentityAmbiguityError(f"{label} resolves across multiple filing authorities")
+    return next(iter(identity_ids), None)
 
-    if row is None:
-        return None
-    return row[0]
+
+def find_committee_id_by_fec_id(
+    conn: psycopg.Connection,
+    fec_id: str,
+    *,
+    data_source_id: UUID | None = None,
+) -> UUID | None:
+    with conn.cursor() as cursor:
+        if data_source_id is None:
+            cursor.execute(
+                "SELECT id FROM cf.committee WHERE fec_committee_id = %s OR native_committee_id = %s",
+                (fec_id, fec_id),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id
+                FROM cf.committee
+                WHERE (data_source_id = %s AND native_committee_id = %s)
+                   OR (data_source_id IS NULL AND fec_committee_id = %s)
+                """,
+                (data_source_id, fec_id, fec_id),
+            )
+        rows = cursor.fetchall()
+    return _unique_scoped_identity(rows, label=f"FEC committee identifier {fec_id!r}")
 
 
 def build_committee_master_source_record_key(*, cycle: int | str, fec_committee_id: str) -> str:
@@ -169,6 +193,8 @@ def has_active_committee_master_source_record(
 def find_committee_ids_by_fec_ids(
     conn: psycopg.Connection,
     fec_ids: Iterable[str],
+    *,
+    data_source_id: UUID | None = None,
 ) -> dict[str, UUID]:
     """Resolve committee UUIDs for unique, non-empty FEC committee IDs."""
     committee_fec_ids: list[str] = []
@@ -183,26 +209,62 @@ def find_committee_ids_by_fec_ids(
         return {}
 
     with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT fec_committee_id, id
-            FROM cf.committee
-            WHERE fec_committee_id = ANY(%s)
-            """,
-            (committee_fec_ids,),
-        )
+        if data_source_id is None:
+            cursor.execute(
+                """
+                SELECT COALESCE(native_committee_id, fec_committee_id), id
+                FROM cf.committee
+                WHERE fec_committee_id = ANY(%s)
+                   OR native_committee_id = ANY(%s)
+                """,
+                (committee_fec_ids, committee_fec_ids),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT COALESCE(native_committee_id, fec_committee_id), id
+                FROM cf.committee
+                WHERE (data_source_id = %s AND native_committee_id = ANY(%s))
+                   OR (data_source_id IS NULL AND fec_committee_id = ANY(%s))
+                """,
+                (data_source_id, committee_fec_ids, committee_fec_ids),
+            )
         rows: Iterable[tuple[str, UUID]] = cursor.fetchall()
-    return {fec_committee_id: committee_id for fec_committee_id, committee_id in rows}
+    resolved: dict[str, UUID] = {}
+    for fec_committee_id, committee_id in rows:
+        prior_id = resolved.get(fec_committee_id)
+        if prior_id is not None and prior_id != committee_id:
+            raise AuthorityScopedIdentityAmbiguityError(
+                f"FEC committee identifier {fec_committee_id!r} resolves across multiple filing authorities"
+            )
+        resolved[fec_committee_id] = committee_id
+    return resolved
 
 
-def find_candidate_id_by_fec_id(conn: psycopg.Connection, fec_id: str) -> UUID | None:
+def find_candidate_id_by_fec_id(
+    conn: psycopg.Connection,
+    fec_id: str,
+    *,
+    data_source_id: UUID | None = None,
+) -> UUID | None:
     with conn.cursor() as cursor:
-        cursor.execute("SELECT id FROM cf.candidate WHERE fec_candidate_id = %s LIMIT 1", (fec_id,))
-        row = cursor.fetchone()
-
-    if row is None:
-        return None
-    return row[0]
+        if data_source_id is None:
+            cursor.execute(
+                "SELECT id FROM cf.candidate WHERE fec_candidate_id = %s OR native_candidate_id = %s",
+                (fec_id, fec_id),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id
+                FROM cf.candidate
+                WHERE (data_source_id = %s AND native_candidate_id = %s)
+                   OR (data_source_id IS NULL AND fec_candidate_id = %s)
+                """,
+                (data_source_id, fec_id, fec_id),
+            )
+        rows = cursor.fetchall()
+    return _unique_scoped_identity(rows, label=f"FEC candidate identifier {fec_id!r}")
 
 
 def candidate_name_or_fec_id_label(

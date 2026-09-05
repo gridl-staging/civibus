@@ -335,13 +335,13 @@ def test_donor_search_route_translates_query_validation_to_422(
     assert expected_detail in response.json()["detail"]
 
 
-def test_donor_search_route_preserves_query_limit_clamp(
+def test_donor_search_route_accepts_query_owner_maximum_limit(
     api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
     seed_donor_search_fixture(db_conn, extra_smith_rows=55)
 
-    response = api_client.get("/v1/donors/search", params={"q": "smith", "by": "name", "limit": 500})
+    response = api_client.get("/v1/donors/search", params={"q": "smith", "by": "name", "limit": 50})
 
     assert response.status_code == 200
     payload = response.json()

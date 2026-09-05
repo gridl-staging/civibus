@@ -36,6 +36,8 @@ def _insert_nc_registry_row(
         DataSource(
             domain="campaign_finance",
             jurisdiction="NC",
+            filing_authority_type="state",
+            filing_authority_code="NC",
             name=f"nc-registry-{org_group_id}",
             source_url=f"https://example.test/nc-registry/{org_group_id}",
         ),

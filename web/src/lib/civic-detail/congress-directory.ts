@@ -1,4 +1,5 @@
 import type { CongressMemberMoneySummary, CongressMemberSummary } from "./contract";
+import { compareSerializedMoney } from "$lib/campaign-finance-detail/presentation";
 import type { PersonPortraitResponse } from "$lib/entity-detail/contract";
 import { sanitizeExternalUrl } from "$lib/url/sanitize-external-url";
 
@@ -8,6 +9,9 @@ export type CongressDirectoryFilters = {
   state: string;
   party: string;
 };
+
+export const CONGRESS_MONEY_SUMMARIES_UNAVAILABLE_MESSAGE =
+  "Congress financial summaries are temporarily unavailable. Member directory information remains available.";
 
 export type CongressFilterOption = {
   value: string;
@@ -181,19 +185,20 @@ function buildRowMoney(summary: CongressMemberMoneySummary | undefined): Pick<
 }
 
 /**
- * Parse a serialized money value into a rankable metric.
+ * Project serialized money to a finite, zero-based number for proportional bar geometry.
  *
  * Null in means null out: an absent value is UNKNOWN money, never zero money.
- * Exported so every money-ranked surface (this directory, the race money bars
- * in `presentation.ts`) parses "no value" identically instead of each caller
- * deciding what null becomes.
+ * Display and row order deliberately do not use this projection; they retain
+ * the exact serialized value through the shared formatter/comparator owners.
+ * A signed refund remains exact in those owners, while its one-direction bar
+ * starts at the zero baseline instead of emitting a negative CSS width.
  */
 export function parseMoneyMetric(value: string | null): number | null {
   if (value === null) {
     return null;
   }
   const parsedValue = Number(value);
-  return Number.isFinite(parsedValue) ? parsedValue : null;
+  return Number.isFinite(parsedValue) ? Math.max(0, parsedValue) : null;
 }
 
 /**
@@ -218,8 +223,8 @@ export function parseMoneyMetric(value: string | null): number | null {
  * alphabetically rather than arbitrarily.
  */
 export function compareMoneyMetricsDescUnknownLast(
-  left: number | null,
-  right: number | null
+  left: string | null,
+  right: string | null
 ): number {
   if (left === null && right === null) {
     return 0;
@@ -230,20 +235,25 @@ export function compareMoneyMetricsDescUnknownLast(
   if (right === null) {
     return -1;
   }
-  return right - left;
+  return -compareSerializedMoney(left, right);
 }
 
-export function getCongressMoneyMetric(row: CongressMemberRow, sort: CongressMoneySort): number | null {
+export function getCongressMoneyValue(row: CongressMemberRow, sort: CongressMoneySort): string | null {
   if (sort === "outside_against") {
-    return parseMoneyMetric(row.outsideAgainst);
+    return row.outsideAgainst;
   }
   if (sort === "outside_support") {
-    return parseMoneyMetric(row.outsideSupport);
+    return row.outsideSupport;
   }
   if (sort === "cash_on_hand") {
-    return parseMoneyMetric(row.cashOnHand);
+    return row.cashOnHand;
   }
-  return parseMoneyMetric(row.totalRaised);
+  return row.totalRaised;
+}
+
+/** A finite numeric projection used only for proportional bar geometry. */
+export function getCongressMoneyMetric(row: CongressMemberRow, sort: CongressMoneySort): number | null {
+  return parseMoneyMetric(getCongressMoneyValue(row, sort));
 }
 
 function compareRowsByNameThenId(left: CongressMemberRow, right: CongressMemberRow): number {
@@ -252,7 +262,7 @@ function compareRowsByNameThenId(left: CongressMemberRow, right: CongressMemberR
 }
 
 /**
- * Order the directory by the active money metric, biggest first.
+ * Order the directory by the exact active money value, biggest first.
  *
  * Unknown placement is `compareMoneyMetricsDescUnknownLast` above — the one
  * rule shared with every other money-ranked surface. Ties (including two
@@ -261,8 +271,8 @@ function compareRowsByNameThenId(left: CongressMemberRow, right: CongressMemberR
 function sortCongressMemberRows(rows: CongressMemberRow[], sort: CongressMoneySort): CongressMemberRow[] {
   return [...rows].sort((left, right) => {
     const metricOrder = compareMoneyMetricsDescUnknownLast(
-      getCongressMoneyMetric(left, sort),
-      getCongressMoneyMetric(right, sort)
+      getCongressMoneyValue(left, sort),
+      getCongressMoneyValue(right, sort)
     );
     return metricOrder !== 0 ? metricOrder : compareRowsByNameThenId(left, right);
   });

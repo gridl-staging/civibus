@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import psycopg
 import pytest
+from jsonschema.validators import validator_for
 
 from core.refresh import gate_l5, runner
 from test_support.refresh_run_fixtures import (
@@ -23,7 +25,7 @@ def _read_json(path: Path) -> dict[str, object]:
 
 def test_build_evidence_marks_fail_when_any_non_success_runs_exist(tmp_path: Path) -> None:
     evidence_path = gate_l5.write_l5_evidence(
-        counts={"crashed": 1, "empty": 2, "degraded": 0, "success": 4},
+        counts={"crashed": 1, "empty": 2, "degraded": 0, "failed": 0, "success": 4},
         total_runs=7,
         repo_sha="57f90d75",
         produced_at=datetime(2026, 4, 24, 18, 0, tzinfo=timezone.utc),
@@ -37,12 +39,37 @@ def test_build_evidence_marks_fail_when_any_non_success_runs_exist(tmp_path: Pat
     assert payload["status"] == "fail"
     assert payload["scope"] == "global"
     assert payload["total_runs"] == 7
-    assert payload["status_counts"] == {"crashed": 1, "empty": 2, "degraded": 0, "success": 4}
+    assert payload["status_counts"] == {"crashed": 1, "empty": 2, "degraded": 0, "failed": 0, "success": 4}
+
+
+def test_failed_refresh_run_is_counted_and_fails_evidence(tmp_path: Path) -> None:
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchall.return_value = [("failed", 1), ("success", 1)]
+
+    counts, total_runs = gate_l5.summarize_refresh_runs(connection, evidence_date=date(2026, 8, 27))
+    evidence_path = gate_l5.write_l5_evidence(
+        counts=counts,
+        total_runs=total_runs,
+        repo_sha="ede0bf0f",
+        produced_at=datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc),
+        evidence_root=tmp_path,
+        evidence_date=date(2026, 8, 27),
+    )
+    payload = _read_json(evidence_path)
+
+    assert counts == {"crashed": 0, "empty": 0, "degraded": 0, "failed": 1, "success": 1}
+    assert total_runs == 2
+    assert payload["status"] == "fail"
+    assert payload["status_counts"] == counts
+
+    schema = _read_json(Path(__file__).resolve().parents[2] / "evidence_schemas" / "L5.json")
+    validator_for(schema)(schema).validate(payload)
 
 
 def test_build_evidence_marks_pass_when_all_runs_are_success(tmp_path: Path) -> None:
     evidence_path = gate_l5.write_l5_evidence(
-        counts={"crashed": 0, "empty": 0, "degraded": 0, "success": 5},
+        counts={"crashed": 0, "empty": 0, "degraded": 0, "failed": 0, "success": 5},
         total_runs=5,
         repo_sha="57f90d75",
         produced_at=datetime(2026, 4, 24, 18, 0, tzinfo=timezone.utc),
@@ -95,7 +122,13 @@ def test_summarize_refresh_runs_excludes_an_in_flight_running_row(
             db_conn, evidence_date=evidence_date
         )
 
-        assert counts_without_in_flight == {"crashed": 1, "empty": 0, "degraded": 0, "success": 2}
+        assert counts_without_in_flight == {
+            "crashed": 1,
+            "empty": 0,
+            "degraded": 0,
+            "failed": 0,
+            "success": 2,
+        }
         assert total_without_in_flight == 3
         # The running row is excluded: counts, total, key-set, and verdict are all unmoved.
         assert counts_with_in_flight == counts_without_in_flight

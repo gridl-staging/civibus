@@ -1,9 +1,10 @@
 """Generate the tracked jurisdiction master CSV from the coverage registry."""
 
 import csv
-import json
 from io import StringIO
 from pathlib import Path
+
+from .registry import load_registry
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REGISTRY_PATH = REPO_ROOT / "docs" / "reference" / "research" / "coverage-registry.json"
@@ -279,12 +280,12 @@ def _pipeline_status(row: dict) -> str:
 
 
 def _audit_method(row: dict) -> str:
-    tier = row.get("tier", "")
+    tier = row.get("tier") or ""
     if row.get("runner_wired"):
         return "pipeline_development"
     if "implemented" in tier:
         return "config_review"
-    evidence = row.get("evidence_summary", "")
+    evidence = row.get("evidence_summary") or ""
     if "Browser-verified" in evidence or "browser-verified" in evidence:
         return "browser_verified"
     if "Stage 3 audit" in evidence or "PM3" in evidence or "HTTP probe" in evidence.lower():
@@ -360,6 +361,10 @@ FIELDNAMES = [
     "jurisdiction_code",
     "name",
     "type",
+    "authority_relation",
+    "filing_authorities",
+    "aggregation_disposition",
+    "municipal_compatibility_decision",
     "parent_state",
     "population_2020",
     "primary_date_2026",
@@ -379,25 +384,54 @@ FIELDNAMES = [
 
 def _sorted_registry_rows(registry_path: Path = REGISTRY_PATH) -> list[dict]:
     """Load and sort registry rows for CSV projection."""
-    with registry_path.open() as f:
-        registry = json.load(f)
-
-    rows = list(registry["rows"])
+    registry = load_registry(registry_path)
+    rows = [row.model_dump(mode="json") for row in registry.rows]
 
     # Sort: federal first, then states by population desc, then municipalities by population desc
     def sort_key(r: dict) -> tuple:
         pop = _get_population(r) or 0
-        type_order = {"federal": 0, "state": 1, "municipality": 2}
-        return (type_order.get(r["jurisdiction_type"], 9), -pop)
+        type_order = {
+            "federal": 0,
+            "state": 1,
+            "county": 2,
+            "municipality": 3,
+            "school_district": 4,
+            "special_district": 5,
+        }
+        return (type_order[r["jurisdiction_type"]], -pop, r["jurisdiction_code"])
 
     rows.sort(key=sort_key)
     return rows
 
 
+def _filing_authority_labels(row: dict) -> str:
+    relation = row["authority_relation"]
+    relation_kind = relation["relation"]
+    if relation_kind in {"independent", "inherited"}:
+        authorities = [relation["authority"]]
+    elif relation_kind == "partitioned_overlapping":
+        authorities = relation["authorities"]
+    else:
+        authorities = relation["candidate_authorities"]
+    return ";".join(
+        f"{authority['kind']}/{authority['code']}" + (f" ({authority['name']})" if authority.get("name") else "")
+        for authority in authorities
+    )
+
+
+def _aggregation_disposition(row: dict) -> str:
+    relation = row["authority_relation"]
+    if relation["relation"] == "partitioned_overlapping":
+        return relation["deduplication"]["disposition"]
+    if relation["relation"] == "unresolved":
+        return relation["aggregation_disposition"]
+    return "not_applicable"
+
+
 def render_csv_text(registry_path: Path = REGISTRY_PATH) -> str:
     """Render the full jurisdiction master CSV text."""
     buffer = StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=FIELDNAMES)
+    writer = csv.DictWriter(buffer, fieldnames=FIELDNAMES, lineterminator="\n")
     writer.writeheader()
 
     for row in _sorted_registry_rows(registry_path):
@@ -407,6 +441,10 @@ def render_csv_text(registry_path: Path = REGISTRY_PATH) -> str:
                 "jurisdiction_code": row["jurisdiction_code"],
                 "name": row["name"],
                 "type": row["jurisdiction_type"],
+                "authority_relation": row["authority_relation"]["relation"],
+                "filing_authorities": _filing_authority_labels(row),
+                "aggregation_disposition": _aggregation_disposition(row),
+                "municipal_compatibility_decision": row.get("municipal_audit_decision") or "not_applicable",
                 "parent_state": row.get("parent_jurisdiction_code", ""),
                 "population_2020": _get_population(row) or "",
                 "primary_date_2026": _get_primary_date(row),

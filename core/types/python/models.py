@@ -11,6 +11,17 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+FilingAuthorityTypeLiteral = Literal[
+    "federal",
+    "state",
+    "county",
+    "municipality",
+    "school_district",
+    "special_district",
+    "named_other",
+]
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -114,6 +125,7 @@ def validate_temporal_range(start: date | None, end: date | None) -> None:
 
 DatePrecisionLiteral = Literal["day", "month", "quarter", "year", "approximate"]
 RefreshPullStatus = Literal["crashed", "empty", "degraded", "failed", "success", "running"]
+RefreshExecutionOrigin = Literal["scheduled", "operator_attended", "legacy_unknown"]
 # The one status that means "attempt still in flight"; every other member of
 # RefreshPullStatus is terminal. Paired with completed_at by
 # RefreshRun.validate_completion_pairing and by the SQL constraint
@@ -273,6 +285,9 @@ class Jurisdiction(BaseModel):
         "special_district",
     ]
     fips: str | None = None
+    state_fips: str | None = None
+    county_geoid: str | None = None
+    place_geoid: str | None = None
     parent_id: UUID | None = None
     state: str | None = None
     geometry: None = None
@@ -285,6 +300,21 @@ class Jurisdiction(BaseModel):
     def validate_fips(cls, value: str | None) -> str | None:
         return validate_optional_digit_string(value, field_name="fips")
 
+    @field_validator("state_fips")
+    @classmethod
+    def validate_state_fips(cls, value: str | None) -> str | None:
+        return validate_optional_fixed_digit_string(value, expected_length=2, field_name="state_fips")
+
+    @field_validator("county_geoid")
+    @classmethod
+    def validate_county_geoid(cls, value: str | None) -> str | None:
+        return validate_optional_fixed_digit_string(value, expected_length=5, field_name="county_geoid")
+
+    @field_validator("place_geoid")
+    @classmethod
+    def validate_place_geoid(cls, value: str | None) -> str | None:
+        return validate_optional_fixed_digit_string(value, expected_length=7, field_name="place_geoid")
+
     @field_validator("state")
     @classmethod
     def validate_state(cls, value: str | None) -> str | None:
@@ -295,6 +325,8 @@ class DataSource(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     domain: str
     jurisdiction: str | None = None
+    filing_authority_type: FilingAuthorityTypeLiteral | None = None
+    filing_authority_code: str | None = None
     name: str
     source_url: str
     source_format: str | None = None
@@ -306,6 +338,60 @@ class DataSource(BaseModel):
     notes: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_campaign_finance_authority(cls, raw_data: object) -> object:
+        if not isinstance(raw_data, dict) or raw_data.get("domain") != "campaign_finance":
+            return raw_data
+        populated = dict(raw_data)
+        authority_type = populated.get("filing_authority_type")
+        authority_code = populated.get("filing_authority_code")
+        if authority_type is not None or authority_code is not None:
+            return populated
+
+        jurisdiction = populated.get("jurisdiction")
+        if not isinstance(jurisdiction, str):
+            return populated
+        normalized_jurisdiction = jurisdiction.strip()
+        if normalized_jurisdiction.lower() == "federal":
+            populated["filing_authority_type"] = "federal"
+            populated["filing_authority_code"] = "FEC"
+            return populated
+        if "/" not in normalized_jurisdiction:
+            return populated
+        scope_type, scope_code = normalized_jurisdiction.split("/", 1)
+        scope_aliases = {"states": "state", "city": "municipality", "cities": "municipality"}
+        normalized_type = scope_aliases.get(scope_type.strip().lower(), scope_type.strip().lower())
+        if normalized_type not in {
+            "federal",
+            "state",
+            "county",
+            "municipality",
+            "school_district",
+            "special_district",
+            "named_other",
+        }:
+            normalized_type = "named_other"
+            scope_code = f"{scope_type}:{scope_code}"
+        populated["filing_authority_type"] = normalized_type
+        populated["filing_authority_code"] = scope_code.strip().upper()
+        return populated
+
+    @model_validator(mode="after")
+    def _validate_filing_authority_scope(self) -> "DataSource":
+        has_type = self.filing_authority_type is not None
+        has_code = self.filing_authority_code is not None
+        if has_type != has_code:
+            raise ValueError("filing_authority_type and filing_authority_code must be supplied together")
+        if self.domain == "campaign_finance" and not has_type:
+            raise ValueError("campaign_finance data sources require a typed filing authority")
+        if self.filing_authority_code is not None:
+            normalized_code = self.filing_authority_code.strip().upper()
+            if not normalized_code:
+                raise ValueError("filing_authority_code must be nonblank")
+            self.filing_authority_code = normalized_code
+        return self
 
 
 class SourceRecord(BaseModel):
@@ -396,6 +482,9 @@ class RefreshRun(BaseModel):
     domain: str
     jurisdiction: str
     data_source_names: list[str] = Field(default_factory=list)
+    # Caller-declared lineage, not authentication that a scheduler caused the run.
+    # The current invocation allowlist belongs to core.refresh.runner.
+    execution_origin: RefreshExecutionOrigin = "legacy_unknown"
     pull_status: RefreshPullStatus
     started_at: datetime
     completed_at: datetime | None = None

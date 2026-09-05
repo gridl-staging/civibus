@@ -571,13 +571,7 @@ describe("/person/[id] +page.server load", () => {
       kind: "no_linked_candidate",
       message: "No campaign-finance candidacies are linked yet."
     });
-    expect(data.personContributionInsights).toMatchObject({
-      has_data: false,
-      metadata: {
-        selected_cycle: 2024,
-        caveats: ["temporarily_unavailable"]
-      }
-    });
+    await expect(data.personContributionInsights).rejects.toMatchObject({ status: 503 });
     expect(data.personTopDonors).toEqual([]);
     expect(data.personTopEmployers).toEqual([]);
   });
@@ -745,7 +739,7 @@ describe("/person/[id] +page.server load", () => {
     }
   });
 
-  it("keeps bare person pages renderable with a backend-failure headline state", async () => {
+  it("keeps bare pages renderable and preserves genuine no-linked state through an insights failure", async () => {
     const contributionInsightsFailure = new ApiResponseError(503, {
       detail: "Contribution insights unavailable."
     });
@@ -756,6 +750,15 @@ describe("/person/[id] +page.server load", () => {
       if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
         return Promise.reject(contributionInsightsFailure);
       }
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return Promise.resolve({ items: [], has_next: false, offset: 0, limit: 10 });
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-donors`) {
+        return Promise.resolve([]);
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-employers`) {
+        return Promise.resolve([]);
+      }
 
       return Promise.reject(new Error(`unexpected path: ${path}`));
     });
@@ -763,20 +766,19 @@ describe("/person/[id] +page.server load", () => {
     const data = (await load(createLoadEvent(requestJson))) as EntityDetailPageBundle;
 
     expect(data.personMoneyHeadline).toEqual({
-      kind: "temporarily_unavailable",
-      message: "Selected-cycle money summary is temporarily unavailable.",
-      selectedCycle: 2026
+      kind: "no_linked_candidate",
+      message: "No campaign-finance candidacies are linked yet."
     });
-    await expect(data.personContributionInsights).resolves.toMatchObject({
-      has_data: false,
-      metadata: { caveats: ["temporarily_unavailable"] }
-    });
+    await expect(data.personContributionInsights).rejects.toMatchObject({ status: 503 });
     await expect(data.personFinanceSections).resolves.toEqual([]);
     await expect(data.personTopDonors).resolves.toEqual([]);
     await expect(data.personTopEmployers).resolves.toEqual([]);
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
       `/v1/person/${PERSON_ID}`,
-      `/v1/person/${PERSON_ID}/contribution-insights`
+      `/v1/person/${PERSON_ID}/contribution-insights`,
+      `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`,
+      `/v1/person/${PERSON_ID}/top-donors`,
+      `/v1/person/${PERSON_ID}/top-employers`
     ]);
   });
 
@@ -895,7 +897,7 @@ describe("/person/[id] +page.server load", () => {
         return { items: [], has_next: false, offset: 0, limit: 10 };
       }
       if (path === `/v1/person/${PERSON_ID}/contribution-insights?cycle=2030`) {
-        throw new ApiResponseError(400, backendCycleError);
+        throw new ApiResponseError(422, backendCycleError);
       }
       if (path === `/v1/person/${PERSON_ID}/top-donors?cycle=2030`) {
         return [];
@@ -909,7 +911,7 @@ describe("/person/[id] +page.server load", () => {
     await expect(
       load(createLoadEvent(requestJson, new URL(`https://example.test/person/${PERSON_ID}?cycle=2030`)))
     ).rejects.toMatchObject({
-      status: 400,
+      status: 422,
       body: backendCycleError
     });
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([

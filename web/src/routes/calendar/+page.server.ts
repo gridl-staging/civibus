@@ -6,7 +6,7 @@ const CALENDAR_CACHE_CONTROL = "public, max-age=300, s-maxage=300, stale-while-r
 
 export const load: PageServerLoad = ({ locals, setHeaders }) =>
   withApiResponseErrorHandling(async () => {
-    setHeaders({ "cache-control": CALENDAR_CACHE_CONTROL });
     const timelineEntries = await fetchUpcomingElectionTimeline(locals.api);
+    setHeaders({ "cache-control": CALENDAR_CACHE_CONTROL });
     return { timelineEntries };
   }, "Backend election timeline request failed.");

@@ -14,6 +14,7 @@ _DEFAULT_API_STATEMENT_TIMEOUT_MS = 10_000
 _DEFAULT_API_EXPORT_STATEMENT_TIMEOUT_MS = 30_000
 _DONOR_SEARCH_PATH = "/v1/donors/search"
 _PUBLIC_EXPORT_PATHS = {"/public/v1/federal/export.json", "/public/v1/federal/export.csv"}
+DATABASE_UNAVAILABLE_DETAIL = "Database unavailable"
 
 
 def _positive_int_env_or_default(env_var_name: str, *, default: int) -> int:
@@ -50,7 +51,7 @@ def get_db(request: Request) -> Generator[psycopg.Connection, None, None]:
                 # Compilation dominates this one-shot high-cost query on the fully linked federal scope.
                 connection.execute("SET LOCAL jit = off")
         except (psycopg.Error, PoolTimeout) as exc:
-            raise HTTPException(status_code=503, detail="Database unavailable") from exc
+            raise HTTPException(status_code=503, detail=DATABASE_UNAVAILABLE_DETAIL) from exc
         try:
             yield connection
         except psycopg.errors.QueryCanceled as exc:

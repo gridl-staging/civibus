@@ -537,7 +537,60 @@ const congressCompareHandoffOfficeholders = [
   })
 ] as const;
 
-const compareLookupFixtures = [...compareOfficeholders, ...congressCompareHandoffOfficeholders] as const;
+export const accessibleDisclosureOfficeholders = [
+  buildOfficeholderFixture({
+    id: "50000000-0000-4000-8000-000000000005",
+    name: "Robin Shared",
+    candidateId: "50000000-0000-4000-8000-000000000105",
+    fecCandidateId: "H6WA00005",
+    searchQuery: "robin disclosure house",
+    office: "H",
+    state: "WA",
+    district: "05",
+    totals: {
+      raised: "600000.00",
+      spent: "400000.00",
+      cashOnHand: "150000.00",
+      netSelfFunding: "10000.00",
+      smallDollarShare: "0.2000"
+    },
+    charts: {
+      monthlyMax: "120000.00",
+      sizeBucketMax: "90000.00",
+      support: "45000.00",
+      oppose: "15000.00"
+    }
+  }),
+  buildOfficeholderFixture({
+    id: "60000000-0000-4000-8000-000000000006",
+    name: "Robin Shared",
+    candidateId: "60000000-0000-4000-8000-000000000106",
+    fecCandidateId: "S6WA00006",
+    searchQuery: "robin disclosure senate",
+    office: "S",
+    state: "WA",
+    district: null,
+    totals: {
+      raised: "550000.00",
+      spent: "350000.00",
+      cashOnHand: "125000.00",
+      netSelfFunding: "5000.00",
+      smallDollarShare: "0.1800"
+    },
+    charts: {
+      monthlyMax: "110000.00",
+      sizeBucketMax: "85000.00",
+      support: "40000.00",
+      oppose: "20000.00"
+    }
+  })
+] as const;
+
+const compareLookupFixtures = [
+  ...compareOfficeholders,
+  ...congressCompareHandoffOfficeholders,
+  ...accessibleDisclosureOfficeholders
+] as const;
 
 export const compareFixtureById = new Map(compareLookupFixtures.map((fixture) => [fixture.id, fixture]));
 export const compareFixtureByCandidateId = new Map(

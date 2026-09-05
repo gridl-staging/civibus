@@ -1,6 +1,6 @@
 <script lang="ts">
   import { navigating } from '$app/stores';
-  import { formatCandidatePublicName } from '$lib/campaign-finance-detail/presentation';
+  import { formatCandidatePublicName, formatCurrency } from '$lib/campaign-finance-detail/presentation';
   import { formatDisplayValue } from '$lib/detail-format';
   import { buildTimestampFreshnessPresentation } from '$lib/detail-trust/presentation';
   import { buildDonorPagePath, DONOR_SEARCH_BY_MODES, DONOR_SEARCH_PAGE_PATH } from '$lib/donors/contract';
@@ -14,17 +14,12 @@
   let queryInputValue = data.query;
   let renderedDonorStateKey = getDonorStateKey(data);
 
-  const currencyFormatter = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD'
-  });
   const SCOPE_NOTE =
     'Results cover itemized contributions to committees of current federal officeholders only. Unitemized (<$200) contributions are not included.';
   const LANDING_MESSAGE = 'Enter a donor name, employer, or 5-digit ZIP to search itemized federal contributions.';
   const SHORT_QUERY_MESSAGE = 'Enter at least 3 characters to search by name or employer.';
   const ZERO_RESULTS_MESSAGE = 'No donors match this search.';
-  const ROLLUP_UNAVAILABLE_MESSAGE =
-    'Donor search is temporarily unavailable while contribution data is refreshed.';
+  const EMPTY_PAGE_MESSAGE = 'No donors are shown on this page.';
 
   $: donorStateKey = getDonorStateKey(data);
   $: if (donorStateKey !== renderedDonorStateKey) {
@@ -44,7 +39,6 @@
     isLoading,
     validationMessage: data.validationMessage,
     shortQueryGuidance: data.shortQueryGuidance,
-    rollupUnavailable: data.rollupUnavailable,
     hasSubmittedQuery,
     hasResults,
     offset: data.offset,
@@ -67,7 +61,6 @@
     isLoading: boolean;
     validationMessage?: string;
     shortQueryGuidance?: boolean;
-    rollupUnavailable?: boolean;
     hasSubmittedQuery: boolean;
     hasResults: boolean;
     offset: number;
@@ -85,16 +78,12 @@
       return SHORT_QUERY_MESSAGE;
     }
 
-    if (state.rollupUnavailable) {
-      return ROLLUP_UNAVAILABLE_MESSAGE;
-    }
-
     if (!state.hasSubmittedQuery) {
       return LANDING_MESSAGE;
     }
 
     if (!state.hasResults) {
-      return ZERO_RESULTS_MESSAGE;
+      return state.offset > 0 ? EMPTY_PAGE_MESSAGE : ZERO_RESULTS_MESSAGE;
     }
 
     return `Showing donors ${state.offset + 1}-${state.offset + state.resultCount}.`;
@@ -102,10 +91,6 @@
 
   function getDonorStateKey(value: Pick<PageData, 'query' | 'by' | 'limit' | 'offset'>): string {
     return JSON.stringify([value.query, value.by, value.limit, value.offset]);
-  }
-
-  function formatCurrency(value: string): string {
-    return currencyFormatter.format(Number(value));
   }
 
   function formatLocation(city: string | null | undefined, state: string | null | undefined): string {
@@ -178,7 +163,7 @@
     {statusMessage}
   </p>
 
-  {#if hasSubmittedQuery && !isLoading && !data.rollupUnavailable && rollupFreshness}
+  {#if hasSubmittedQuery && !isLoading && rollupFreshness}
     <p class="donor-lookup__freshness" data-testid="donor-freshness-stamp">
       {rollupFreshness.summary}
     </p>
@@ -192,7 +177,8 @@
     {#if isLoading}
       <SkeletonPanel label="Donor results loading" lines={5} />
     {:else if hasResults}
-      <div class="donor-lookup__table-wrap">
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div class="donor-lookup__table-wrap" tabindex="0">
         <table>
           <thead>
             <tr>
@@ -269,6 +255,9 @@
         </table>
       </div>
 
+    {/if}
+
+    {#if !isLoading && rollupFreshness && (hasResults || data.offset > 0)}
       <nav class="donor-lookup__pagination" aria-label="Donor result pages">
         {#if data.offset > 0}
           <a href={previousPageHref}>Previous</a>

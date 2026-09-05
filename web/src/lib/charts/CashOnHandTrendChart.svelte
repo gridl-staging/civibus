@@ -38,7 +38,10 @@
     })
   );
   $: summary = {
-    sentence: `Cash on hand is ${formatCurrency(latestPoint?.amount ?? 0)} at the latest filing period in the ${cycle} cycle.`
+    sentence:
+      latestPoint === undefined
+        ? `No dated cash-on-hand filing-period values are loaded for the ${cycle} cycle.`
+        : `Cash on hand is ${formatCurrency(latestPoint.amount)} at the latest filing period in the ${cycle} cycle.`
   };
 </script>
 

@@ -13,8 +13,11 @@ export const SEARCH_QUERY_MIN_LENGTH = 2;
  */
 export const SEARCH_PAGE_SIZE = 20;
 export const SEARCH_ENTITY_TYPES = ['person', 'org', 'committee', 'candidate', 'office', 'contest'] as const;
+export const SEARCH_REGION_FILTER_TYPE = 'region' as const;
+export const SEARCH_FILTER_TYPES = [...SEARCH_ENTITY_TYPES, SEARCH_REGION_FILTER_TYPE] as const;
 
 export type SearchEntityType = (typeof SEARCH_ENTITY_TYPES)[number];
+export type SearchFilterType = (typeof SEARCH_FILTER_TYPES)[number];
 type SearchRouteSegment = 'person' | 'org' | 'committee' | 'candidate' | 'office' | 'contest';
 
 export type SearchApiResultPayload = {
@@ -33,7 +36,10 @@ export type SearchApiResult = SearchApiResultPayload & {
 };
 
 export type SearchApiResponse = {
-  items: SearchApiResult[];
+  // Runtime JSON remains untrusted until the routing guard below accepts each
+  // row; the canonical API is stricter, but version-skewed responses must not
+  // become unsafe links merely because the TypeScript caller asserted a type.
+  items: SearchApiResultPayload[];
   has_next: boolean;
 };
 
@@ -70,7 +76,7 @@ const SEARCH_ROUTE_SEGMENT_BY_ENTITY_TYPE: Record<SearchEntityType, SearchRouteS
   contest: 'contest'
 };
 
-function isUuid(value: string): boolean {
+export function isUuid(value: string): boolean {
   return UUID_PATTERN.test(value);
 }
 
@@ -108,6 +114,10 @@ function buildSearchQueryParams(
 
 export function isSearchEntityType(value: string): value is SearchEntityType {
   return SEARCH_ENTITY_TYPES.includes(value as SearchEntityType);
+}
+
+export function isSearchFilterType(value: string): value is SearchFilterType {
+  return SEARCH_FILTER_TYPES.includes(value as SearchFilterType);
 }
 
 export function isRenderableSearchResult(result: SearchApiResultPayload): result is SearchApiResult {

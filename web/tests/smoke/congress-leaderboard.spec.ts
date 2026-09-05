@@ -29,6 +29,11 @@ import {
   SMOKE_CONGRESS_SECOND_TOTAL_RAISED,
   SMOKE_USE_LIVE_API
 } from "./fixtures";
+import {
+  horizontalOverflow,
+  renderedFragmentCount,
+  replaceRenderedMoneyLabel
+} from "./congress_value_containment_fixture";
 import { capturePageLoadErrors, parseRenderedMoneyLabel } from "./smoke-helpers";
 
 // One journey, two backends (civibus-8lu). The three members, their ordering
@@ -81,6 +86,7 @@ const EXPECTED_COMPARISON_RATIO =
 
 const NO_REPORTED_MONEY = "No reported/loaded money.";
 const CONGRESS_MEMBER_PROFILE_LINK_TEST_ID = "congress-member-profile-link";
+const EXTREME_EXACT_MONEY_LABEL = "$9,007,199,254,740,993.01";
 
 function memberRows(page: Page): Locator {
   return page.getByTestId(/^congress-member-row-/);
@@ -181,4 +187,32 @@ test("/congress renders a URL-owned money leaderboard and canonical compare hand
   await expect(page).toHaveURL(
     `/compare?people=${SMOKE_CONGRESS_LEADER_PERSON_ID},${SMOKE_CONGRESS_SECOND_PERSON_ID}`
   );
+});
+
+test("/congress contains an extreme exact money link at the four-column boundary", async ({ page }: { page: Page }) => {
+  const pageLoadErrors = capturePageLoadErrors(page);
+
+  await page.setViewportSize({ width: 769, height: 900 });
+  await page.goto("/congress");
+
+  const leaderRow = rowForMember(page, SMOKE_CONGRESS_LEADER_NAME);
+  const ordinaryMoneyLink = leaderRow.getByRole("link", {
+    name: LEADER_MONEY.totalRaised,
+    exact: true
+  });
+  await replaceRenderedMoneyLabel(ordinaryMoneyLink, EXTREME_EXACT_MONEY_LABEL);
+
+  const extremeMoneyLink = leaderRow.getByRole("link", {
+    name: EXTREME_EXACT_MONEY_LABEL,
+    exact: true
+  });
+  const definition = leaderRow.getByRole("definition").filter({
+    hasText: EXTREME_EXACT_MONEY_LABEL
+  });
+
+  await expect(extremeMoneyLink).toHaveAttribute("href", LEADER_MONEY.sourceHref);
+  await expect(extremeMoneyLink).toBeVisible();
+  expect(await horizontalOverflow(definition)).toBeLessThanOrEqual(1);
+  expect(await renderedFragmentCount(extremeMoneyLink)).toBeGreaterThan(1);
+  await pageLoadErrors.assertNoErrors();
 });

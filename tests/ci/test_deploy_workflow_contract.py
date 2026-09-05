@@ -1,8 +1,10 @@
 """Deploy workflow contract tests for the Fly production deploy lane."""
 
+import os
 from pathlib import Path
 import re
 import shlex
+import subprocess
 import tomllib
 
 import pytest
@@ -73,6 +75,14 @@ def _deploy_steps() -> list[dict]:
     return _deploy_job().get("steps", [])
 
 
+def _promotion_bundle_job() -> dict:
+    return _parse_deploy_workflow()["jobs"]["promotion_bundle"]
+
+
+def _promotion_bundle_steps() -> list[dict]:
+    return _promotion_bundle_job().get("steps", [])
+
+
 def _find_step(step_name: str) -> dict:
     for step in _deploy_steps():
         if step.get("name") == step_name:
@@ -93,10 +103,11 @@ PRODUCTION_VERIFICATION_STEP_NAMES = (
     "Verify public deploy serves built dev SHA",
     "Run deployed surface parity gate",
     "Run production smoke gate",
+    "Build fresh deployed surface parity artifact",
 )
 REFRESH_BUILD_IDENTITY_STEP_IDS = ("deploy_api", "deploy_web", "deploy_caddy", "verify_sha")
-REFRESH_CONTENT_EVIDENCE_STEP_IDS = ("parity_gate", "smoke_gate")
-# The rollback consults both refresh owner sets; derive it so the six ids keep one home (line ~546 pins it).
+REFRESH_CONTENT_EVIDENCE_STEP_IDS = ("parity_gate", "smoke_gate", "parity_artifact")
+# The rollback consults both refresh owner sets; derive it so the seven ids keep one home.
 ROLLBACK_TRIGGER_STEP_IDS = (*REFRESH_BUILD_IDENTITY_STEP_IDS, *REFRESH_CONTENT_EVIDENCE_STEP_IDS)
 ROLLBACK_STEP_ID = "rollback"
 REFRESH_OPTIONAL_GUARD_STEP_IDS = ("pre_deploy",)
@@ -133,6 +144,24 @@ REFRESH_DEPLOY_INVOCATION = (
 REFRESH_VERIFIER_SCRIPT = "infra/scripts/verify_refresh_machine.sh"
 REFRESH_EVIDENCE_ARTIFACT_STEP_NAME = "Persist refresh deploy evidence"
 REFRESH_EVIDENCE_ARTIFACT_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+PROMOTION_INPUT_STEP_NAME = "Resolve authority promotion bundle input"
+PROMOTION_DOWNLOAD_STEP_NAME = "Download authority promotion bundle"
+PROMOTION_STAGE_STEP_NAME = "Validate and stage authority promotion bundle"
+PROMOTION_DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+PROMOTION_ARCHIVE_NAME = "authority-promotion-bundle.tar"
+PROMOTION_BUILD_CONTEXT_DIRECTORY = "infra/api/authority_promotion_bundle"
+PROMOTION_UPLOAD_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+PROMOTION_PRODUCER_INPUT_STEP_NAME = "Resolve authority promotion producer input"
+PROMOTION_PRODUCER_DOWNLOAD_STEP_NAME = "Download validated authority promotion evidence tree"
+PROMOTION_PRODUCER_BUILD_STEP_NAME = "Build deterministic authority promotion bundle"
+PROMOTION_PRODUCER_UPLOAD_STEP_NAME = "Upload authority promotion bundle"
+
+
+def _find_promotion_bundle_step(step_name: str) -> dict:
+    for step in _promotion_bundle_steps():
+        if step.get("name") == step_name:
+            return step
+    raise AssertionError(f"promotion bundle step {step_name!r} is required")
 
 
 def _assert_single_delegated_refresh_deploy(steps: list[dict]) -> None:
@@ -328,17 +357,222 @@ def test_deploy_workflow_triggers_on_push_to_main_and_manual_dispatch_only() -> 
     assert "pull_request" not in triggers
 
 
+def test_deploy_workflow_dispatch_accepts_only_paired_immutable_promotion_artifact_coordinates() -> None:
+    inputs = _workflow_triggers(_parse_deploy_workflow())["workflow_dispatch"]["inputs"]
+
+    assert set(inputs) == {
+        "authority_promotion_artifact_run_id",
+        "authority_promotion_artifact_name",
+        "authority_promotion_evidence_run_id",
+        "authority_promotion_evidence_artifact_name",
+        "authority_promotion_bundle_artifact_name",
+    }
+    for input_name in (
+        "authority_promotion_artifact_run_id",
+        "authority_promotion_artifact_name",
+        "authority_promotion_evidence_run_id",
+        "authority_promotion_evidence_artifact_name",
+    ):
+        value = inputs[input_name]
+        assert value["required"] is False
+        assert value["type"] == "string"
+        assert value["default"] == ""
+    assert inputs["authority_promotion_bundle_artifact_name"] == {
+        "description": "Immutable output artifact name later supplied to this workflow's deploy consumer",
+        "required": False,
+        "type": "string",
+        "default": "authority-promotion-bundle",
+    }
+
+    input_step = _find_step(PROMOTION_INPUT_STEP_NAME)
+    script = input_step["run"]
+    assert input_step["id"] == "promotion_input"
+    assert input_step["env"]["PROMOTION_ARTIFACT_RUN_ID"] == "${{ inputs.authority_promotion_artifact_run_id }}"
+    assert input_step["env"]["PROMOTION_ARTIFACT_NAME"] == "${{ inputs.authority_promotion_artifact_name }}"
+    assert 'run_id="$PROMOTION_ARTIFACT_RUN_ID"' in script
+    assert 'artifact_name="$PROMOTION_ARTIFACT_NAME"' in script
+    assert '[[ "$run_id" =~ ^[1-9][0-9]*$ ]]' in script
+    assert '[[ -n "$run_id" && -n "$artifact_name" ]]' in script
+    assert "enabled=true" in script
+    assert "enabled=false" in script
+    assert "$GITHUB_OUTPUT" in script
+
+
+@pytest.mark.parametrize(
+    ("run_id", "artifact_name", "expected_returncode", "expected_output"),
+    [
+        ("", "", 0, "enabled=false\n"),
+        ("123456", "wa-promotion-evidence", 0, "enabled=true\n"),
+        ("123456", "", 1, ""),
+        ("", "wa-promotion-evidence", 1, ""),
+        ("0", "wa-promotion-evidence", 1, ""),
+        ("0123", "wa-promotion-evidence", 1, ""),
+        ("12x", "wa-promotion-evidence", 1, ""),
+        ("123456", "../wa-promotion-evidence", 1, ""),
+        ("123456", "wa promotion evidence", 1, ""),
+    ],
+)
+def test_deploy_workflow_executes_promotion_coordinate_refusals_without_evidence_in_argv(
+    tmp_path: Path,
+    run_id: str,
+    artifact_name: str,
+    expected_returncode: int,
+    expected_output: str,
+) -> None:
+    output_path = tmp_path / "github_output"
+    output_path.write_text("", encoding="utf-8")
+
+    result = subprocess.run(
+        ("bash", "-c", _find_step(PROMOTION_INPUT_STEP_NAME)["run"]),
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "GITHUB_OUTPUT": str(output_path),
+            "PROMOTION_ARTIFACT_RUN_ID": run_id,
+            "PROMOTION_ARTIFACT_NAME": artifact_name,
+            "FLY_API_TOKEN": "",
+        },
+    )
+
+    assert result.returncode == expected_returncode
+    assert output_path.read_text(encoding="utf-8") == expected_output
+    assert "must-not-ship" not in result.stdout + result.stderr
+
+
+def test_deploy_workflow_downloads_and_stages_promotion_only_before_capture_and_api_build() -> None:
+    steps = _deploy_steps()
+    names = [step.get("name") for step in steps]
+    download = _find_step(PROMOTION_DOWNLOAD_STEP_NAME)
+    stage = _find_step(PROMOTION_STAGE_STEP_NAME)
+
+    assert download["uses"] == PROMOTION_DOWNLOAD_ACTION
+    assert download["if"] == "${{ steps.promotion_input.outputs.enabled == 'true' }}"
+    assert download["with"] == {
+        "name": "${{ inputs.authority_promotion_artifact_name }}",
+        "path": "${{ runner.temp }}/authority-promotion-download",
+        "github-token": "${{ github.token }}",
+        "run-id": "${{ inputs.authority_promotion_artifact_run_id }}",
+    }
+    assert stage["if"] == "${{ steps.promotion_input.outputs.enabled == 'true' }}"
+    stage_script = stage["run"]
+    assert stage_script.splitlines()[0] == "set -euo pipefail"
+    assert "uv sync --frozen" in stage_script
+    assert "domains.campaign_finance.coverage.lifecycle" in stage_script
+    assert '"$RUNNER_TEMP/authority-promotion-download"' in stage_script
+    assert f'"$GITHUB_WORKSPACE/{PROMOTION_BUILD_CONTEXT_DIRECTORY}"' in stage_script
+    assert '"${{ steps.provenance.outputs.dev_sha }}"' in stage_script
+    assert '--expected-promotion-run-id "${{ inputs.authority_promotion_artifact_run_id }}"' in stage_script
+    assert '--expected-promotion-run-name "deploy.yml"' in stage_script
+    assert '--expected-promotion-artifact-name "${{ inputs.authority_promotion_artifact_name }}"' in stage_script
+    assert PROMOTION_ARCHIVE_NAME not in stage_script, "archive shape belongs to the lifecycle validator"
+    assert "base64" not in stage_script
+    assert "curl" not in stage_script
+    assert "flyctl" not in stage_script
+    assert names.index("Resolve dev build provenance") < names.index(PROMOTION_INPUT_STEP_NAME)
+    assert names.index(PROMOTION_INPUT_STEP_NAME) < names.index(PROMOTION_DOWNLOAD_STEP_NAME)
+    assert names.index(PROMOTION_DOWNLOAD_STEP_NAME) < names.index(PROMOTION_STAGE_STEP_NAME)
+    assert names.index(PROMOTION_STAGE_STEP_NAME) < names.index(PRE_DEPLOY_CAPTURE_STEP_NAME)
+    assert names.index(PROMOTION_STAGE_STEP_NAME) < names.index(API_DEPLOY_STEP_NAME)
+
+
+def test_deploy_workflow_promotion_transport_has_no_runtime_fetch_or_raw_fly_file_injection() -> None:
+    workflow_text = _read_deploy_workflow()
+
+    assert sum(step.get("uses") == PROMOTION_DOWNLOAD_ACTION for step in _deploy_steps()) == 1
+    assert sum(step.get("uses") == PROMOTION_DOWNLOAD_ACTION for step in _promotion_bundle_steps()) == 1
+    assert "actions: read" in workflow_text
+    for forbidden in (
+        "--file-local",
+        "--file-literal",
+        "--file-secret",
+        "authority_promotion_bundle_b64",
+        "CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON=",
+    ):
+        assert forbidden not in workflow_text
+
+
 def test_deploy_workflow_has_single_guarded_production_job() -> None:
     parsed = _parse_deploy_workflow()
     jobs = parsed["jobs"]
     deploy_job = jobs["deploy"]
 
-    assert set(jobs) == {"deploy"}
+    assert set(jobs) == {"deploy", "promotion_bundle"}
     assert deploy_job["runs-on"] == "ubuntu-latest"
     assert deploy_job["environment"] == "production"
-    assert deploy_job["if"] == "github.repository == 'gridl-hq/civibus'"
-    assert parsed["permissions"] == {"contents": "read"}
-    assert deploy_job.get("permissions", {"contents": "read"}) == {"contents": "read"}
+    assert deploy_job["if"] == (
+        "github.repository == 'gridl-hq/civibus' && "
+        "(github.event_name == 'push' || "
+        "(inputs.authority_promotion_evidence_run_id == '' && "
+        "inputs.authority_promotion_evidence_artifact_name == ''))"
+    )
+    assert parsed["permissions"] == {"contents": "read", "actions": "read"}
+    assert deploy_job.get("permissions") == {"contents": "read", "actions": "read"}
+
+    producer_job = jobs["promotion_bundle"]
+    assert producer_job["runs-on"] == "ubuntu-latest"
+    assert "environment" not in producer_job
+    assert "env" not in producer_job
+    assert producer_job["permissions"] == {"contents": "read", "actions": "read"}
+    assert producer_job["if"] == (
+        "github.repository == 'gridl-hq/civibus' && "
+        "github.event_name == 'workflow_dispatch' && "
+        "(inputs.authority_promotion_evidence_run_id != '' || "
+        "inputs.authority_promotion_evidence_artifact_name != '')"
+    )
+
+
+def test_deploy_workflow_produces_and_uploads_only_the_validated_deterministic_bundle() -> None:
+    producer_steps = _promotion_bundle_steps()
+    names = [step.get("name") for step in producer_steps]
+    input_step = _find_promotion_bundle_step(PROMOTION_PRODUCER_INPUT_STEP_NAME)
+    download_step = _find_promotion_bundle_step(PROMOTION_PRODUCER_DOWNLOAD_STEP_NAME)
+    build_step = _find_promotion_bundle_step(PROMOTION_PRODUCER_BUILD_STEP_NAME)
+    upload_step = _find_promotion_bundle_step(PROMOTION_PRODUCER_UPLOAD_STEP_NAME)
+
+    assert input_step["id"] == "promotion_producer_input"
+    input_script = input_step["run"]
+    assert "CONSUMER_RUN_ID" in input_step["env"]
+    assert "CONSUMER_ARTIFACT_NAME" in input_step["env"]
+    assert "mutually exclusive" in input_script
+    assert '[[ "$EVIDENCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]' in input_script
+    assert input_script.count("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$") == 1
+
+    assert download_step["uses"] == PROMOTION_DOWNLOAD_ACTION
+    assert download_step["with"] == {
+        "name": "${{ inputs.authority_promotion_evidence_artifact_name }}",
+        "path": "${{ runner.temp }}/authority-promotion-evidence",
+        "github-token": "${{ github.token }}",
+        "run-id": "${{ inputs.authority_promotion_evidence_run_id }}",
+    }
+
+    build_script = build_step["run"]
+    assert build_script.splitlines()[0] == "set -euo pipefail"
+    assert "domains.campaign_finance.coverage.lifecycle" in build_script
+    assert '--promotion-run-id "$GITHUB_RUN_ID"' in build_script
+    assert '--promotion-run-name "deploy.yml"' in build_script
+    assert '--promotion-artifact-name "$BUNDLE_ARTIFACT_NAME"' in build_script
+    assert build_script.count('--promotion-source-revision "$dev_sha"') == 1
+    assert build_script.count('--promotion-api-revision "$dev_sha"') == 1
+    assert build_script.count('--promotion-web-revision "$dev_sha"') == 1
+    assert '--promotion-filesystem-root "$evidence_root"' in build_script
+    for forbidden in ("base64", "curl", "flyctl", "cp ", "mv ", "tar "):
+        assert forbidden not in build_script
+
+    assert upload_step["uses"] == PROMOTION_UPLOAD_ACTION
+    assert upload_step["with"] == {
+        "name": "${{ inputs.authority_promotion_bundle_artifact_name }}",
+        "path": "${{ runner.temp }}/authority-promotion-artifact/authority-promotion-bundle.tar",
+        "if-no-files-found": "error",
+        "retention-days": 14,
+    }
+    assert names.index(PROMOTION_PRODUCER_INPUT_STEP_NAME) < names.index(PROMOTION_PRODUCER_DOWNLOAD_STEP_NAME)
+    assert names.index(PROMOTION_PRODUCER_DOWNLOAD_STEP_NAME) < names.index(PROMOTION_PRODUCER_BUILD_STEP_NAME)
+    assert names.index(PROMOTION_PRODUCER_BUILD_STEP_NAME) < names.index(PROMOTION_PRODUCER_UPLOAD_STEP_NAME)
+    producer_text = "\n".join(str(step) for step in producer_steps)
+    assert "FLY_API_TOKEN" not in producer_text
+    assert "secrets." not in producer_text
 
 
 def test_deploy_workflow_uses_fly_token_secret_and_smoke_url_variable() -> None:
@@ -348,7 +582,7 @@ def test_deploy_workflow_uses_fly_token_secret_and_smoke_url_variable() -> None:
     assert deploy_env["PROD_SMOKE_BASE_URL"] == "${{ vars.PROD_SMOKE_BASE_URL }}"
 
 
-def test_deploy_workflow_uses_checkout_uv_and_flyctl_setup_only() -> None:
+def test_deploy_workflow_uses_pinned_checkout_uv_node_and_flyctl_setup() -> None:
     workflow_text = _read_deploy_workflow()
     setup_steps = [step for step in _deploy_steps() if "uses" in step]
     refresh_script = _find_step(REFRESH_MACHINE_STEP_NAME)["run"]
@@ -357,6 +591,11 @@ def test_deploy_workflow_uses_checkout_uv_and_flyctl_setup_only() -> None:
     assert {
         "uses": "astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182",
         "with": {"python-version": "3.12"},
+    } in setup_steps
+    assert {
+        "name": "Set up exact web Node runtime",
+        "uses": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+        "with": {"node-version-file": "web/package.json"},
     } in setup_steps
     expected_refresh_setup = (
         'uv sync --frozen\nPYTHON_BIN="$GITHUB_WORKSPACE/.venv/bin/python" ' + REFRESH_DEPLOY_INVOCATION
@@ -514,14 +753,22 @@ def test_a_lead_gated_build_identity_condition_satisfies_the_whole_refresh_contr
 
 def test_refresh_and_rollback_gate_owner_sets_remain_explicit_and_distinct() -> None:
     assert REFRESH_BUILD_IDENTITY_STEP_IDS == ("deploy_api", "deploy_web", "deploy_caddy", "verify_sha")
-    assert REFRESH_CONTENT_EVIDENCE_STEP_IDS == ("parity_gate", "smoke_gate")
+    assert REFRESH_CONTENT_EVIDENCE_STEP_IDS == ("parity_gate", "smoke_gate", "parity_artifact")
     assert REFRESH_OPTIONAL_GUARD_STEP_IDS == ("pre_deploy",)
     assert ROLLBACK_STEP_ID == "rollback"
     assert REFRESH_GATE_MODELED_STEP_IDS == (*ROLLBACK_TRIGGER_STEP_IDS, "pre_deploy", "rollback")
     assert REFRESH_GATE_STATUS_FUNCTION_LEADS == ("always()", "!cancelled()")
-    # The rollback consults both owner sets; the six-id literal lives here (module derives it), so a
+    # The rollback consults both owner sets; the seven-id literal lives here (module derives it), so a
     # bad derivation still reds. The composition is asserted alongside the literal.
-    literal_rollback_owner_ids = ("deploy_api", "deploy_web", "deploy_caddy", "verify_sha", "parity_gate", "smoke_gate")
+    literal_rollback_owner_ids = (
+        "deploy_api",
+        "deploy_web",
+        "deploy_caddy",
+        "verify_sha",
+        "parity_gate",
+        "smoke_gate",
+        "parity_artifact",
+    )
     assert ROLLBACK_TRIGGER_STEP_IDS == literal_rollback_owner_ids
     assert ROLLBACK_TRIGGER_STEP_IDS == (*REFRESH_BUILD_IDENTITY_STEP_IDS, *REFRESH_CONTENT_EVIDENCE_STEP_IDS)
     _assert_rollback_is_gated_on_serving_outcomes(_deploy_steps())
@@ -738,7 +985,8 @@ def test_deploy_workflow_keeps_production_smoke_gate_after_all_deploys() -> None
         "bash ./tests/smoke/run-playwright.sh -- "
         "tests/smoke/production_deploy.spec.ts "
         "tests/smoke/production_finance_visuals.spec.ts "
-        "tests/smoke/primary_nav_nonempty.spec.ts --reporter=line" in smoke_script
+        "tests/smoke/primary_nav_nonempty.spec.ts "
+        "tests/smoke/state_detail.spec.ts --reporter=line" in smoke_script
     )
     assert smoke_step["working-directory"] == "web"
 
@@ -771,6 +1019,68 @@ def test_deploy_workflow_runs_deployed_surface_parity_gate_before_smoke() -> Non
     assert probe_script.splitlines()[-1].strip() == "bash infra/scripts/probe_deployed_surface_parity.sh"
     for forbidden_filter in (" | ", "grep ", "tee "):
         assert forbidden_filter not in probe_script
+
+
+def test_deploy_workflow_produces_one_revision_bound_surface_parity_artifact() -> None:
+    steps = _deploy_steps()
+    names = [step.get("name") for step in steps]
+    context = _find_step("Resolve deployed parity evidence identity")
+    probe = _find_step("Run deployed surface parity gate")
+    smoke = _find_step("Run production smoke gate")
+    artifact = _find_step("Build fresh deployed surface parity artifact")
+    upload = _find_step("Persist deployed surface parity evidence")
+    rollback = _find_step(ROLLBACK_STEP_NAME)
+
+    assert context["id"] == "parity_evidence_context"
+    assert context["if"] == "${{ steps.promotion_input.outputs.enabled == 'true' }}"
+    for owner in (
+        "authority-promotion-receipt.json",
+        "serving_deploy",
+        "canary_ledger",
+        "federal_invariance_after",
+        "candidate_receipt_file_sha256",
+        "candidate_tree_git_sha",
+        "qualified_image",
+        "source_revision",
+        "api_revision",
+        "web_revision",
+        "sha256sum",
+    ):
+        assert owner in context["run"]
+    assert "FLY_API_TOKEN" not in context["run"]
+    assert 'mkdir -m 0700 "$evidence_root"' in context["run"]
+
+    for field in (
+        "CIVIBUS_CANDIDATE_RECEIPT_SHA256",
+        "CIVIBUS_CANDIDATE_TREE_GIT_SHA",
+        "CIVIBUS_QUALIFIED_IMAGE",
+        "CIVIBUS_PROMOTION_BUNDLE_SHA256",
+        "CIVIBUS_FEDERAL_IDENTITY_SHA256",
+    ):
+        assert field in probe["env"]
+        assert field in smoke["env"]
+        assert "parity_evidence_context.outputs" in probe["env"][field]
+        assert probe["env"][field] == smoke["env"][field]
+    assert probe["env"]["CIVIBUS_SURFACE_PARITY_RAW_API_OUTPUT"].endswith("outputs.raw_api_output }}")
+    assert smoke["env"]["CIVIBUS_SURFACE_PARITY_RAW_BROWSER_OUTPUT"].endswith("outputs.raw_browser_output }}")
+
+    assert artifact["id"] == "parity_artifact"
+    assert "steps.parity_gate.outcome == 'success'" in artifact["if"]
+    assert "steps.smoke_gate.outcome == 'success'" in artifact["if"]
+    assert "domains.campaign_finance.coverage.lifecycle" in artifact["run"]
+    assert artifact["run"].count("--surface-parity-") == 3
+    assert upload["uses"] == PROMOTION_UPLOAD_ACTION
+    assert upload["with"] == {
+        "name": "deployed_surface_parity_evidence",
+        "path": "${{ runner.temp }}/deployed_surface_parity_evidence",
+        "if-no-files-found": "error",
+        "retention-days": 14,
+    }
+    assert "steps.parity_artifact.outcome == 'failure'" in rollback["if"]
+    assert names.index("Run deployed surface parity gate") < names.index("Run production smoke gate")
+    assert names.index("Run production smoke gate") < names.index("Build fresh deployed surface parity artifact")
+    assert names.index("Build fresh deployed surface parity artifact") < names.index(ROLLBACK_STEP_NAME)
+    assert names.index(ROLLBACK_STEP_NAME) < names.index("Persist deployed surface parity evidence")
 
 
 def test_deploy_workflow_does_not_duplicate_ci_integration_or_refresh_concerns() -> None:

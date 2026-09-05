@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime, timedelta, timezone
 from inspect import signature
 from pathlib import Path
@@ -16,7 +17,10 @@ from core.keel_gate_l3 import JurisdictionEntry, SourceEntry, SourceTransition, 
 from core.refresh import runner
 from core.refresh.job_builders import build_refresh_plan
 from core.refresh.runner import RefreshJob
-from domains.campaign_finance.coverage.lifecycle import ImplementedRegionLifecycleRegistry
+from domains.campaign_finance.coverage.lifecycle import (
+    AuthorityPromotionReceipt,
+    ImplementedRegionLifecycleRegistry,
+)
 from domains.campaign_finance.coverage.registry import CoverageRegistry, load_registry, write_registry
 from domains.campaign_finance.coverage.lifecycle import write_lifecycle
 from domains.campaign_finance.coverage.status.models import UNKNOWN, ProjectionReport, Refusal, UnknownFact
@@ -102,26 +106,108 @@ def _payload(report: object) -> dict[str, object]:
     return json.loads(report.model_dump_json())
 
 
+def _authority_promotion_receipt(
+    *,
+    source_identities: list[str],
+    source_observed_at: datetime,
+    recurrence_completed_at: datetime,
+) -> AuthorityPromotionReceipt:
+    return AuthorityPromotionReceipt.model_validate(
+        {
+            "schema_version": 1,
+            "issued_at": _REPORT_TIME.isoformat(),
+            "jurisdiction_code": "WA",
+            "geographic_subject": {"kind": "state", "code": "WA"},
+            "filing_authority": {"kind": "state", "code": "WA"},
+            "authority_relation": "independent",
+            "aggregation_disposition": "not_applicable",
+            "provenance_scope": "state/WA",
+            "promotion_evidence": {
+                "authority_identity": "state/WA",
+                "authority_relation": "independent",
+                "aggregation_disposition": "not_applicable",
+                "expected_source_identities": source_identities,
+                "source_evidence": [
+                    {
+                        "source_identity": source_identity,
+                        "freshness_status": "fresh",
+                        "observed_at": source_observed_at.isoformat(),
+                    }
+                    for source_identity in source_identities
+                ],
+                "recurrence_evidence": [
+                    {
+                        "source_identity": source_identity,
+                        "pull_status": "success",
+                        "execution_origin": "scheduled",
+                        "completed_at": recurrence_completed_at.isoformat(),
+                    }
+                    for source_identity in source_identities
+                ],
+                "provenance_source_identities": source_identities,
+                "keel_source_identities": source_identities,
+                "deployed_source_identities": source_identities,
+                "source_revision": "a" * 40,
+                "api_revision": "a" * 40,
+                "web_revision": "a" * 40,
+            },
+            "canonical_evidence": [
+                {"kind": kind, "path": f"/{kind}.json", "sha256": "a" * 64}
+                for kind in (
+                    "canary_ledger",
+                    "scheduled_recurrence",
+                    "filing_authority",
+                    "provenance",
+                    "keel",
+                    "serving_deploy",
+                    "surface_parity",
+                )
+            ],
+        }
+    )
+
+
 def test_match_refresh_jobs_for_region_owns_runner_namespace_translation() -> None:
     jobs = [
         _job("state-ca", "state/CA"),
         _job("state-nc", "state/NC"),
         _job("civics-nc", "states/NC"),
+        _job("city-la", "municipality/LA"),
+        _job("state-la", "state/LA"),
         _job("sf-contributions", "municipality/SF"),
         _job("federal-a", "federal/fec"),
         _job("federal-b", "federal/irs-527"),
         _job("other", "municipality/PHL"),
     ]
 
-    assert [job.key for job in match_refresh_jobs_for_region("CA", jobs)] == ["state-ca"]
-    assert [job.key for job in match_refresh_jobs_for_region("NC", jobs)] == ["state-nc", "civics-nc"]
-    assert [job.key for job in match_refresh_jobs_for_region("CA_SAN_FRANCISCO", jobs)] == ["sf-contributions"]
-    assert [job.key for job in match_refresh_jobs_for_region("FEC", jobs)] == ["federal-a", "federal-b"]
-    assert match_refresh_jobs_for_region("AK", jobs) == []
+    assert [job.key for job in match_refresh_jobs_for_region("state", "CA", jobs)] == ["state-ca"]
+    assert [job.key for job in match_refresh_jobs_for_region("state", "NC", jobs)] == ["state-nc"]
+    assert [job.key for job in match_refresh_jobs_for_region("state", "LA", jobs)] == ["state-la"]
+    assert [job.key for job in match_refresh_jobs_for_region("municipality", "CA_LOS_ANGELES", jobs)] == ["city-la"]
+    assert [job.key for job in match_refresh_jobs_for_region("municipality", "CA_SAN_FRANCISCO", jobs)] == [
+        "sf-contributions"
+    ]
+    assert [job.key for job in match_refresh_jobs_for_region("federal", "FEC", jobs)] == [
+        "federal-a",
+        "federal-b",
+    ]
+    assert match_refresh_jobs_for_region("state", "AK", jobs) == []
 
 
 def test_region_status_builder_stays_within_parameter_count_standard() -> None:
     assert len(signature(build_region_status_report).parameters) <= 6
+
+
+def test_region_status_cli_accepts_exact_promotion_receipt_path_from_shared_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt_path = "/absolute/evidence/authority-promotion-receipt.json"
+    monkeypatch.setenv("CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON", receipt_path)
+
+    args = region_status._build_argument_parser().parse_args(["--region", "WA"])
+
+    assert args.promotion_receipt_json == Path(receipt_path)
+    assert os.environ["CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON"] == receipt_path
 
 
 def test_region_status_report_rejects_nested_refusal_outcomes() -> None:
@@ -153,12 +239,13 @@ def test_live_refresh_plan_agrees_with_committed_registry_runner_wiring_for_key_
     rows_by_code = {row.jurisdiction_code: row for row in registry.rows}
 
     for code in ("CA", "PA_PHILADELPHIA", "FEC"):
-        assert rows_by_code[code].runner_wired is bool(match_refresh_jobs_for_region(code, jobs))
+        row = rows_by_code[code]
+        assert row.runner_wired is bool(match_refresh_jobs_for_region(row.jurisdiction_type, code, jobs))
 
     covered_child = rows_by_code["CA_ANAHEIM"]
     assert covered_child.parent_jurisdiction_code == "CA"
     assert covered_child.runner_wired is bool(
-        match_refresh_jobs_for_region(covered_child.parent_jurisdiction_code, jobs)
+        match_refresh_jobs_for_region("state", covered_child.parent_jurisdiction_code, jobs)
     )
 
 
@@ -276,6 +363,18 @@ def test_region_status_projects_every_spec_field_with_per_job_clocks() -> None:
         "tier": "launch-support candidate",
         "evidence_summary": "statewide source verified",
     }
+    assert payload["authority_relation"]["value"]["relation"] == "unresolved"
+    authority_health = payload["authority_health"][0]["value"]
+    assert authority_health["authority_identity"] == "state/CA"
+    assert authority_health["expected_source_identities"] == ["state/CA:state-ca-refresh source"]
+    assert authority_health["freshness_status"] == "degraded"
+    assert authority_health["degraded_source_identities"] == ["state/CA:state-ca-refresh source"]
+    assert authority_health["recurrence_status"] == "degraded"
+    assert authority_health["recurrence_observed_at"] == "2026-08-21T12:00:00Z"
+    assert authority_health["revision_parity"] == "unknown"
+    assert authority_health["promotion_eligible"] is False
+    assert "The filing authority relation is unresolved." in authority_health["refusal_reasons"]
+    assert "Serving source/API/web revision parity is unknown." in authority_health["refusal_reasons"]
     assert payload["municipality_audit_claim"]["value"] is None
     assert payload["runner_wired"]["value"] is True
     assert payload["latest_operational_proof"][0]["value"] == {
@@ -299,6 +398,130 @@ def test_region_status_projects_every_spec_field_with_per_job_clocks() -> None:
     assert payload["execution_origin"] == {"status": "unknown", "reason": "no canonical owner records execution origin"}
     assert payload["main_blocker"]["value"] == "none"
     assert payload["next_action"]["value"] == "keep monitoring"
+
+
+def test_region_status_uses_exact_promotion_receipt_without_changing_geographic_aggregation() -> None:
+    job = _job("state-wa-refresh", "state/WA")
+    completed_at = _REPORT_TIME - timedelta(hours=1)
+    source_identity = "state/WA:state-wa-refresh source"
+    receipt = _authority_promotion_receipt(
+        source_identities=[source_identity],
+        source_observed_at=completed_at,
+        recurrence_completed_at=completed_at,
+    )
+    report = build_region_status_report(
+        jurisdiction_code="WA",
+        inputs=RegionStatusProjectionInputs(
+            coverage_registry=_registry(_registry_row("WA", "Washington", runner_wired=True)),
+            lifecycle_registry=_lifecycle(_lifecycle_row("WA", "Washington")),
+            sources_registry=_sources_registry(),
+            refresh_jobs=[job],
+            latest_completed_run_lookup=lambda _job: {
+                "completed_at": completed_at,
+                "pull_status": "success",
+                "inserted_count": 1,
+                "error": None,
+                "execution_origin": "scheduled",
+            },
+            cadence_last_pull_lookup=lambda _job: completed_at,
+            promotion_receipt=receipt,
+        ),
+        calculated_at=_REPORT_TIME,
+    )
+
+    payload = _payload(report)
+    assert payload["jurisdiction_code"]["value"] == "WA"
+    assert payload["authority_relation"]["value"]["relation"] == "independent"
+    assert payload["authority_relation"]["value"]["authority"]["code"] == "WA"
+    assert payload["authority_relation"]["owner"] == "authority-promotion-receipt"
+    authority_health = payload["authority_health"][0]["value"]
+    assert authority_health["authority_identity"] == "state/WA"
+    assert authority_health["expected_source_identities"] == [source_identity]
+    assert authority_health["source_revision"] == "a" * 40
+    assert authority_health["revision_parity"] == "match"
+    assert authority_health["promotion_eligible"] is True
+    assert authority_health["refusal_reasons"] == []
+    assert payload["municipality_disposition"]["value"] == "not_applicable"
+
+
+def test_region_status_exposes_each_overlap_authority_and_refuses_unproved_sources() -> None:
+    relation = {
+        "relation": "partitioned_overlapping",
+        "authorities": [
+            {"kind": "state", "code": "CA"},
+            {"kind": "municipality", "code": "CA_EXAMPLE"},
+        ],
+        "precedence": [
+            {"authority": {"kind": "state", "code": "CA"}, "scope": "state scope"},
+            {
+                "authority": {"kind": "municipality", "code": "CA_EXAMPLE"},
+                "scope": "city scope",
+            },
+        ],
+        "partitions": [
+            {"authority": {"kind": "state", "code": "CA"}, "scope": "state scope"},
+            {
+                "authority": {"kind": "municipality", "code": "CA_EXAMPLE"},
+                "scope": "city scope",
+            },
+        ],
+        "provenance": [
+            {"authority": {"kind": "state", "code": "CA"}, "source_scope": "state source"},
+            {
+                "authority": {"kind": "municipality", "code": "CA_EXAMPLE"},
+                "source_scope": "city source",
+            },
+        ],
+        "deduplication": {"disposition": "refuse_combination", "identity_keys": []},
+        "refusals": ["No combined total."],
+        "evidence": {
+            "owner": "test",
+            "receipt": "test receipt",
+            "receipt_sha256": "a" * 64,
+        },
+    }
+    report = build_region_status_report(
+        jurisdiction_code="CA_EXAMPLE",
+        inputs=RegionStatusProjectionInputs(
+            coverage_registry=_registry(
+                _registry_row("CA", "California", runner_wired=False),
+                _registry_row(
+                    "CA_EXAMPLE",
+                    "Example City",
+                    jurisdiction_type="municipality",
+                    municipal_audit_decision="independent_target",
+                    parent_jurisdiction_code="CA",
+                    runner_wired=False,
+                    authority_relation=relation,
+                ),
+            ),
+            lifecycle_registry=_lifecycle(_lifecycle_row("CA_EXAMPLE", "Example City")),
+            sources_registry=_sources_registry(),
+            refresh_jobs=[],
+            latest_completed_run_lookup=lambda job: None,
+            cadence_last_pull_lookup=lambda job: None,
+        ),
+        calculated_at=_REPORT_TIME,
+    )
+
+    payload = _payload(report)
+    assert payload["authority_relation"]["value"]["relation"] == "partitioned_overlapping"
+    health = [entry["value"] for entry in payload["authority_health"]]
+    assert [entry["authority_identity"] for entry in health] == [
+        "state/CA",
+        "municipality/CA_EXAMPLE",
+    ]
+    assert {entry["freshness_status"] for entry in health} == {"unknown"}
+    assert {entry["recurrence_status"] for entry in health} == {"unknown"}
+    assert all(entry["revision_parity"] == "unknown" for entry in health)
+    assert all(entry["promotion_eligible"] is False for entry in health)
+    assert all(
+        "No exact source identities are assigned to this filing authority." in entry["refusal_reasons"]
+        for entry in health
+    )
+    assert all(
+        "The authority overlap disposition refuses combined promotion." in entry["refusal_reasons"] for entry in health
+    )
 
 
 def test_region_status_l3_scope_join_uses_sources_namespace() -> None:
@@ -461,10 +684,7 @@ def test_region_status_refuses_unknown_jurisdiction_and_unresolvable_parent() ->
     )
     assert parent_missing == Refusal(
         scope="CA_SAN_FRANCISCO",
-        reason=(
-            "covered_by_parent 'CA_SAN_FRANCISCO' has no resolvable parent coverage-registry row "
-            "for parent_jurisdiction_code 'CA'"
-        ),
+        reason="municipality 'CA_SAN_FRANCISCO' has no coverage-registry parent 'CA'",
         canonical_owner="coverage-registry",
     )
 
@@ -519,7 +739,7 @@ def test_region_status_zero_matched_jobs_projects_runner_wired_false() -> None:
 
 
 def test_region_status_multi_job_unavailable_clocks_keep_job_identity() -> None:
-    jobs = [_job("nc-current", "state/NC"), _job("nc-past-results", "states/NC")]
+    jobs = [_job("nc-current", "state/NC"), _job("nc-past-results", "state/NC")]
     unavailable = UnknownFact(reason="refresh clock database unavailable")
 
     report = build_region_status_report(
@@ -566,7 +786,9 @@ def test_region_status_l3_scope_join_resolves_direct_and_federal_scopes() -> Non
     fec = build_region_status_report(
         jurisdiction_code="FEC",
         inputs=RegionStatusProjectionInputs(
-            coverage_registry=_registry(_registry_row("FEC", "Federal", runner_wired=True)),
+            coverage_registry=_registry(
+                _registry_row("FEC", "Federal", jurisdiction_type="federal", runner_wired=True)
+            ),
             lifecycle_registry=_lifecycle(_lifecycle_row("FEC", "Federal")),
             sources_registry=_sources_registry(),
             refresh_jobs=[_job("federal-a", "federal/fec")],
@@ -846,6 +1068,7 @@ def test_projection_clock_selectors_ignore_an_in_flight_running_row(
         assert latest_before == {
             "completed_at": terminal_at,
             "pull_status": "success",
+            "execution_origin": "legacy_unknown",
             "inserted_count": 42,
             "skipped_count": 0,
             "quarantined_count": 0,

@@ -127,9 +127,30 @@ def create_minimal_registry(conn: psycopg.Connection, rows: list[dict[str, objec
     # Ensure a test data source exists for the FK; idempotent via ON CONFLICT.
     data_source_row = conn.execute(
         """
-        INSERT INTO core.data_source (domain, jurisdiction, name, source_url, source_format)
-        VALUES ('campaign_finance', 'state/NC', %(name)s, 'https://test.local/nc-registry', 'csv')
-        ON CONFLICT (domain, jurisdiction, name) DO UPDATE
+        INSERT INTO core.data_source (
+            domain,
+            jurisdiction,
+            filing_authority_type,
+            filing_authority_code,
+            name,
+            source_url,
+            source_format
+        )
+        VALUES (
+            'campaign_finance',
+            'state/NC',
+            'state',
+            'NC',
+            %(name)s,
+            'https://test.local/nc-registry',
+            'csv'
+        )
+        ON CONFLICT (
+            domain,
+            filing_authority_type,
+            filing_authority_code,
+            name
+        ) DO UPDATE
             SET source_url = EXCLUDED.source_url
         RETURNING id
         """,

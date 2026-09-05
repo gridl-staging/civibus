@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from domains.campaign_finance.coverage.seed_registry import (
     build_fec_registry_row,
     build_seed_registry,
     derive_state_registry_rows,
+    merge_seed_registry,
 )
+from domains.campaign_finance.coverage.registry import DEFAULT_REGISTRY_PATH, load_registry
+
+
+def test_seed_registry_has_no_private_runner_supported_code_owner() -> None:
+    source_path = Path(__file__).with_name("seed_registry.py")
+    source = source_path.read_text(encoding="utf-8")
+
+    assert "_SUPPORTED_STATE_CODES" not in source
+    assert "_SUPPORTED_CITY_CODES" not in source
 
 
 def _rows_by_code() -> dict[str, object]:
@@ -29,7 +41,7 @@ def test_derive_state_registry_rows_aggregation_and_runner_wiring() -> None:
 
     assert rows_by_code["MN"].covers_sub_jurisdictions is False
 
-    # Runner wiring: all states except OH are in _SUPPORTED_STATE_CODES
+    # Runner wiring: all state registrations except intentionally unwired OH.
     assert rows_by_code["CA"].runner_wired is True
     assert rows_by_code["OH"].runner_wired is False
     assert rows_by_code["IN"].runner_wired is True
@@ -94,3 +106,17 @@ def test_build_seed_registry_includes_fec_plus_fourteen_states() -> None:
         "WA",
         "WI",
     }
+
+
+def test_seed_merge_is_reproducible_and_preserves_accepted_relations() -> None:
+    existing = load_registry(DEFAULT_REGISTRY_PATH)
+    seeded = build_seed_registry()
+
+    first = merge_seed_registry(existing, seeded)
+    second = merge_seed_registry(first, seeded)
+    rows = {row.jurisdiction_code: row for row in second.rows}
+
+    assert second.model_dump(mode="json") == first.model_dump(mode="json")
+    assert rows["NY_NEW_YORK"].authority_relation.relation == "partitioned_overlapping"
+    assert rows["WA_SEATTLE"].authority_relation.relation == "partitioned_overlapping"
+    assert second.identity_translations == existing.identity_translations

@@ -13,6 +13,8 @@ class TestDataSourceModel:
     def test_data_source_creation_minimum_fields_uses_defaults(self) -> None:
         data_source = DataSource(
             domain="campaign_finance",
+            filing_authority_type="federal",
+            filing_authority_code="FEC",
             name="FEC Schedule A API",
             source_url="https://api.open.fec.gov/v1/schedules/schedule_a/",
         )
@@ -22,6 +24,8 @@ class TestDataSourceModel:
         assert data_source.name == "FEC Schedule A API"
         assert data_source.source_url == "https://api.open.fec.gov/v1/schedules/schedule_a/"
         assert data_source.jurisdiction is None
+        assert data_source.filing_authority_type == "federal"
+        assert data_source.filing_authority_code == "FEC"
         assert data_source.source_format is None
         assert data_source.license is None
         assert data_source.update_frequency is None
@@ -59,6 +63,18 @@ class TestDataSourceModel:
         assert isinstance(json_dumped["created_at"], str)
         assert isinstance(json_dumped["updated_at"], str)
         assert isinstance(json_dumped["last_pull_at"], str)
+
+    def test_legacy_federal_jurisdiction_materializes_typed_fec_authority(self) -> None:
+        data_source = DataSource(
+            domain="campaign_finance",
+            jurisdiction="federal",
+            name="Legacy FEC fixture",
+            source_url="https://www.fec.gov/data/",
+        )
+
+        assert data_source.jurisdiction == "federal"
+        assert data_source.filing_authority_type == "federal"
+        assert data_source.filing_authority_code == "FEC"
 
 
 class TestSourceRecordModel:
@@ -161,6 +177,7 @@ class TestRefreshRunModel:
             domain="campaign_finance",
             jurisdiction="state/CO",
             data_source_names=["TRACER Bulk Download - Contributions"],
+            execution_origin="scheduled",
             pull_status="degraded",
             started_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
             completed_at=datetime(2026, 4, 24, 12, 5, tzinfo=timezone.utc),
@@ -190,6 +207,36 @@ class TestRefreshRunModel:
 
         assert original.completed_at is None
         assert RefreshRun(**original.model_dump()) == original
+
+    @pytest.mark.parametrize("execution_origin", ["scheduled", "operator_attended", "legacy_unknown"])
+    def test_refresh_run_persistence_accepts_closed_origin_without_runner_allowlist(
+        self, execution_origin: str
+    ) -> None:
+        refresh_run = RefreshRun(
+            job_key="state-co-contributions",
+            domain="campaign_finance",
+            jurisdiction="state/CO",
+            execution_origin=execution_origin,
+            pull_status="success",
+            started_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 4, 24, 12, 5, tzinfo=timezone.utc),
+            message="ok",
+        )
+
+        assert refresh_run.execution_origin == execution_origin
+
+    def test_refresh_run_rejects_unknown_execution_origin(self) -> None:
+        with pytest.raises(ValidationError, match="Input should be"):
+            RefreshRun(
+                job_key="state-co-contributions",
+                domain="campaign_finance",
+                jurisdiction="state/CO",
+                execution_origin="cron",
+                pull_status="success",
+                started_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
+                completed_at=datetime(2026, 4, 24, 12, 5, tzinfo=timezone.utc),
+                message="bad",
+            )
 
     def test_refresh_run_rejects_running_with_completed_at(self) -> None:
         with pytest.raises(ValidationError, match="completed_at"):

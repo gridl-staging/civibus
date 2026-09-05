@@ -514,45 +514,240 @@ def test_ingest_in_rolls_back_managed_transaction_when_relational_phase_fails(
     conn.commit.assert_not_called()
 
 
-def test_load_in_relational_transactions_delegates_rows_to_no_savepoint_helper(
+def _capture_in_relational_delegation(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    conn = MagicMock()
-    conn.info.transaction_status = psycopg.pq.TransactionStatus.IDLE
-    rows = [{"row": "0"}, {"row": "1"}, {"row": "2"}]
-    linked_source_record_ids = [uuid4(), None, uuid4()]
-    select_source_record_id = MagicMock(side_effect=linked_source_record_ids)
-    helper_calls: list[tuple[object, object, bool, str]] = []
-    helper_results = iter(((True, False), (None, False)))
-
-    def record_without_invoking_callback(
-        helper_conn: object,
-        callback: object,
-        *,
-        manages_outer_transaction: bool,
-        label: str,
-    ) -> tuple[bool | None, bool]:
-        helper_calls.append((helper_conn, callback, manages_outer_transaction, label))
-        return next(helper_results)
-
-    monkeypatch.setattr(in_relational_load_module, "_select_in_source_record_id", select_source_record_id)
-    monkeypatch.setattr(in_relational_load_module, "try_row_without_savepoint", record_without_invoking_callback)
+    *,
+    conn: MagicMock,
+    rows: list[dict[str, str]],
+    data_source_id: object,
+    data_type: str = "contributions",
+    limit: int | None = None,
+    result: object | None = None,
+) -> tuple[int, MagicMock, object]:
+    if result is None:
+        result = SimpleNamespace(inserted=11, skipped=13, errors=17)
+    shared_loop = MagicMock(return_value=result)
+    monkeypatch.setattr(
+        in_relational_load_module,
+        "load_relational_rows_without_savepoints",
+        shared_loop,
+    )
 
     errors = in_relational_load_module._load_in_relational_transactions(
         conn,
         rows,
-        data_source_id=uuid4(),
-        data_type="contributions",
-        limit=None,
+        data_source_id=data_source_id,
+        data_type=data_type,
+        limit=limit,
+    )
+    return errors, shared_loop, result
+
+
+def test_load_in_relational_transactions_delegates_once_with_in_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = MagicMock()
+    data_source_id = uuid4()
+    source_record_id = uuid4()
+    row = {"row": "0"}
+    rows = [row, {"row": "1"}, {"row": "2"}]
+    select_source_record_id = MagicMock(return_value=source_record_id)
+    monkeypatch.setattr(in_relational_load_module, "_select_in_source_record_id", select_source_record_id)
+
+    _, shared_loop, _ = _capture_in_relational_delegation(
+        monkeypatch,
+        conn=conn,
+        rows=rows,
+        data_source_id=data_source_id,
     )
 
-    assert len(helper_calls) == 2
-    assert [call[0] for call in helper_calls] == [conn, conn]
-    assert all(call[2] is True for call in helper_calls)
-    assert [call[3] for call in helper_calls] == ["IN contribution filing link"] * 2
-    assert errors == 1
-    conn.transaction.assert_not_called()
-    assert select_source_record_id.call_count == 3
+    shared_loop.assert_called_once()
+    args, kwargs = shared_loop.call_args
+    assert len(args) == 2
+    assert args[0] is conn
+    assert set(kwargs) == {
+        "batch_size",
+        "caller_owned_rollback_error",
+        "fatal_exceptions",
+        "label",
+        "link_row",
+        "on_db_error_recovery",
+        "on_managed_commit_reset",
+        "resolve_source_record_id",
+        "source_record_key_for_row",
+    }
+    assert kwargs["batch_size"] == 1_000
+    assert kwargs["fatal_exceptions"] == (in_relational_load_module.INFilingLookupDrift,)
+    assert callable(kwargs["source_record_key_for_row"])
+    assert callable(kwargs["resolve_source_record_id"])
+    assert callable(kwargs["link_row"])
+    assert callable(kwargs["on_db_error_recovery"])
+    assert callable(kwargs["caller_owned_rollback_error"])
+
+    source_record_key = kwargs["source_record_key_for_row"](row)
+    assert source_record_key == _in_source_record_key(row, data_type="contributions")
+    assert kwargs["resolve_source_record_id"](conn, source_record_key) == source_record_id
+    select_source_record_id.assert_called_once_with(
+        conn,
+        data_source_id=data_source_id,
+        source_record_key=source_record_key,
+    )
+
+    first_rollback_error = kwargs["caller_owned_rollback_error"]()
+    second_rollback_error = kwargs["caller_owned_rollback_error"]()
+    assert isinstance(first_rollback_error, in_relational_load_module.INCallerTransactionRolledBack)
+    assert isinstance(second_rollback_error, in_relational_load_module.INCallerTransactionRolledBack)
+    assert first_rollback_error is not second_rollback_error
+    assert "caller-owned" in str(first_rollback_error)
+    assert "rolled back" in str(first_rollback_error)
+
+
+@pytest.mark.parametrize(
+    ("data_type", "expected_label"),
+    [
+        ("contributions", "IN contribution filing link"),
+        ("expenditures", "IN expenditure filing link"),
+    ],
+)
+def test_load_in_relational_transactions_formats_shared_loop_label(
+    monkeypatch: pytest.MonkeyPatch,
+    data_type: str,
+    expected_label: str,
+) -> None:
+    _, shared_loop, _ = _capture_in_relational_delegation(
+        monkeypatch,
+        conn=MagicMock(),
+        rows=[{"row": "0"}],
+        data_source_id=uuid4(),
+        data_type=data_type,
+    )
+
+    assert shared_loop.call_args.kwargs["label"] == expected_label
+
+
+def test_load_in_relational_transactions_limits_rows_before_delegating(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = MagicMock()
+    data_source_id = uuid4()
+    rows = [{"row": "0"}, {"row": "1"}, {"row": "2"}]
+
+    _, limited_loop, _ = _capture_in_relational_delegation(
+        monkeypatch,
+        conn=conn,
+        rows=rows,
+        data_source_id=data_source_id,
+        limit=1,
+    )
+    assert list(limited_loop.call_args.args[1]) == rows[:1]
+
+    _, unlimited_loop, _ = _capture_in_relational_delegation(
+        monkeypatch,
+        conn=conn,
+        rows=rows,
+        data_source_id=data_source_id,
+        limit=None,
+    )
+    assert list(unlimited_loop.call_args.args[1]) == rows
+
+    invalid_limit_loop = MagicMock()
+    monkeypatch.setattr(
+        in_relational_load_module,
+        "load_relational_rows_without_savepoints",
+        invalid_limit_loop,
+    )
+    with pytest.raises(ValueError, match="greater than or equal to 0"):
+        in_relational_load_module._load_in_relational_transactions(
+            conn,
+            rows,
+            data_source_id=data_source_id,
+            data_type="contributions",
+            limit=-1,
+        )
+    invalid_limit_loop.assert_not_called()
+
+
+def test_load_in_relational_transactions_returns_shared_loop_error_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_result = SimpleNamespace(inserted=11, skipped=13, errors=17)
+
+    errors, _, _ = _capture_in_relational_delegation(
+        monkeypatch,
+        conn=MagicMock(),
+        rows=[{"row": "0"}],
+        data_source_id=uuid4(),
+        result=expected_result,
+    )
+
+    assert errors == 17
+
+
+def test_load_in_relational_transactions_clears_whole_filing_cache_after_db_error(
+    monkeypatch: pytest.MonkeyPatch,
+    prepared_transaction: MagicMock,
+) -> None:
+    conn = MagicMock()
+    row = {"row": "0"}
+    source_record_id = uuid4()
+    entries = {
+        "filing-a": in_relational_load_module._INFilingLookupEntry(uuid4(), uuid4(), uuid4()),
+        "filing-b": in_relational_load_module._INFilingLookupEntry(uuid4(), uuid4(), uuid4()),
+    }
+    cache_refs: list[dict[str, object]] = []
+
+    def _seed_filing_cache(*_args: object, filing_lookup: dict[str, object], **_kwargs: object) -> object:
+        filing_lookup.update(entries)
+        cache_refs.append(filing_lookup)
+        return entries["filing-a"]
+
+    monkeypatch.setattr(in_relational_load_module, "_upsert_in_filing", _seed_filing_cache)
+    monkeypatch.setattr(in_relational_load_module, "_upsert_in_transaction_with_filing", MagicMock())
+    _, shared_loop, _ = _capture_in_relational_delegation(
+        monkeypatch,
+        conn=conn,
+        rows=[row],
+        data_source_id=uuid4(),
+    )
+    callbacks = shared_loop.call_args.kwargs
+
+    callbacks["link_row"](conn, row, source_record_id)
+    assert cache_refs == [entries]
+    callbacks["on_db_error_recovery"](conn, failed_row=row)
+    assert cache_refs[0] == {}
+
+
+def test_load_in_relational_transactions_keeps_filing_cache_after_managed_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    prepared_transaction: MagicMock,
+) -> None:
+    conn = MagicMock()
+    row = {"row": "0"}
+    entry = in_relational_load_module._INFilingLookupEntry(uuid4(), uuid4(), uuid4())
+    cache_refs: list[dict[str, object]] = []
+
+    def _seed_filing_cache(*_args: object, filing_lookup: dict[str, object], **_kwargs: object) -> object:
+        filing_lookup["filing-a"] = entry
+        cache_refs.append(filing_lookup)
+        return entry
+
+    monkeypatch.setattr(in_relational_load_module, "_upsert_in_filing", _seed_filing_cache)
+    monkeypatch.setattr(in_relational_load_module, "_upsert_in_transaction_with_filing", MagicMock())
+    _, shared_loop, _ = _capture_in_relational_delegation(
+        monkeypatch,
+        conn=conn,
+        rows=[row],
+        data_source_id=uuid4(),
+    )
+    callbacks = shared_loop.call_args.kwargs
+
+    callbacks["link_row"](conn, row, uuid4())
+    assert cache_refs == [{"filing-a": entry}]
+
+    managed_commit_reset = callbacks["on_managed_commit_reset"]
+    if managed_commit_reset is not None:
+        managed_commit_reset(processed_count=1, reason="batch_boundary")
+    assert cache_refs[0] == {"filing-a": entry}
 
 
 def _relational_transactions_over_two_rows(conn: MagicMock) -> int:
@@ -576,12 +771,7 @@ def test_load_in_relational_transactions_reraises_filing_lookup_drift(
     monkeypatch: pytest.MonkeyPatch,
     prepared_transaction: MagicMock,
 ) -> None:
-    """A filing cache that disagrees with the database aborts the load, it is not a row error.
-
-    `try_row_without_savepoint` catches every `Exception`, so without an explicit re-raise the
-    drift guard would be downgraded to one counted row error and the load would keep writing
-    against a cache already known to be wrong.
-    """
+    """The fatal-exception policy preserves drift identity and aborts before the next row."""
     conn = MagicMock()
     conn.info.transaction_status = psycopg.pq.TransactionStatus.IDLE
     drift = in_relational_load_module.INFilingLookupDrift("IN filing lookup drift for filing_fec_id='f': a != b")
@@ -594,8 +784,8 @@ def test_load_in_relational_transactions_reraises_filing_lookup_drift(
         _relational_transactions_over_two_rows(conn)
 
     assert raised.value is drift
-    # Aborted on the first row rather than continuing through the rest of the file.
     assert upsert_filing.call_count == 1
+    conn.transaction.assert_not_called()
 
 
 def test_load_in_relational_transactions_counts_ordinary_row_errors_without_aborting(
@@ -612,6 +802,13 @@ def test_load_in_relational_transactions_counts_ordinary_row_errors_without_abor
 
     assert _relational_transactions_over_two_rows(conn) == 2
     assert upsert_filing.call_count == 2
+
+
+def test_in_relational_exception_names_remain_public_reexports() -> None:
+    assert in_load_module.INCallerTransactionRolledBack is in_relational_load_module.INCallerTransactionRolledBack
+    assert in_load_module.INFilingLookupDrift is in_relational_load_module.INFilingLookupDrift
+    assert "INCallerTransactionRolledBack" in in_load_module.__all__
+    assert "INFilingLookupDrift" in in_load_module.__all__
 
 
 @pytest.mark.integration

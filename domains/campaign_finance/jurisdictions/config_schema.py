@@ -5,10 +5,31 @@ from pathlib import Path
 from typing import Annotated, Literal, TypeAlias
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints, ValidationError, model_validator
 
 
-JurisdictionTypeLiteral = Literal["federal", "state", "county", "municipality"]
+GeographicJurisdictionTypeLiteral = Literal[
+    "federal",
+    "state",
+    "county",
+    "municipality",
+    "school_district",
+    "special_district",
+]
+FilingAuthorityKindLiteral = Literal[
+    "federal",
+    "state",
+    "county",
+    "municipality",
+    "school_district",
+    "special_district",
+    "named_other",
+]
+# Backward-compatible public name for config-owned acquisition identity.  Unlike
+# ``core.jurisdiction`` geography, a source package may be owned by an explicitly
+# named authority that is not itself a geographic jurisdiction.
+JurisdictionTypeLiteral = FilingAuthorityKindLiteral
+ConfigJurisdictionIdentity: TypeAlias = tuple[JurisdictionTypeLiteral, str]
 DataSourceFormatLiteral = Literal["csv", "api", "web_portal", "pdf", "pipe_delimited"]
 UpdateFrequencyLiteral = Literal["continuous", "daily", "weekly", "monthly", "quarterly", "annual"]
 ElectronicFilingRequiredLiteral = Literal["required", "not_required", "voluntary", "paper_only"]
@@ -100,6 +121,19 @@ class JurisdictionIdentity(JurisdictionConfigBaseModel):
     type: JurisdictionTypeLiteral
     fips: str
     parent: str | None
+
+    @property
+    def identity(self) -> ConfigJurisdictionIdentity:
+        """Return the config owner's composite source/acquisition identity."""
+
+        return self.type, self.code
+
+
+def operational_scope_for_config_identity(identity: ConfigJurisdictionIdentity) -> str:
+    """Translate config identity forward to its exact owner-local operational scope."""
+
+    jurisdiction_type, jurisdiction_code = identity
+    return f"{jurisdiction_type}/{jurisdiction_code}"
 
 
 class DataSourceCoverageConfig(JurisdictionConfigBaseModel):
@@ -287,6 +321,23 @@ class JurisdictionConfig(JurisdictionConfigBaseModel):
     laws: LawsConfig
     status: StatusConfig
 
+    @model_validator(mode="after")
+    def _validate_unique_data_source_names(self) -> "JurisdictionConfig":
+        duplicate_names = sorted(
+            {
+                source.name
+                for source in self.data_sources
+                if sum(candidate.name == source.name for candidate in self.data_sources) > 1
+            }
+        )
+        if duplicate_names:
+            joined_names = ", ".join(repr(name) for name in duplicate_names)
+            raise ValueError(
+                f"jurisdiction {self.jurisdiction.type}/{self.jurisdiction.code} has duplicate data source "
+                f"name(s): {joined_names}"
+            )
+        return self
+
 
 def _format_validation_errors(validation_error: ValidationError) -> str:
     formatted_errors: list[str] = []
@@ -342,12 +393,15 @@ def discover_jurisdiction_configs(base_path: str | Path) -> list[Path]:
 
 
 __all__ = [
+    "ConfigJurisdictionIdentity",
     "ContributionLimitRule",
     "ContributionLimitRuleBase",
     "ContributionLimitsConfig",
     "ContributionRuleMetadataItem",
     "DataSourceConfig",
     "DataSourceCoverageConfig",
+    "FilingAuthorityKindLiteral",
+    "GeographicJurisdictionTypeLiteral",
     "JurisdictionConfig",
     "JurisdictionIdentity",
     "KnownContributionLimitRuleBase",
@@ -361,4 +415,5 @@ __all__ = [
     "UnknownContributionLimitRule",
     "discover_jurisdiction_configs",
     "load_jurisdiction_config",
+    "operational_scope_for_config_identity",
 ]

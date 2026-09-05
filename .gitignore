@@ -14,6 +14,11 @@ data/
 build/detached_jobs/
 *.egg-info/
 
+# The deploy workflow materializes validated promotion evidence here for the
+# API build only. The tracked sentinel keeps ordinary builds deterministic.
+infra/api/authority_promotion_bundle/*
+!infra/api/authority_promotion_bundle/.gitkeep
+
 # Stage 3 browser-capture local profile caches
 .tmp/**/profiles/
 docs/reference/research/artifacts/2026-03-production-proof/*.dump

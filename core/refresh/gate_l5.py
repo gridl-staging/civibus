@@ -14,7 +14,7 @@ from core.db import get_connection
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_EVIDENCE_ROOT = _REPO_ROOT / "evidence" / "L5"
-_STATUS_KEYS = ("crashed", "empty", "degraded", "success")
+_STATUS_KEYS = ("crashed", "empty", "degraded", "failed", "success")
 
 
 class L5Evidence(BaseModel, extra="forbid"):
@@ -75,7 +75,7 @@ def summarize_refresh_runs(
 def _evidence_status(*, counts: dict[str, int], total_runs: int) -> str:
     if total_runs == 0:
         return "fail"
-    if counts["crashed"] or counts["empty"] or counts["degraded"]:
+    if any(counts[status] for status in _STATUS_KEYS if status != "success"):
         return "fail"
     return "pass"
 
@@ -150,7 +150,8 @@ def main(argv: list[str] | None = None) -> int:
     status = _evidence_status(counts=counts, total_runs=total_runs)
     print(
         f"{status.upper()}: total_runs={total_runs} "
-        f"crashed={counts['crashed']} empty={counts['empty']} degraded={counts['degraded']} success={counts['success']} "
+        f"crashed={counts['crashed']} empty={counts['empty']} degraded={counts['degraded']} "
+        f"failed={counts['failed']} success={counts['success']} "
         f"evidence={evidence_path}"
     )
     return 0 if status == "pass" else 1

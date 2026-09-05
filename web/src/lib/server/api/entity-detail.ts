@@ -55,8 +55,8 @@ export type PersonMoneyHeadlineState =
       selectedCycle: number;
       summary: PersonMoneyAtGlanceSummary;
     }
-  | { kind: "missing_summary"; message: string; selectedCycle: number }
-  | { kind: "temporarily_unavailable"; message: string; selectedCycle: number };
+  | { kind: "missing_summary"; message: string; selectedCycle?: number }
+  | { kind: "temporarily_unavailable"; message: string; selectedCycle?: number };
 
 export type EntityDetailPageBundle = EntityDetailBundle &
   Partial<PersonDetailPageExtensions>;

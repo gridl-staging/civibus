@@ -14,6 +14,30 @@ if [ "${1:-}" = "python" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "core.schema.a
   exec "$@"
 fi
 
+# Promotion evidence is image-local: the deploy owner may stage one validated
+# immutable bundle, while ordinary pre-promotion images retain no active input.
+# Never accept a Fly-level or shared-host override because it could make old
+# code read a new bundle after rollback.
+promotion_receipt="/app/private/civibus/authority-promotion/authority-promotion-receipt.json"
+configured_promotion_receipt="${CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON:-}"
+if [ -e "$promotion_receipt" ] || [ -L "$promotion_receipt" ]; then
+  if [ -n "$configured_promotion_receipt" ] && [ "$configured_promotion_receipt" != "$promotion_receipt" ]; then
+    echo "civibus-api-entrypoint: conflicting authority promotion receipt path" >&2
+    exit 1
+  fi
+  test -f "$promotion_receipt" && test ! -L "$promotion_receipt" || {
+    echo "civibus-api-entrypoint: installed authority promotion receipt must be a regular non-symlink file" >&2
+    exit 1
+  }
+  export CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON="$promotion_receipt"
+else
+  if [ -n "$configured_promotion_receipt" ]; then
+    echo "civibus-api-entrypoint: configured authority promotion receipt is absent from this image" >&2
+    exit 1
+  fi
+  unset CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON
+fi
+
 # Use the venv's python directly (the Dockerfile prepends /app/.venv/bin
 # to PATH). DO NOT use `uv run` here — it re-syncs the venv on every
 # start, which fails as user `civibus` because the venv was created by

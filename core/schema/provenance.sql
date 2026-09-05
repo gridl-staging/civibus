@@ -23,6 +23,8 @@ CREATE TABLE core.data_source (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     domain          TEXT NOT NULL,           -- 'campaign_finance', 'property', 'corporate', etc.
     jurisdiction    TEXT,                    -- 'federal/fec', 'states/nc', 'states/nc/counties/durham'
+    filing_authority_type TEXT,              -- typed reporting authority; distinct from geography
+    filing_authority_code TEXT,              -- authority-owned code paired with filing_authority_type
     name            TEXT NOT NULL,           -- Human-readable: "FEC Bulk Individual Contributions"
     source_url      TEXT NOT NULL,           -- Base URL or download page
     source_format   TEXT,                    -- csv, json, api, html, pdf
@@ -33,12 +35,83 @@ CREATE TABLE core.data_source (
     record_count    BIGINT,                 -- Total records ingested from this source
     notes           TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_data_source_filing_authority_pair
+        CHECK ((filing_authority_type IS NULL) = (filing_authority_code IS NULL)),
+    CONSTRAINT ck_data_source_filing_authority_type
+        CHECK (
+            filing_authority_type IS NULL
+            OR filing_authority_type IN (
+                'federal', 'state', 'county', 'municipality',
+                'school_district', 'special_district', 'named_other'
+            )
+        ),
+    CONSTRAINT ck_data_source_filing_authority_code_nonblank
+        CHECK (filing_authority_code IS NULL OR btrim(filing_authority_code) <> ''),
+    CONSTRAINT ck_campaign_finance_data_source_has_filing_authority
+        CHECK (
+            domain <> 'campaign_finance'
+            OR (filing_authority_type IS NOT NULL AND filing_authority_code IS NOT NULL)
+        )
 );
 
 CREATE INDEX idx_data_source_domain ON core.data_source (domain);
 CREATE INDEX idx_data_source_jurisdiction ON core.data_source (jurisdiction);
-CREATE UNIQUE INDEX idx_data_source_dedup ON core.data_source (domain, jurisdiction, name);
+CREATE UNIQUE INDEX idx_data_source_dedup
+    ON core.data_source (domain, filing_authority_type, filing_authority_code, name)
+    NULLS NOT DISTINCT;
+
+-- Materialize typed identity for the finite set of legacy jurisdiction spellings
+-- still used by existing source-package writers. Unknown and partially supplied
+-- scopes remain NULL/invalid and are refused by the table constraints below.
+CREATE OR REPLACE FUNCTION core.populate_campaign_finance_filing_authority()
+RETURNS TRIGGER AS $$
+DECLARE
+    scope_type TEXT;
+    scope_code TEXT;
+BEGIN
+    IF NEW.domain <> 'campaign_finance' THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.filing_authority_type IS NULL AND NEW.filing_authority_code IS NULL THEN
+        IF lower(btrim(NEW.jurisdiction)) = 'federal' THEN
+            NEW.filing_authority_type := 'federal';
+            NEW.filing_authority_code := 'FEC';
+        ELSIF position('/' IN NEW.jurisdiction) > 0 THEN
+            scope_type := lower(btrim(split_part(NEW.jurisdiction, '/', 1)));
+            scope_code := upper(btrim(substr(NEW.jurisdiction, position('/' IN NEW.jurisdiction) + 1)));
+            scope_type := CASE scope_type
+                WHEN 'states' THEN 'state'
+                WHEN 'counties' THEN 'county'
+                WHEN 'city' THEN 'municipality'
+                WHEN 'cities' THEN 'municipality'
+                WHEN 'schools' THEN 'school_district'
+                WHEN 'school' THEN 'school_district'
+                WHEN 'special' THEN 'special_district'
+                ELSE scope_type
+            END;
+            IF scope_type IN (
+                'federal', 'state', 'county', 'municipality',
+                'school_district', 'special_district', 'named_other'
+            ) AND scope_code <> '' THEN
+                NEW.filing_authority_type := scope_type;
+                NEW.filing_authority_code := scope_code;
+            END IF;
+        END IF;
+    ELSIF NEW.filing_authority_type IS NOT NULL AND NEW.filing_authority_code IS NOT NULL THEN
+        NEW.filing_authority_type := lower(btrim(NEW.filing_authority_type));
+        NEW.filing_authority_code := upper(btrim(NEW.filing_authority_code));
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_data_source_campaign_finance_filing_authority
+    BEFORE INSERT OR UPDATE OF domain, jurisdiction, filing_authority_type, filing_authority_code
+    ON core.data_source
+    FOR EACH ROW EXECUTE FUNCTION core.populate_campaign_finance_filing_authority();
 
 -- ============================================================================
 -- Refresh Run Ledger
@@ -53,6 +126,7 @@ CREATE TABLE core.refresh_run (
     domain           TEXT NOT NULL,
     jurisdiction     TEXT NOT NULL,
     data_source_names TEXT[] NOT NULL DEFAULT '{}',
+    execution_origin TEXT NOT NULL DEFAULT 'legacy_unknown',
     pull_status      TEXT NOT NULL CHECK (pull_status IN ('crashed', 'empty', 'degraded', 'failed', 'success', 'running')),
     started_at       TIMESTAMPTZ NOT NULL,
     completed_at     TIMESTAMPTZ,
@@ -70,7 +144,9 @@ CREATE TABLE core.refresh_run (
     -- with no completion timestamp. Mirrored by
     -- migrations/2026_08_23_refresh_run_running_status.sql.
     CONSTRAINT refresh_run_running_completed_at_check
-        CHECK ((pull_status = 'running') = (completed_at IS NULL))
+        CHECK ((pull_status = 'running') = (completed_at IS NULL)),
+    CONSTRAINT refresh_run_execution_origin_check
+        CHECK (execution_origin IN ('scheduled', 'operator_attended', 'legacy_unknown'))
 );
 
 -- Plain btrees, not partial indexes on WHERE completed_at IS NOT NULL: btrees
@@ -114,9 +190,50 @@ CREATE UNIQUE INDEX idx_source_record_active_key
     ON core.source_record (data_source_id, source_record_key)
     WHERE superseded_by IS NULL AND source_record_key IS NOT NULL;
 
-ALTER TABLE core.source_record
-    ADD CONSTRAINT fk_source_record_superseded
-    FOREIGN KEY (superseded_by) REFERENCES core.source_record(id);
+-- This append-heavy table commonly receives bounded six-figure bulk loads.
+-- Avoid launching VACUUM/ANALYZE inside those loads, while retaining an
+-- aggressive 5% scale factor once the table is established.
+ALTER TABLE core.source_record SET (
+    autovacuum_analyze_threshold = 250000,
+    autovacuum_analyze_scale_factor = 0.05,
+    autovacuum_vacuum_insert_threshold = 250000,
+    autovacuum_vacuum_insert_scale_factor = 0.05
+);
+
+CREATE OR REPLACE FUNCTION core.enforce_source_record_supersession_scope()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM new_rows AS source_record
+        LEFT JOIN core.source_record AS successor
+          ON successor.id = source_record.superseded_by
+        WHERE source_record.superseded_by IS NOT NULL
+          AND (
+              successor.id IS NULL
+              OR successor.data_source_id IS DISTINCT FROM source_record.data_source_id
+          )
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '23503',
+            CONSTRAINT = 'fk_source_record_superseded_scope',
+            MESSAGE = 'source-record supersession must remain within one data source';
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_source_record_supersession_scope_insert
+AFTER INSERT ON core.source_record
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT
+EXECUTE FUNCTION core.enforce_source_record_supersession_scope();
+
+CREATE TRIGGER trg_source_record_supersession_scope_update
+AFTER UPDATE ON core.source_record
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT
+EXECUTE FUNCTION core.enforce_source_record_supersession_scope();
 
 -- Cross-file FK: entity_address.source_record_id (defined in entities.sql, resolved here)
 ALTER TABLE core.entity_address

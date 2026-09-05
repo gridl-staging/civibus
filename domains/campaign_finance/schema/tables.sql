@@ -42,7 +42,9 @@ CREATE EXTENSION IF NOT EXISTS btree_gin;
 
 CREATE TABLE cf.committee (
     id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    fec_committee_id  TEXT NOT NULL UNIQUE,
+    fec_committee_id  TEXT NOT NULL,
+    data_source_id    UUID REFERENCES core.data_source(id),
+    native_committee_id TEXT,
     name             TEXT NOT NULL,
     organization_id  UUID REFERENCES core.organization(id),
     committee_type   TEXT,
@@ -59,10 +61,19 @@ CREATE TABLE cf.committee (
     CONSTRAINT ck_committee_fec_fec_id_format
         CHECK (fec_committee_id ~ '^C[0-9]{8}$'),
     CONSTRAINT ck_committee_state_len
-        CHECK (state IS NULL OR char_length(state) = 2)
+        CHECK (state IS NULL OR char_length(state) = 2),
+    CONSTRAINT ck_committee_authority_native_pair
+        CHECK ((data_source_id IS NULL) = (native_committee_id IS NULL)),
+    CONSTRAINT ck_committee_native_id_nonblank
+        CHECK (native_committee_id IS NULL OR btrim(native_committee_id) <> '')
 );
 
--- fec_committee_id already has an implicit index from UNIQUE constraint
+CREATE UNIQUE INDEX uq_committee_legacy_fec_id
+    ON cf.committee (fec_committee_id)
+    WHERE data_source_id IS NULL;
+CREATE UNIQUE INDEX uq_committee_authority_native_id
+    ON cf.committee (data_source_id, native_committee_id)
+    WHERE data_source_id IS NOT NULL;
 CREATE INDEX idx_committee_name_trgm ON cf.committee USING GIN (name gin_trgm_ops);
 CREATE INDEX idx_committee_state ON cf.committee (state);
 CREATE INDEX idx_committee_type ON cf.committee (committee_type);
@@ -281,7 +292,9 @@ CREATE INDEX idx_stage4_resume_checkpoint_updated_at
 
 CREATE TABLE cf.candidate (
     id                       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    fec_candidate_id         TEXT NOT NULL UNIQUE,
+    fec_candidate_id         TEXT NOT NULL,
+    data_source_id           UUID REFERENCES core.data_source(id),
+    native_candidate_id      TEXT,
     name                     TEXT NOT NULL,
     person_id                UUID REFERENCES core.person(id),
     party                    TEXT,
@@ -310,10 +323,19 @@ CREATE TABLE cf.candidate (
     CONSTRAINT ck_candidate_incumbent_challenge
         CHECK (incumbent_challenge IS NULL OR incumbent_challenge IN ('I', 'C', 'O')),
     CONSTRAINT ck_candidate_fec_candidate_id_format
-        CHECK (fec_candidate_id ~ '^[HSP][0-9][A-Z0-9]{2}[0-9]{5}$')
+        CHECK (fec_candidate_id ~ '^[HSP][0-9][A-Z0-9]{2}[0-9]{5}$'),
+    CONSTRAINT ck_candidate_authority_native_pair
+        CHECK ((data_source_id IS NULL) = (native_candidate_id IS NULL)),
+    CONSTRAINT ck_candidate_native_id_nonblank
+        CHECK (native_candidate_id IS NULL OR btrim(native_candidate_id) <> '')
 );
 
--- fec_candidate_id already has an implicit index from UNIQUE constraint
+CREATE UNIQUE INDEX uq_candidate_legacy_fec_id
+    ON cf.candidate (fec_candidate_id)
+    WHERE data_source_id IS NULL;
+CREATE UNIQUE INDEX uq_candidate_authority_native_id
+    ON cf.candidate (data_source_id, native_candidate_id)
+    WHERE data_source_id IS NOT NULL;
 CREATE INDEX idx_candidate_office_filter ON cf.candidate (office, state, district);
 CREATE INDEX idx_candidate_party_filter ON cf.candidate (party);
 CREATE INDEX idx_candidate_principal_committee ON cf.candidate (principal_committee_id);
@@ -562,7 +584,9 @@ ALTER TABLE cf.contribution_limit_rules
 
 CREATE TABLE cf.filing (
     id                        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    filing_fec_id             TEXT NOT NULL UNIQUE,
+    filing_fec_id             TEXT NOT NULL,
+    data_source_id            UUID REFERENCES core.data_source(id),
+    native_filing_id          TEXT,
     committee_id              UUID NOT NULL REFERENCES cf.committee(id),
     candidate_id              UUID REFERENCES cf.candidate(id),
     election_id               UUID REFERENCES cf.election(id),
@@ -594,9 +618,19 @@ CREATE TABLE cf.filing (
         CHECK (
             amended_from_filing_id IS NULL
             OR amendment_indicator IN ('A', 'T')
-        )
+        ),
+    CONSTRAINT ck_filing_authority_native_pair
+        CHECK ((data_source_id IS NULL) = (native_filing_id IS NULL)),
+    CONSTRAINT ck_filing_native_id_nonblank
+        CHECK (native_filing_id IS NULL OR btrim(native_filing_id) <> '')
 );
 
+CREATE UNIQUE INDEX uq_filing_legacy_fec_id
+    ON cf.filing (filing_fec_id)
+    WHERE data_source_id IS NULL;
+CREATE UNIQUE INDEX uq_filing_authority_native_id
+    ON cf.filing (data_source_id, native_filing_id)
+    WHERE data_source_id IS NOT NULL;
 CREATE INDEX idx_filing_committee_lookup ON cf.filing (committee_id);
 CREATE INDEX idx_filing_candidate_lookup ON cf.filing (candidate_id) WHERE candidate_id IS NOT NULL;
 CREATE INDEX idx_filing_election_lookup ON cf.filing (election_id) WHERE election_id IS NOT NULL;
@@ -609,6 +643,8 @@ CREATE TABLE cf.transaction (
     id                         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     filing_id                  UUID NOT NULL REFERENCES cf.filing(id),
     committee_id               UUID NOT NULL REFERENCES cf.committee(id),
+    data_source_id             UUID REFERENCES core.data_source(id),
+    native_transaction_id      TEXT,
     transaction_type           TEXT NOT NULL,
     transaction_identifier      TEXT,
     back_ref_transaction_id    TEXT,
@@ -650,12 +686,19 @@ CREATE TABLE cf.transaction (
     CONSTRAINT ck_transaction_contributor_state_len
         CHECK (contributor_state IS NULL OR char_length(contributor_state) = 2),
     CONSTRAINT ck_transaction_memo_flag
-        CHECK (is_memo = COALESCE(memo_code IN ('X', 'x'), FALSE))
+        CHECK (is_memo = COALESCE(memo_code IN ('X', 'x'), FALSE)),
+    CONSTRAINT ck_transaction_authority_native_pair
+        CHECK ((data_source_id IS NULL) = (native_transaction_id IS NULL)),
+    CONSTRAINT ck_transaction_native_id_nonblank
+        CHECK (native_transaction_id IS NULL OR btrim(native_transaction_id) <> '')
 );
 
 CREATE UNIQUE INDEX uq_transaction_sub_id
     ON cf.transaction (sub_id)
-    WHERE sub_id IS NOT NULL;
+    WHERE data_source_id IS NULL AND sub_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_transaction_authority_native_id
+    ON cf.transaction (data_source_id, native_transaction_id)
+    WHERE data_source_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_filing_transaction_identifier
     ON cf.transaction (filing_id, transaction_identifier)
     WHERE transaction_identifier IS NOT NULL;
@@ -674,6 +717,120 @@ CREATE INDEX idx_transaction_support_oppose
 CREATE INDEX idx_transaction_source_record_id
     ON cf.transaction (source_record_id)
     WHERE source_record_id IS NOT NULL;
+
+-- Scope checks use transition tables so a bulk statement pays one set-wise
+-- validation instead of maintaining redundant (id, data_source_id) indexes and
+-- evaluating a second FK for every row. The existing single-column FKs continue
+-- to own referenced-row existence.
+CREATE OR REPLACE FUNCTION cf.enforce_source_record_scope()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM new_rows AS owned_row
+        JOIN core.source_record AS source_record
+          ON source_record.id = owned_row.source_record_id
+        WHERE owned_row.data_source_id IS NOT NULL
+          AND owned_row.source_record_id IS NOT NULL
+          AND source_record.data_source_id IS DISTINCT FROM owned_row.data_source_id
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '23503',
+            CONSTRAINT = 'fk_campaign_finance_source_scope',
+            MESSAGE = 'campaign-finance row and source record must share one data source';
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION cf.enforce_filing_amendment_scope()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM new_rows AS filing
+        JOIN cf.filing AS original
+          ON original.id = filing.amended_from_filing_id
+        WHERE filing.data_source_id IS NOT NULL
+          AND filing.amended_from_filing_id IS NOT NULL
+          AND original.data_source_id IS DISTINCT FROM filing.data_source_id
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '23503',
+            CONSTRAINT = 'fk_filing_amended_from_scope',
+            MESSAGE = 'filing amendments must remain within one data source';
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION cf.enforce_transaction_amendment_scope()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM new_rows AS transaction
+        JOIN cf.transaction AS amendment
+          ON amendment.id = transaction.amended_by_transaction_id
+        WHERE transaction.data_source_id IS NOT NULL
+          AND transaction.amended_by_transaction_id IS NOT NULL
+          AND amendment.data_source_id IS DISTINCT FROM transaction.data_source_id
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '23503',
+            CONSTRAINT = 'fk_transaction_amended_by_scope',
+            MESSAGE = 'transaction amendments must remain within one data source';
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+DECLARE
+    owner_table TEXT;
+BEGIN
+    FOREACH owner_table IN ARRAY ARRAY['committee', 'candidate', 'filing', 'transaction']
+    LOOP
+        EXECUTE format(
+            'CREATE TRIGGER trg_%1$s_source_scope_insert '
+            'AFTER INSERT ON cf.%1$I REFERENCING NEW TABLE AS new_rows '
+            'FOR EACH STATEMENT EXECUTE FUNCTION cf.enforce_source_record_scope()',
+            owner_table
+        );
+        EXECUTE format(
+            'CREATE TRIGGER trg_%1$s_source_scope_update '
+            'AFTER UPDATE ON cf.%1$I REFERENCING NEW TABLE AS new_rows '
+            'FOR EACH STATEMENT EXECUTE FUNCTION cf.enforce_source_record_scope()',
+            owner_table
+        );
+    END LOOP;
+END;
+$$;
+
+CREATE TRIGGER trg_filing_amendment_scope_insert
+AFTER INSERT ON cf.filing
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT
+EXECUTE FUNCTION cf.enforce_filing_amendment_scope();
+
+CREATE TRIGGER trg_filing_amendment_scope_update
+AFTER UPDATE ON cf.filing
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT
+EXECUTE FUNCTION cf.enforce_filing_amendment_scope();
+
+CREATE TRIGGER trg_transaction_amendment_scope_insert
+AFTER INSERT ON cf.transaction
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT
+EXECUTE FUNCTION cf.enforce_transaction_amendment_scope();
+
+CREATE TRIGGER trg_transaction_amendment_scope_update
+AFTER UPDATE ON cf.transaction
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT
+EXECUTE FUNCTION cf.enforce_transaction_amendment_scope();
+
 -- search_donors(by=name|employer|zip) needs fuzzy text lookup on names/employers
 -- and exact normalized 5-digit ZIP-prefix filtering without replacing donor ER indexes.
 CREATE INDEX idx_transaction_contributor_name_lower_trgm

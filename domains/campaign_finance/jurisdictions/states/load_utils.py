@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import TypeVar
+from functools import partial
+from typing import Any, TypeVar
 from uuid import UUID
 
 import psycopg
@@ -32,6 +33,21 @@ class LoadResult:
     elapsed_seconds: float
 
 
+@dataclass(slots=True)
+class RelationalLoadCounts:
+    """Row outcomes a no-savepoint relational loop can actually observe.
+
+    Deliberately narrower than :class:`LoadResult`: the loop cannot know
+    ``quarantined``, ``superseded``, or ``elapsed_seconds``, so it must not
+    invent zeros for them and become a second source of truth for load totals.
+    Callers map these counts into whatever result type they own.
+    """
+
+    inserted: int = 0
+    skipped: int = 0
+    errors: int = 0
+
+
 # ---------------------------------------------------------------------------
 # Data-source lookup / upsert helpers
 # ---------------------------------------------------------------------------
@@ -42,19 +58,23 @@ def select_data_source_id(
     domain: str,
     jurisdiction: str | None,
     name: str,
+    *,
+    filing_authority_type: str | None = None,
+    filing_authority_code: str | None = None,
 ) -> UUID | None:
-    """Look up a data source by (domain, jurisdiction, name) and return its UUID, or None."""
+    """Look up a data source by typed authority/source identity."""
     with conn.cursor() as cursor:
         cursor.execute(
             """
             SELECT id
             FROM core.data_source
             WHERE domain = %s
-              AND jurisdiction IS NOT DISTINCT FROM %s
+              AND filing_authority_type IS NOT DISTINCT FROM %s
+              AND filing_authority_code IS NOT DISTINCT FROM %s
               AND name = %s
             LIMIT 1
             """,
-            (domain, jurisdiction, name),
+            (domain, filing_authority_type, filing_authority_code, name),
         )
         row = cursor.fetchone()
 
@@ -104,7 +124,14 @@ def reconcile_existing_data_source(conn: psycopg.Connection, data_source_id: UUI
 
 
 def ensure_data_source(conn: psycopg.Connection, data_source: DataSource) -> UUID:
-    existing_id = select_data_source_id(conn, data_source.domain, data_source.jurisdiction, data_source.name)
+    existing_id = select_data_source_id(
+        conn,
+        data_source.domain,
+        data_source.jurisdiction,
+        data_source.name,
+        filing_authority_type=data_source.filing_authority_type,
+        filing_authority_code=data_source.filing_authority_code,
+    )
     if existing_id is not None:
         reconcile_existing_data_source(conn, existing_id, data_source)
         return existing_id
@@ -114,7 +141,14 @@ def ensure_data_source(conn: psycopg.Connection, data_source: DataSource) -> UUI
         return inserted_id
 
     # Concurrent insert won the race — the row must exist now.
-    existing_id = select_data_source_id(conn, data_source.domain, data_source.jurisdiction, data_source.name)
+    existing_id = select_data_source_id(
+        conn,
+        data_source.domain,
+        data_source.jurisdiction,
+        data_source.name,
+        filing_authority_type=data_source.filing_authority_type,
+        filing_authority_code=data_source.filing_authority_code,
+    )
     if existing_id is not None:
         reconcile_existing_data_source(conn, existing_id, data_source)
         return existing_id
@@ -156,6 +190,7 @@ def try_row_without_savepoint(
     *,
     manages_outer_transaction: bool,
     label: str = "row",
+    fatal_exceptions: tuple[type[BaseException], ...] = (),
 ) -> tuple[_RowT | None, bool]:
     """Execute a row-level load operation WITHOUT per-row savepoints.
 
@@ -170,6 +205,11 @@ def try_row_without_savepoint(
     Rolls back, re-opens if we manage the transaction, and returns (None, True).
     The caller should account for losing uncommitted rows in the current batch.
 
+    Types listed in ``fatal_exceptions`` are re-raised untouched ahead of both
+    handlers, so a jurisdiction's typed drift error aborts the load instead of
+    being logged and counted as an ordinary row failure. An empty tuple (the
+    default) never matches, leaving existing callers unchanged.
+
     Returns:
         (result, was_db_error) — result is None on failure, bool flag indicates
         whether the failure was a DB error that caused a transaction rollback.
@@ -178,6 +218,9 @@ def try_row_without_savepoint(
         if manages_outer_transaction:
             ensure_transaction_open(conn)
         return row_callable(), False
+    except fatal_exceptions:
+        # Typed fatal drift: escapes untouched, ahead of both handlers below.
+        raise
     except psycopg.Error:
         # DB error — transaction is now in error state. Must rollback.
         LOGGER.exception("DB error loading %s — rolling back current batch", label)
@@ -187,6 +230,134 @@ def try_row_without_savepoint(
         # Python-level error (extraction, validation). Transaction still valid.
         LOGGER.exception("Failed loading %s", label)
         return None, False
+
+
+def _resolve_and_link_relational_row(
+    conn: psycopg.Connection,
+    row: Mapping[str, Any],
+    *,
+    source_record_key_for_row: Callable[[Mapping[str, Any]], Any],
+    resolve_source_record_id: Callable[[psycopg.Connection, Any], UUID | None],
+    link_row: Callable[[psycopg.Connection, Mapping[str, Any], UUID], Any],
+) -> bool:
+    """Return True when the row linked, False when it was skipped.
+
+    Skipping covers both a missing source record and a link callback that
+    declined the row. Failures propagate so try_row_without_savepoint() can
+    classify them.
+    """
+    source_record_id = resolve_source_record_id(conn, source_record_key_for_row(row))
+    if source_record_id is None:
+        return False
+    return bool(link_row(conn, row, source_record_id))
+
+
+def load_relational_rows_without_savepoints(  # noqa: PLR0913 - hook seam pinned by the IN/TX delegation contract
+    conn: psycopg.Connection,
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    source_record_key_for_row: Callable[[Mapping[str, Any]], Any],
+    resolve_source_record_id: Callable[[psycopg.Connection, Any], UUID | None],
+    link_row: Callable[[psycopg.Connection, Mapping[str, Any], UUID], Any],
+    batch_size: int,
+    label: str = "row",
+    fatal_exceptions: tuple[type[BaseException], ...] = (),
+    on_db_error_recovery: Callable[..., None] | None = None,
+    on_managed_commit_reset: Callable[..., None] | None = None,
+    caller_owned_rollback_error: Callable[..., BaseException] | None = None,
+) -> RelationalLoadCounts:
+    """Iterate relational rows without per-row savepoints, owning only transaction cadence.
+
+    This is the single owner of batch/terminal commit cadence, lost-success
+    accounting after a database rollback, typed fatal passthrough, and the
+    caller-owned rollback failure. Source-key construction, source-record
+    lookup, row linking, row limiting, and jurisdiction recovery policy stay
+    with the caller, supplied through the callbacks and hooks above.
+
+    Ownership of the transaction is decided once from the entry status: an
+    already-open transaction belongs to the caller and is never begun,
+    committed, or reset here.
+    """
+    manages_outer_transaction = conn.info.transaction_status == TransactionStatus.IDLE
+    counts = RelationalLoadCounts()
+    processed_count = 0
+    since_commit_inserted = 0
+
+    def _commit_managed_batch(reason: str) -> None:
+        """Commit a managed batch, then notify — only when a commit really happened."""
+        nonlocal since_commit_inserted
+        if not manages_outer_transaction or conn.info.transaction_status == TransactionStatus.IDLE:
+            return
+        commit_managed_transaction(conn, manages_outer_transaction)
+        since_commit_inserted = 0
+        if on_managed_commit_reset is not None:
+            on_managed_commit_reset(processed_count=processed_count, reason=reason)
+
+    def _recover_from_managed_rollback(failed_row: Mapping[str, Any]) -> None:
+        """Re-open jurisdiction state, then charge the batch's lost successes as errors."""
+        nonlocal since_commit_inserted
+        if on_db_error_recovery is not None:
+            on_db_error_recovery(conn, failed_row=failed_row)
+        counts.inserted -= since_commit_inserted
+        counts.errors += since_commit_inserted + 1
+        since_commit_inserted = 0
+
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise TypeError(f"{label} must be a mapping, got {type(row).__name__}")
+
+        # Every yielded row advances the batch position, so a skipped or failed row
+        # at position 1,000 reaches the boundary commit exactly like a success does.
+        processed_count += 1
+        linked, was_db_error = try_row_without_savepoint(
+            conn,
+            partial(
+                _resolve_and_link_relational_row,
+                conn,
+                row,
+                source_record_key_for_row=source_record_key_for_row,
+                resolve_source_record_id=resolve_source_record_id,
+                link_row=link_row,
+            ),
+            manages_outer_transaction=manages_outer_transaction,
+            label=label,
+            fatal_exceptions=fatal_exceptions,
+        )
+
+        if was_db_error:
+            if not manages_outer_transaction:
+                raise _caller_owned_rollback_failure(caller_owned_rollback_error, failed_row=row, label=label)
+            _recover_from_managed_rollback(row)
+            continue
+        if linked is None:
+            counts.errors += 1
+        elif linked:
+            counts.inserted += 1
+            since_commit_inserted += 1
+        else:
+            counts.skipped += 1
+
+        if processed_count % batch_size == 0:
+            _commit_managed_batch("batch_boundary")
+
+    _commit_managed_batch("terminal")
+    return counts
+
+
+def _caller_owned_rollback_failure(
+    caller_owned_rollback_error: Callable[..., BaseException] | None,
+    *,
+    failed_row: Mapping[str, Any],
+    label: str,
+) -> BaseException:
+    """Build the abort raised when a DB error rolled back a transaction we do not own.
+
+    The caller's uncommitted work is already gone, so this path always fails
+    loud rather than continuing with the next row.
+    """
+    if caller_owned_rollback_error is not None:
+        return caller_owned_rollback_error(failed_row=failed_row)
+    return RuntimeError(f"{label} DB error rolled back the caller-owned transaction; aborting load")
 
 
 def link_entity_source_and_optional_mailing_address(

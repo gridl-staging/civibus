@@ -40,7 +40,8 @@ export const STATIC_PATHS = [
   "/data-sources",
   "/about",
   "/contact",
-  "/privacy"
+  "/privacy",
+  "/methodology"
 ];
 
 type ListResponse<TItem> = {
@@ -93,8 +94,13 @@ export function buildSitemapIndexXml(
   ].join("\n");
 }
 
-export function canonicalOrigin(): string | undefined {
-  return env.PUBLIC_ORIGIN || undefined;
+export function canonicalOrigin(): string {
+  // A sitemap is a crawler instruction, so a request-controlled Host header is
+  // not a safe fallback when the trusted public origin is misconfigured.
+  if (!env.PUBLIC_ORIGIN) {
+    throw new Error("Sitemap generation requires PUBLIC_ORIGIN.");
+  }
+  return env.PUBLIC_ORIGIN;
 }
 
 export async function buildSitemapIndexPaths(api: ApiClient): Promise<string[]> {
@@ -189,6 +195,15 @@ export function parseShardParams(params: Record<string, string | undefined>): {
     return null;
   }
   const parsedPage = Number(page);
+  // A shard URL must identify one exact backend window. Reject pages that
+  // round during parsing or whose exclusive end offset cannot be represented
+  // exactly; otherwise distinct URLs can alias or pagination can stop advancing.
+  if (
+    !Number.isSafeInteger(parsedPage) ||
+    !Number.isSafeInteger((parsedPage + 1) * SITEMAP_SHARD_SIZE)
+  ) {
+    return null;
+  }
   // Federal-first people and upcoming contests are single bounded shards, so
   // nonzero pages are not "empty success" cases: they are invalid sitemap
   // routes, and answering 200 would invite crawlers to walk them forever.

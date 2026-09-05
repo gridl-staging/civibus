@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
 import psycopg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_db
 from api.models import (
@@ -20,16 +21,13 @@ from api.queries import (
     fetch_er_cluster_list,
     fetch_er_summary,
 )
-from api.routes.validation import build_query_params_dependency
 
 router = APIRouter()
-
-_build_cluster_list_params = build_query_params_dependency(ERClusterListParams)
 
 
 @router.get("/er/clusters", response_model=list[ERClusterSummaryResponse])
 def list_er_clusters(
-    params: ERClusterListParams = Depends(_build_cluster_list_params),
+    params: Annotated[ERClusterListParams, Query()],
     conn: psycopg.Connection = Depends(get_db),
 ) -> list[ERClusterSummaryResponse]:
     cluster_rows = fetch_er_cluster_list(conn, params)

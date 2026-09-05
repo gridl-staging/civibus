@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from api.models._validation import POSTGRES_SIGNED_BIGINT_MAX
+
 EREntityType = Literal["person", "organization"]
 ERDecisionLabel = Literal["match", "probable_match", "possible_match", "no_match"]
 
@@ -13,7 +15,7 @@ ERDecisionLabel = Literal["match", "probable_match", "possible_match", "no_match
 class ERClusterListParams(BaseModel):
     entity_type: EREntityType | None = None
     limit: int = Field(default=50, ge=1, le=200)
-    offset: int = Field(default=0, ge=0)
+    offset: int = Field(default=0, ge=0, le=POSTGRES_SIGNED_BIGINT_MAX)
 
 
 class ClusterMemberResponse(BaseModel):

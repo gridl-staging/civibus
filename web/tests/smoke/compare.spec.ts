@@ -10,6 +10,7 @@ import {
   expectRealChartRender
 } from "./smoke-helpers";
 import {
+  accessibleDisclosureOfficeholders,
   compareExpectedChartScales,
   compareFixtureByCandidateSlug,
   compareMetricRows,
@@ -127,7 +128,7 @@ test.describe("officeholder compare fixture smoke", () => {
     await expect(page.getByLabel("Add officeholder")).toBeEnabled();
   });
 
-  test("duplicate, unknown, and over-cap URLs canonicalize without route errors", async ({
+  test("duplicate, malformed, unknown, and over-cap URLs canonicalize without route errors", async ({
     page
   }: {
     page: Page;
@@ -136,6 +137,20 @@ test.describe("officeholder compare fixture smoke", () => {
       `/compare?people=${delayedOfficeholder.id},${delayedOfficeholder.id}`
     );
     await expectPeopleQuery(page, [delayedOfficeholder.id]);
+    await expectComparePage(page);
+
+    await page.goto("/compare?people=not-a-uuid");
+    await expect(page).toHaveURL(/\/compare$/);
+    await expect(
+      page.getByText("Some requested officeholders could not be found and were removed.", {
+        exact: true
+      })
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("Choose at least two officeholders to compare campaign finance.", {
+        exact: true
+      })
+    ).toBeVisible();
     await expectComparePage(page);
 
     await page.goto(
@@ -159,6 +174,50 @@ test.describe("officeholder compare fixture smoke", () => {
       page.getByText("Only the first four officeholders can be compared at once.", { exact: true })
     ).toBeVisible();
     await expectComparePage(page);
+  });
+
+  test("all sixteen four-column chart disclosures have unique computed names", async ({
+    page
+  }: {
+    page: Page;
+  }) => {
+    const officeholders = [
+      delayedOfficeholder,
+      nationalOfficeholder,
+      ...accessibleDisclosureOfficeholders
+    ];
+    await page.goto(`/compare?people=${officeholders.map(({ id }) => id).join(",")}`);
+    await expectComparePage(page);
+
+    const chartTitles = [
+      ["monthly", "Itemized individual contributions by month"],
+      ["size", "Itemized contribution-size buckets"],
+      ["geography", "Geography"],
+      ["outside-spending", "Outside spending"]
+    ] as const;
+    const expectedNames = officeholders.flatMap((officeholder, columnIndex) =>
+      chartTitles.map(
+        ([, title]) =>
+          `View chart data: ${title} for ${officeholder.name} (comparison column ${columnIndex + 1}), 2026 cycle`
+      )
+    );
+    expect(expectedNames).toHaveLength(16);
+    expect(new Set(expectedNames).size).toBe(16);
+    await expect(
+      page.getByLabel("Comparison chart columns").getByText("View chart data", { exact: true })
+    ).toHaveCount(16);
+
+    for (const [columnIndex, officeholder] of officeholders.entries()) {
+      for (const [suffix, title] of chartTitles) {
+        const disclosure = page
+          .getByTestId(`compare-${officeholder.id}-${suffix}`)
+          .getByText("View chart data", { exact: true });
+        await expect(disclosure).toHaveText("View chart data");
+        await expect(disclosure).toHaveAccessibleName(
+          `View chart data: ${title} for ${officeholder.name} (comparison column ${columnIndex + 1}), 2026 cycle`
+        );
+      }
+    }
   });
 
   test("delayed money renders per-column skeletons before the settled comparison", async ({

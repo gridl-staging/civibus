@@ -79,10 +79,14 @@ def _build_schedule_b_filing(
     row: Mapping[str, object],
     committee_id: UUID,
     source_record_id: UUID,
+    data_source_id: UUID,
     amendment_indicator: str,
 ) -> Filing:
+    filing_fec_id = _require_text(row, "file_number")
     return Filing(
-        filing_fec_id=_require_text(row, "file_number"),
+        filing_fec_id=filing_fec_id,
+        data_source_id=data_source_id,
+        native_filing_id=filing_fec_id,
         committee_id=committee_id,
         report_type="schedule_b",
         amendment_indicator=amendment_indicator,
@@ -96,6 +100,7 @@ def _build_schedule_b_transaction(
     filing_id: UUID,
     committee_id: UUID,
     source_record_id: UUID,
+    data_source_id: UUID,
     source_record_key: str,
     amendment_indicator: str,
 ) -> Transaction:
@@ -110,6 +115,8 @@ def _build_schedule_b_transaction(
     return Transaction(
         filing_id=filing_id,
         committee_id=committee_id,
+        data_source_id=data_source_id,
+        native_transaction_id=source_record_key,
         transaction_type="Expenditure (Itemized)",
         transaction_identifier=transaction_identifier,
         sub_id=sub_id,
@@ -136,7 +143,11 @@ def _process_schedule_b_row(
     result: LoadResult,
 ) -> None:
     committee_fec_id = _require_text(mapped_row, "committee_id")
-    committee_id = find_committee_id_by_fec_id(conn, committee_fec_id)
+    committee_id = find_committee_id_by_fec_id(
+        conn,
+        committee_fec_id,
+        data_source_id=data_source_id,
+    )
     if committee_id is None:
         if not has_active_committee_master_source_record(
             conn,
@@ -166,6 +177,7 @@ def _process_schedule_b_row(
         row=mapped_row,
         committee_id=committee_id,
         source_record_id=source_record_id,
+        data_source_id=data_source_id,
         amendment_indicator=amendment_indicator,
     )
     filing_id = upsert_filing(conn, filing)
@@ -175,6 +187,7 @@ def _process_schedule_b_row(
         filing_id=filing_id,
         committee_id=committee_id,
         source_record_id=source_record_id,
+        data_source_id=data_source_id,
         source_record_key=source_record_key,
         amendment_indicator=amendment_indicator,
     )

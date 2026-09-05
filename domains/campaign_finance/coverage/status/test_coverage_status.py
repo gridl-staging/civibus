@@ -401,10 +401,7 @@ def test_covered_by_parent_member_missing_parent_registry_row_refuses_that_row()
     assert _refusals(report) == [
         Refusal(
             scope="CA_SAN_FRANCISCO",
-            reason=(
-                "covered_by_parent 'CA_SAN_FRANCISCO' has no resolvable parent coverage-registry row "
-                "for parent_jurisdiction_code 'CA'"
-            ),
+            reason="municipality 'CA_SAN_FRANCISCO' has no coverage-registry parent 'CA'",
             canonical_owner="coverage-registry",
         )
     ]

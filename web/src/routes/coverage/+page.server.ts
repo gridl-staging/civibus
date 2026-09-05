@@ -6,7 +6,7 @@ const COVERAGE_CACHE_CONTROL = "public, max-age=300, s-maxage=300, stale-while-r
 
 export const load: PageServerLoad = ({ locals, setHeaders }) =>
   withApiResponseErrorHandling(async () => {
-    setHeaders({ "cache-control": COVERAGE_CACHE_CONTROL });
     const coverageRows = await fetchCoverageRegistry(locals.api);
+    setHeaders({ "cache-control": COVERAGE_CACHE_CONTROL });
     return { coverageRows };
   }, "Backend coverage registry request failed.");

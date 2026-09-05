@@ -142,6 +142,34 @@ def test_main_fails_covered_by_parent_when_parent_does_not_cover_subs(
     assert "covers_sub_jurisdictions" in output.lower() or "covered_by_parent" in output.lower()
 
 
+def test_main_fails_municipality_with_non_state_parent(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    parent = _municipality_row_payload(code="CA_PARENT", parent="CA", decision="independent_target")
+    child = _municipality_row_payload(code="CA_CHILD", parent="CA_PARENT", decision="covered_by_parent")
+    registry_path = _write_registry(tmp_path / "registry.json", {"rows": [parent, child]})
+
+    exit_code = validate_registry.main(["--path", str(registry_path)])
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "must be a state" in output
+
+
+def test_main_allows_independent_target_parent_without_sub_jurisdiction_scope(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state_row = _base_row_payload("MN")
+    state_row["covers_sub_jurisdictions"] = False
+    child = _municipality_row_payload(code="MN_MINNEAPOLIS", parent="MN", decision="independent_target")
+    registry_path = _write_registry(tmp_path / "registry.json", {"rows": [state_row, child]})
+
+    exit_code = validate_registry.main(["--path", str(registry_path)])
+    output = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert "failed=0" in output
+
+
 def test_main_fails_browser_verified_independent_target_without_portal_url(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -155,3 +183,22 @@ def test_main_fails_browser_verified_independent_target_without_portal_url(
 
     assert exit_code == 1
     assert "municipal_portal_url" in output
+
+
+def test_main_refuses_unresolved_typed_authority_reference(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    row = _base_row_payload("SYNTH_STATE")
+    row["authority_relation"] = {
+        "relation": "inherited",
+        "authority": {"kind": "federal", "code": "SYNTH_MISSING_FEDERAL"},
+    }
+    registry_path = _write_registry(tmp_path / "registry.json", {"rows": [row]})
+
+    exit_code = validate_registry.main(["--path", str(registry_path)])
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "SYNTH_MISSING_FEDERAL" in output
+    assert "does not resolve" in output

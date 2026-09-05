@@ -125,14 +125,18 @@
     Candidates whose FEC-filed name cannot stand on its own as a public identity are
     left out of this list and stay reachable at their own candidate pages.
   </p>
-  <ListNavigationLoading routePath={CANDIDATES_PAGE_PATH} filterParams={["name", "state", "office", "sort"]} label="Updating results…" let:isFilterNavigation>
+  <ListNavigationLoading routePath={CANDIDATES_PAGE_PATH} filterParams={["name", "state", "office", "sort", "offset"]} label="Updating results…" let:isFilterNavigation>
     {#if isFilterNavigation}
-      <!-- Swap stale list results for a busy placeholder while the filtered
-           browse response streams in on the same route. -->
+      <!-- Swap stale list results for a busy placeholder while the next browse
+           response streams in on the same route. -->
       <SkeletonPanel label="Candidate results loading" lines={4} />
     {:else}
       {#if data.items.length === 0}
-        <p>No candidates found for the selected filters.</p>
+        {#if data.offset === 0}
+          <p>No candidates found for the selected filters.</p>
+        {:else}
+          <p>No candidates on this page.</p>
+        {/if}
       {:else}
         <ul class="campaign-list__items">
           {#each candidateItems as itemView (itemView.item.id)}
@@ -149,6 +153,11 @@
               <p class="campaign-list__money" data-testid="candidate-total-raised">
                 <span class="campaign-list__money-label">{itemView.presentation.totalRaisedLabel}</span>
                 <span class="campaign-list__money-value">{itemView.presentation.totalRaisedValue}</span>
+                {#if itemView.presentation.totalRaisedPeriodLabel !== null}
+                  <!-- Visible text keeps the qualifier available to sighted and
+                       assistive-technology users without tooltip or color dependence. -->
+                  <span class="campaign-list__money-period">{itemView.presentation.totalRaisedPeriodLabel}</span>
+                {/if}
               </p>
             </li>
           {/each}
@@ -219,6 +228,10 @@
 
   .campaign-list__money-value {
     font-variant-numeric: tabular-nums;
+  }
+
+  .campaign-list__money-period {
+    color: var(--text-secondary, #44515e);
   }
 
   .campaign-list__pagination {

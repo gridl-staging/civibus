@@ -16,6 +16,7 @@
  */
 import { withApiResponseErrorHandling } from "$lib/server/api/error";
 import { fetchContestCandidateMoney, fetchContestDetail } from "$lib/server/api/civic-detail";
+import { parseSelectedCycleQuery } from "$lib/server/selected_cycle_query";
 import {
   createGeometryByLevelRecord,
   fetchOptionalCivicGeometry,
@@ -27,15 +28,6 @@ import type { PageServerLoad } from "./$types";
 // most, so a short shared-cache window costs nothing in freshness and removes
 // the repeat-visit and crawler cost entirely. Matches /election/[date].
 const CONTEST_CACHE_CONTROL = "public, max-age=120, s-maxage=120, stale-while-revalidate=60";
-
-function parseSelectedCycleParam(value: string | null): number | undefined {
-  if (value === null || value.trim() === "") {
-    return undefined;
-  }
-
-  const parsed = Number(value);
-  return Number.isInteger(parsed) ? parsed : undefined;
-}
 
 /**
  * Derive the campaign-finance cycle from the contest's election date.
@@ -66,12 +58,9 @@ function parseElectionYearCycle(electionDate: string | null | undefined): number
 
 export const load: PageServerLoad = ({ params, locals, url, setHeaders }) =>
   withApiResponseErrorHandling(async () => {
-    setHeaders({ "cache-control": CONTEST_CACHE_CONTROL });
-
+    const requestedCycle = parseSelectedCycleQuery(url.searchParams);
     const contest = await fetchContestDetail(locals.api, { id: params.id });
-    const selectedCycle =
-      parseSelectedCycleParam(url.searchParams.get("cycle")) ??
-      parseElectionYearCycle(contest.election_date);
+    const selectedCycle = requestedCycle ?? parseElectionYearCycle(contest.election_date);
     const level = toCivicGeometryLevel(contest.electoral_division_type);
     const stateCode = contest.electoral_division_state?.toUpperCase() ?? null;
     const geometryByLevel = createGeometryByLevelRecord();
@@ -91,6 +80,7 @@ export const load: PageServerLoad = ({ params, locals, url, setHeaders }) =>
       geometryByLevel[level] = geometry;
     }
 
+    setHeaders({ "cache-control": CONTEST_CACHE_CONTROL });
     return {
       contest,
       geometryByLevel,

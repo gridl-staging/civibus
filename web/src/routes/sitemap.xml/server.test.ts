@@ -38,7 +38,8 @@ const STATIC_PATHS = [
   "/data-sources",
   "/about",
   "/contact",
-  "/privacy"
+  "/privacy",
+  "/methodology"
 ];
 const SITEMAP_PROTOCOL_NAMESPACE = "http://www.sitemaps.org/schemas/sitemap/0.9";
 
@@ -625,6 +626,67 @@ describe("GET /sitemap.xml bounded sitemap index", () => {
     ).rejects.toThrow(/pagination/i);
   });
 
+  it("rejects shard pages that cannot map to a unique safe backend offset window", async () => {
+    const requestJson = vi.fn();
+    const buildCampaignFinanceShardPaths = vi.fn(() => Promise.resolve([]));
+    const firstUnsafeShardPage = Math.floor(Number.MAX_SAFE_INTEGER / SITEMAP_SHARD_SIZE);
+    vi.resetModules();
+    vi.doMock("$lib/server/sitemap", async (importOriginal) => ({
+      ...((await importOriginal()) as typeof import("$lib/server/sitemap")),
+      buildCampaignFinanceShardPaths
+    }));
+    try {
+      const moduleUnderTest = await import("../sitemap-[kind]-[page].xml/+server");
+      const responses = await Promise.all(
+        [
+          String(firstUnsafeShardPage),
+          String(Number.MAX_SAFE_INTEGER),
+          "9007199254740992",
+          "9007199254740993",
+          `1${"0".repeat(309)}`
+        ].map((page) =>
+          moduleUnderTest.GET(
+            createRequestEvent(`https://civibus.org/sitemap-committee-${page}.xml`, requestJson, {
+              kind: "committee",
+              page
+            })
+          )
+        )
+      );
+
+      expect(responses.map((response) => response.status)).toEqual([404, 404, 404, 404, 404]);
+      expect(buildCampaignFinanceShardPaths).not.toHaveBeenCalled();
+      expect(requestJson).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("$lib/server/sitemap");
+      vi.resetModules();
+    }
+  });
+
+  it("keeps the final safe campaign-finance shard page valid", async () => {
+    const requestJson = vi.fn((path: string) => {
+      const offset = extractOffset(path);
+      return Promise.resolve({ items: [], has_next: false, offset, limit: 200 });
+    });
+    const finalSafeShardPage =
+      Math.floor(Number.MAX_SAFE_INTEGER / SITEMAP_SHARD_SIZE) - 1;
+    const response = await GET_KIND_SITEMAP(
+      createRequestEvent(
+        `https://civibus.org/sitemap-candidate-${finalSafeShardPage}.xml`,
+        requestJson,
+        { kind: "candidate", page: String(finalSafeShardPage) }
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(requestJson).toHaveBeenCalled();
+    expect(
+      requestJson.mock.calls.every(([path]) =>
+        Number.isSafeInteger(extractOffset(String(path)))
+      )
+    ).toBe(true);
+  });
+
   it("rejects empty sitemap pages that still claim a next page", async () => {
     const inconsistentRequestJson = vi.fn((path: string) => {
       const offset = extractOffset(path);
@@ -684,28 +746,34 @@ describe("GET /sitemap.xml bounded sitemap index", () => {
     expect(xml).not.toContain("/injected");
   });
 
-  it("falls back to the request origin when PUBLIC_ORIGIN is absent", async () => {
+  it("fails closed instead of emitting request-origin URLs when PUBLIC_ORIGIN is absent", async () => {
     vi.resetModules();
     vi.doMock("$env/dynamic/public", () => ({
       env: { PUBLIC_ORIGIN: "" }
     }));
     try {
       const indexModule = await import("./+server");
+      const kindModule = await import("../sitemap-[kind]-[page].xml/+server");
       const staticModule = await import("../sitemap-static.xml/+server");
       const requestJson = createEmptyListRequestJson();
+      const kindRequestJson = createPaginatedListRequestJson();
 
-      const indexResponse = await indexModule.GET(
-        createRequestEvent("https://dev.civibus.local/sitemap.xml", requestJson)
-      );
-      const staticResponse = await staticModule.GET(
-        createRequestEvent("https://dev.civibus.local/sitemap-static.xml", requestJson)
-      );
-
-      const indexXml = await expectXmlResponse(indexResponse);
-      const staticXml = await expectXmlResponse(staticResponse);
-      expect(indexXml).toContain("<loc>https://dev.civibus.local/sitemap-static.xml</loc>");
-      expect(staticXml).toContain("<loc>https://dev.civibus.local/</loc>");
-      expect(`${indexXml}\n${staticXml}`).not.toContain("civibus.org");
+      await expect(
+        indexModule.GET(createRequestEvent("https://attacker.example/sitemap.xml", requestJson))
+      ).rejects.toThrow("Sitemap generation requires PUBLIC_ORIGIN.");
+      await expect(
+        staticModule.GET(
+          createRequestEvent("https://attacker.example/sitemap-static.xml", requestJson)
+        )
+      ).rejects.toThrow("Sitemap generation requires PUBLIC_ORIGIN.");
+      await expect(
+        kindModule.GET(
+          createRequestEvent("https://attacker.example/sitemap-candidate-0.xml", kindRequestJson, {
+            kind: "candidate",
+            page: "0"
+          })
+        )
+      ).rejects.toThrow("Sitemap generation requires PUBLIC_ORIGIN.");
     } finally {
       vi.doUnmock("$env/dynamic/public");
       vi.resetModules();

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, localcontext
 from functools import lru_cache
 import json
 import re
@@ -18,7 +18,11 @@ from domains.campaign_finance.coverage.registry import (
     CoverageRegistryRow,
     load_registry,
 )
-from domains.campaign_finance.constants import FILING_BREAKDOWN_STORE_LIMIT as _FILING_BREAKDOWN_STORE_LIMIT
+from domains.campaign_finance.constants import (
+    FEC_BULK_DATA_SOURCE_DOMAIN as _FEC_BULK_DATA_SOURCE_DOMAIN,
+    FEC_BULK_DATA_SOURCE_JURISDICTION as _FEC_BULK_DATA_SOURCE_JURISDICTION,
+    FILING_BREAKDOWN_STORE_LIMIT as _FILING_BREAKDOWN_STORE_LIMIT,
+)
 from domains.campaign_finance.normalize.employers import industry_for_employer, is_junk_employer
 from domains.civics.constants import LAUNCH_SCOPE_USPS_STATES
 
@@ -1844,6 +1848,13 @@ class DonorSearchRollupUnavailableError(RuntimeError):
         super().__init__(f"Donor search rollup unavailable: {reason}")
 
 
+class InvalidCampaignFinanceMoneyError(ValueError):
+    """Raised when query money cannot satisfy the finite public contract."""
+
+    def __init__(self) -> None:
+        super().__init__("Campaign-finance money value must be finite")
+
+
 def _qualifying_transactions_cte(
     select_columns: str,
     *,
@@ -2393,7 +2404,8 @@ def _candidate_list_sql_template(sort: str, *, include_unsafe_identity: bool) ->
             c.district,
             c.total_receipts,
             c.total_disbursements,
-            c.cash_on_hand
+            c.cash_on_hand,
+            c.summary_coverage_end_date
         FROM cf.candidate c
         WHERE {{where_sql}}{identity_scope_sql}
         ORDER BY {page_order_by}
@@ -2412,6 +2424,7 @@ def _candidate_list_sql_template(sort: str, *, include_unsafe_identity: bool) ->
             page.state,
             page.district,
             page.total_receipts,
+            page.summary_coverage_end_date,
             {_SLUG_NORMALIZE_EXPR.format(value="page.name")} AS slug,
             {
         _candidate_identity_is_safe_expr(
@@ -2449,7 +2462,8 @@ def _candidate_list_sql_template(sort: str, *, include_unsafe_identity: bool) ->
         slug_counts.candidate_count = 1 AS slug_is_unique,
         filtered.identity_is_safe,
         filtered.has_official_total,
-        filtered.total_receipts
+        filtered.total_receipts,
+        filtered.summary_coverage_end_date
     FROM filtered_candidates filtered
     JOIN slug_counts
       ON slug_counts.slug = filtered.slug
@@ -3612,15 +3626,23 @@ def _has_schedule_e_activity(
     oppose_total: Decimal,
     support_count: int,
     oppose_count: int,
+    excluded_outlier_count: int = 0,
 ) -> bool:
-    """True when this candidate has qualifying Schedule E rows of its own.
+    """True when this response has qualifying Schedule E rows of its own.
 
     Sibling of ``_has_selected_cycle_fundraising_activity``. Owning this
     predicate separately lets callers skip the load-evidence probe on the
-    populated path without restating the condition, which would let the two
-    copies drift apart.
+    populated path without restating the condition. Outliers remain activity
+    evidence even though public aggregates exclude their dollar amounts and
+    displayed transaction count.
     """
-    return support_count > 0 or oppose_count > 0 or support_total != _MONEY_SCALE or oppose_total != _MONEY_SCALE
+    return (
+        support_count > 0
+        or oppose_count > 0
+        or excluded_outlier_count > 0
+        or support_total != _MONEY_SCALE
+        or oppose_total != _MONEY_SCALE
+    )
 
 
 def _schedule_e_coverage(
@@ -3629,15 +3651,16 @@ def _schedule_e_coverage(
     oppose_total: Decimal,
     support_count: int,
     oppose_count: int,
+    excluded_outlier_count: int = 0,
     has_load_evidence: bool,
 ) -> dict[str, str]:
-    """Classify one candidate's Schedule E aggregates into a coverage state.
+    """Classify one selected entity's Schedule E aggregates into a coverage state.
 
     Three states, three different true statements, and the product must never
     publish one of them while another is true:
 
     ``populated``
-        The candidate has qualifying Schedule E rows. Those rows are their own
+        The selected entity has qualifying Schedule E rows. Those rows are their own
         load evidence, so ``has_load_evidence`` cannot downgrade this branch.
     ``loaded_zero``
         Every aggregate is zero *and* Schedule E was loaded for this cycle
@@ -3661,6 +3684,7 @@ def _schedule_e_coverage(
         oppose_total=oppose_total,
         support_count=support_count,
         oppose_count=oppose_count,
+        excluded_outlier_count=excluded_outlier_count,
     ):
         return _candidate_money_coverage(
             activity_state="populated",
@@ -4787,14 +4811,20 @@ _CANDIDATE_IE_SUMMARIES_SQL = f"""
 # the FEC publishes independent expenditures as one bulk file per cycle, so
 # "was Schedule E loaded" is a fact about the file, and asking it per candidate
 # could only return that candidate's own row count — the very value we are
-# trying to interpret, not evidence about it.
+# trying to interpret, not evidence about it. The file-level fact is still
+# source-scoped: regional IE rows share this table but are not FEC load evidence.
 _SCHEDULE_E_WINDOW_LOAD_EVIDENCE_SQL = f"""
     SELECT EXISTS (
         SELECT 1
         FROM cf.transaction t
-        {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
+        JOIN core.source_record sr
+          ON sr.id = t.source_record_id AND sr.superseded_by IS NULL
+        JOIN core.data_source ds
+          ON ds.id = sr.data_source_id
         WHERE t.transaction_date >= %s
           AND t.transaction_date <= %s
+          AND ds.domain = %s
+          AND ds.jurisdiction = %s
           AND {_CANDIDATE_IE_QUALIFYING_PREDICATE_SQL}
     ) AS has_load_evidence
 """
@@ -4831,7 +4861,23 @@ _CANDIDATE_IE_OUTLIER_COUNT_SQL = f"""
 
 
 def _quantize_money(value: Any) -> Decimal:
-    return Decimal(value).quantize(_MONEY_SCALE)
+    try:
+        decimal_value = Decimal(value)
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise InvalidCampaignFinanceMoneyError from error
+    if not decimal_value.is_finite():
+        raise InvalidCampaignFinanceMoneyError
+
+    with localcontext() as context:
+        # The default Decimal precision is 28 digits, but PostgreSQL numeric
+        # values and the public Decimal contract have no matching magnitude
+        # cap. Include one extra digit for a carry caused by rounding.
+        required_precision = decimal_value.adjusted() - _MONEY_SCALE.as_tuple().exponent + 2
+        context.prec = max(context.prec, required_precision)
+        try:
+            return decimal_value.quantize(_MONEY_SCALE)
+        except InvalidOperation as error:
+            raise InvalidCampaignFinanceMoneyError from error
 
 
 def _quantize_money_fields(row: dict[str, Any], *field_names: str) -> None:
@@ -5618,7 +5664,7 @@ def schedule_e_window_has_load_evidence(
     conn: psycopg.Connection,
     selected_cycle: SelectedCycle | int | None = None,
 ) -> bool:
-    """True when any qualifying Schedule E row exists inside the cycle window.
+    """True when qualifying FEC Schedule E provenance exists inside the cycle window.
 
     This is the evidence that tells a *measured* zero apart from an unmeasured
     one. Cost is one indexed existence probe per request:
@@ -5626,14 +5672,22 @@ def schedule_e_window_has_load_evidence(
     even the negative answer — the case that cannot short-circuit on the first
     match — scans Schedule E volume rather than the whole transaction table.
 
-    Returns ``False`` whenever no such row exists, including on an empty
-    database. Absence of evidence must never read as evidence of a load.
+    Only active source records in the canonical federal/FEC jurisdiction qualify.
+    A candidate's own qualifying row can still prove its populated
+    branch, but an unbacked or regional row cannot certify the whole FEC window.
+    Returns ``False`` whenever no such row exists, including on an empty database.
+    Absence of evidence must never read as evidence of a load.
     """
     cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor() as cursor:
         cursor.execute(
             _SCHEDULE_E_WINDOW_LOAD_EVIDENCE_SQL,
-            (cycle.coverage_start_date, cycle.coverage_end_date),
+            (
+                cycle.coverage_start_date,
+                cycle.coverage_end_date,
+                _FEC_BULK_DATA_SOURCE_DOMAIN,
+                _FEC_BULK_DATA_SOURCE_JURISDICTION,
+            ),
         )
         evidence_row = cursor.fetchone()
     return bool(evidence_row[0]) if evidence_row is not None else False
@@ -5822,6 +5876,8 @@ _COMMITTEE_IE_TARGETS_SQL = f"""
       ON cand.id = t.recipient_candidate_id
     {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
     WHERE t.committee_id = %s
+      AND t.transaction_date >= %s
+      AND t.transaction_date <= %s
       AND t.support_oppose IS NOT NULL
       AND t.is_memo = FALSE
       AND t.amendment_indicator != 'T'
@@ -5850,10 +5906,10 @@ _COMMITTEE_IE_TOTALS_SQL = f"""
         COALESCE(SUM(t.amount) FILTER (WHERE t.support_oppose = 'O'), 0) AS oppose_total,
         COUNT(*)::integer AS ie_transaction_count
     FROM cf.transaction t
-    JOIN cf.candidate cand
-      ON cand.id = t.recipient_candidate_id
     {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
     WHERE t.committee_id = %s
+      AND t.transaction_date >= %s
+      AND t.transaction_date <= %s
       AND t.support_oppose IS NOT NULL
       AND t.is_memo = FALSE
       AND t.amendment_indicator != 'T'
@@ -5864,10 +5920,10 @@ _COMMITTEE_IE_TOTALS_SQL = f"""
 _COMMITTEE_IE_OUTLIER_COUNT_SQL = f"""
     SELECT COUNT(*)::integer AS excluded_outlier_count
     FROM cf.transaction t
-    JOIN cf.candidate cand
-      ON cand.id = t.recipient_candidate_id
     {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
     WHERE t.committee_id = %s
+      AND t.transaction_date >= %s
+      AND t.transaction_date <= %s
       AND t.support_oppose IS NOT NULL
       AND t.is_memo = FALSE
       AND t.amendment_indicator != 'T'
@@ -5886,6 +5942,8 @@ _COMMITTEE_IE_TARGET_SOURCES_SQL = f"""
         {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
         WHERE t.committee_id = %s
           AND t.recipient_candidate_id = ANY(%s)
+          AND t.transaction_date >= %s
+          AND t.transaction_date <= %s
           AND t.support_oppose IS NOT NULL
           AND t.is_memo = FALSE
           AND t.amendment_indicator != 'T'
@@ -5916,6 +5974,7 @@ def _fetch_committee_ie_target_sources(
     *,
     committee_id: UUID,
     candidate_ids: list[UUID],
+    selected_cycle: SelectedCycle,
 ) -> dict[UUID, list[dict[str, Any]]]:
     if not candidate_ids:
         return {}
@@ -5924,7 +5983,13 @@ def _fetch_committee_ie_target_sources(
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             _COMMITTEE_IE_TARGET_SOURCES_SQL,
-            (committee_id, candidate_ids, CANDIDATE_IE_OUTLIER_CEILING),
+            (
+                committee_id,
+                candidate_ids,
+                selected_cycle.coverage_start_date,
+                selected_cycle.coverage_end_date,
+                CANDIDATE_IE_OUTLIER_CEILING,
+            ),
         )
         source_rows = list(cursor.fetchall())
 
@@ -5938,17 +6003,45 @@ def fetch_committee_ie_activity(
     conn: psycopg.Connection,
     committee_id: UUID,
     limit: int,
+    *,
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> dict[str, Any]:
+    cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(_COMMITTEE_IE_TOTALS_SQL, (committee_id, CANDIDATE_IE_OUTLIER_CEILING))
+        cursor.execute(
+            _COMMITTEE_IE_TOTALS_SQL,
+            (
+                committee_id,
+                cycle.coverage_start_date,
+                cycle.coverage_end_date,
+                CANDIDATE_IE_OUTLIER_CEILING,
+            ),
+        )
         totals_row = cursor.fetchone()
         if totals_row is None:
             raise RuntimeError(f"Committee IE totals query returned no rows for committee: {committee_id}")
 
-        cursor.execute(_COMMITTEE_IE_TARGETS_SQL, (committee_id, CANDIDATE_IE_OUTLIER_CEILING, limit))
+        cursor.execute(
+            _COMMITTEE_IE_TARGETS_SQL,
+            (
+                committee_id,
+                cycle.coverage_start_date,
+                cycle.coverage_end_date,
+                CANDIDATE_IE_OUTLIER_CEILING,
+                limit,
+            ),
+        )
         target_rows = list(cursor.fetchall())
 
-        cursor.execute(_COMMITTEE_IE_OUTLIER_COUNT_SQL, (committee_id, CANDIDATE_IE_OUTLIER_CEILING))
+        cursor.execute(
+            _COMMITTEE_IE_OUTLIER_COUNT_SQL,
+            (
+                committee_id,
+                cycle.coverage_start_date,
+                cycle.coverage_end_date,
+                CANDIDATE_IE_OUTLIER_CEILING,
+            ),
+        )
         outlier_count_row = cursor.fetchone()
 
     for target_row in target_rows:
@@ -5959,19 +6052,35 @@ def fetch_committee_ie_activity(
         conn,
         committee_id=committee_id,
         candidate_ids=target_candidate_ids,
+        selected_cycle=cycle,
     )
     for target_row in target_rows:
         target_row["sources"] = sources_by_candidate_id.get(target_row["candidate_id"], [])
 
     excluded_outlier_count = 0 if outlier_count_row is None else outlier_count_row["excluded_outlier_count"]
+    support_total = _quantize_money(totals_row["support_total"])
+    oppose_total = _quantize_money(totals_row["oppose_total"])
+    ie_transaction_count = totals_row["ie_transaction_count"]
+    coverage_aggregates = {
+        "support_total": support_total,
+        "oppose_total": oppose_total,
+        "support_count": ie_transaction_count,
+        "oppose_count": 0,
+        "excluded_outlier_count": excluded_outlier_count,
+    }
+    has_load_evidence = _has_schedule_e_activity(**coverage_aggregates) or schedule_e_window_has_load_evidence(
+        conn, cycle
+    )
 
     return {
         "committee_id": committee_id,
-        "support_total": _quantize_money(totals_row["support_total"]),
-        "oppose_total": _quantize_money(totals_row["oppose_total"]),
-        "ie_transaction_count": totals_row["ie_transaction_count"],
+        **cycle.as_payload(),
+        "support_total": support_total,
+        "oppose_total": oppose_total,
+        "ie_transaction_count": ie_transaction_count,
         "excluded_outlier_count": excluded_outlier_count,
         "targets": target_rows,
+        "coverage": _schedule_e_coverage(**coverage_aggregates, has_load_evidence=has_load_evidence),
     }
 
 

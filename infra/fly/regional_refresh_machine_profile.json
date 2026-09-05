@@ -1,0 +1,146 @@
+{
+  "app": "civibus-regional-refresh",
+  "canonical_source": {
+    "receipt_git_sha": "f198d2d2aab360b62d55d6b61f2853f4a4bc10ac",
+    "source_git_sha": "3df2e919388edb84b9f4f6cc33c496a8a8462937",
+    "tree_git_sha": "61c293365ede61e0a43d42087c0ffdd70251631f"
+  },
+  "canary": {
+    "command": [
+      "python",
+      "-m",
+      "core.refresh.runner",
+      "--authority-plan-json",
+      "infra/fly/regional_refresh_machine_profile.json",
+      "--execution-mode",
+      "canary",
+      "--execution-origin",
+      "operator_attended"
+    ],
+    "execution_origin": "operator_attended",
+    "job_key": "state-wa-contributions",
+    "schedule": null,
+    "stop_on_failure": true
+  },
+  "execution_plan": {
+    "authority": {
+      "code": "WA",
+      "kind": "state"
+    },
+    "cadence_clock": {
+      "force_allowed": false,
+      "job_due": "refresh_history_or_data_source_per_job",
+      "scheduler": "machine_schedule"
+    },
+    "canary": {
+      "execution_origin": "operator_attended",
+      "job_keys": [
+        "state-wa-contributions"
+      ],
+      "schedule": null,
+      "stop_on_failure": true
+    },
+    "concurrency": {
+      "cross_host_lock": "exact_authority_and_job_key_postgres_advisory_lock",
+      "max_parallel_jobs": 1,
+      "same_host_lock": "exact_authority_and_job_key_flock"
+    },
+    "contract_path": "infra/fly/regional_refresh_machine_profile.json",
+    "plan_id": "regional-wa-scheduled",
+    "scheduled": {
+      "execution_origin": "scheduled",
+      "job_keys": [
+        "state-wa-contributions",
+        "state-wa-expenditures",
+        "state-wa-independent_expenditures",
+        "state-wa-loans"
+      ],
+      "schedule": "daily",
+      "stop_on_failure": false
+    },
+    "schema_version": 1
+  },
+  "cleanup": {
+    "app_rollback": "destroy_only_task_created_app_after_exact_machine_absence_and_empty_inventory",
+    "normal_terminal": "retain_exact_machine_stopped",
+    "prestart_failure": "nonforce_destroy_only_exact_owned_stopped_machine_and_verify_absent",
+    "indeterminate": "handoff_without_mutation_or_retry",
+    "started_rollback": "stop_once_exact_owned_machine_then_nonforce_destroy_and_verify_absent",
+    "volume_cleanup": "not_applicable_no_volume"
+  },
+  "image": {
+    "qualification": "candidate_receipt_must_bind_exact_tagged_digest_to_descendant_source_git_sha_and_tree",
+    "repository": "registry.fly.io/civibus-refresh",
+    "tagged_digest": null
+  },
+  "organization": "personal",
+  "organization_id": "NP9vVpRwXy9omT9Lbem2Q7gOw2IyyZXDg",
+  "machine": {
+    "config": {
+      "auto_destroy": false,
+      "env": {
+        "CIVIBUS_ENV": "production",
+        "CIVIBUS_REFRESH_DATA_DIR": "/tmp/civibus-refresh-data",
+        "CIVIBUS_STARTUP_CANARY": "skip",
+        "POSTGRES_DB": "civibus",
+        "POSTGRES_HOST": "civibus-db.internal",
+        "POSTGRES_PORT": "5432",
+        "POSTGRES_USER": "civibus"
+      },
+      "files": [],
+      "guest": {
+        "cpu_kind": "shared",
+        "cpus": 1,
+        "memory_mb": 1024
+      },
+      "init": {
+        "cmd": [
+          "python",
+          "-m",
+          "core.refresh.runner",
+          "--authority-plan-json",
+          "infra/fly/regional_refresh_machine_profile.json",
+          "--execution-mode",
+          "scheduled",
+          "--execution-origin",
+          "scheduled"
+        ]
+      },
+      "metadata": {
+        "civibus_authority": "state/WA",
+        "civibus_execution_plan": "regional-wa-scheduled",
+        "civibus_profile": "regional-wa-scheduled"
+      },
+      "mounts": [],
+      "restart": {
+        "policy": "no"
+      },
+      "schedule": "daily",
+      "services": []
+    },
+    "config_sha256": "620ad2707365938ba628433d254f8ef9d229a075c2c880435edc1f947379abad",
+    "default_state": "stopped",
+    "id": null,
+    "name": "regional-wa-scheduled",
+    "region": "sjc",
+    "volume_policy": "none_ephemeral_system_tmp_only"
+  },
+  "profile_id": "regional-wa-scheduled",
+  "provisioning_state": "unprovisioned",
+  "resource_ownership": {
+    "app": "civibus-regional-refresh",
+    "authority": "state/WA",
+    "machine": "regional-wa-scheduled",
+    "plan": "regional-wa-scheduled"
+  },
+  "schema_version": 3,
+  "secret_delivery": {
+    "machine_config_env_names": [],
+    "machine_config_files": [],
+    "names": [
+      "POSTGRES_PASSWORD"
+    ],
+    "provider": "fly_app_secret",
+    "values_in_profile": false
+  }
+}

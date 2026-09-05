@@ -57,6 +57,10 @@ class FakeCursor:
     ) -> None:
         self._counts = list(counts)
         self._freshness_result = freshness_result
+        if donor_rollup_provenance_result is _DEFAULT_DONOR_ROLLUP_PROVENANCE:
+            # Capture the default before health captures its own observation
+            # time; creating it in fetchone() can make the fake evidence future.
+            donor_rollup_provenance_result = fresh_donor_search_rollup_provenance_row()
         self._donor_rollup_provenance_result = donor_rollup_provenance_result
         self._present_schema_columns = present_schema_columns
         self._transaction_confirm_count = transaction_confirm_count
@@ -120,8 +124,6 @@ class FakeCursor:
 
     def fetchone(self) -> tuple[object, ...] | None:
         if self._last_query_kind == "donor_rollup_provenance":
-            if self._donor_rollup_provenance_result is _DEFAULT_DONOR_ROLLUP_PROVENANCE:
-                return fresh_donor_search_rollup_provenance_row()
             result = self._donor_rollup_provenance_result
             assert result is None or isinstance(result, tuple)
             return result

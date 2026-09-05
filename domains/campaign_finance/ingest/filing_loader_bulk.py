@@ -48,9 +48,12 @@ def _parameter_safe_batches(rows: Sequence[_Row], column_count: int) -> Iterator
 
 
 def _filing_values(filing: Filing) -> tuple[object, ...]:
+    """Return the ordered values for the shared filing insert statement."""
     return (
         filing.id,
         filing.filing_fec_id,
+        filing.data_source_id,
+        filing.native_filing_id,
         filing.committee_id,
         filing.candidate_id,
         filing.election_id,
@@ -67,19 +70,112 @@ def _filing_values(filing: Filing) -> tuple[object, ...]:
     )
 
 
-_TransactionConflictMode = Literal["sub_id", "filing_identifier"]
-_TRANSACTION_CONFLICT_SQL: dict[_TransactionConflictMode, tuple[str, str]] = {
-    "sub_id": ("sub_id", "sub_id IS NOT NULL"),
-    "filing_identifier": ("filing_id, transaction_identifier", "transaction_identifier IS NOT NULL"),
+_FilingConflictMode = Literal["legacy_fec", "authority_native"]
+_FILING_CONFLICT_SQL: dict[_FilingConflictMode, tuple[str, str]] = {
+    "legacy_fec": ("filing_fec_id", "data_source_id IS NULL"),
+    "authority_native": ("data_source_id, native_filing_id", "data_source_id IS NOT NULL"),
 }
 
+_TransactionConflictMode = Literal["sub_id", "filing_identifier", "authority_native"]
+_TRANSACTION_CONFLICT_SQL: dict[_TransactionConflictMode, tuple[str, str]] = {
+    "sub_id": ("sub_id", "data_source_id IS NULL AND sub_id IS NOT NULL"),
+    "filing_identifier": ("filing_id, transaction_identifier", "transaction_identifier IS NOT NULL"),
+    "authority_native": (
+        "data_source_id, native_transaction_id",
+        "data_source_id IS NOT NULL",
+    ),
+}
+_TRANSACTION_ARRAY_CASTS: tuple[str, ...] = (
+    "uuid",
+    "uuid",
+    "uuid",
+    "uuid",
+    "text",
+    "text",
+    "text",
+    "text",
+    "numeric",
+    "date",
+    "numeric",
+    "text",
+    "text",
+    "text",
+    "text",
+    "text",
+    "text",
+    "text",
+    "uuid",
+    "uuid",
+    "uuid",
+    "uuid",
+    "uuid",
+    "text",
+    "text",
+    "boolean",
+    "text",
+    "uuid",
+    "uuid",
+    "boolean",
+    "text",
+    "date",
+    "numeric",
+)
+_TRANSACTION_ARRAY_BATCH_ROWS = 10_000
+_TRANSACTION_COPY_MIN_ROWS = 1_000
+_TRANSACTION_COLUMN_NAMES: tuple[str, ...] = (
+    "id",
+    "filing_id",
+    "committee_id",
+    "data_source_id",
+    "native_transaction_id",
+    "transaction_type",
+    "transaction_identifier",
+    "back_ref_transaction_id",
+    "sub_id",
+    "transaction_date",
+    "amount",
+    "contributor_name_raw",
+    "contributor_entity_type",
+    "contributor_employer",
+    "contributor_occupation",
+    "contributor_city",
+    "contributor_state",
+    "contributor_zip",
+    "contributor_person_id",
+    "contributor_organization_id",
+    "contributor_address_id",
+    "recipient_candidate_id",
+    "recipient_committee_id",
+    "memo_code",
+    "memo_text",
+    "is_memo",
+    "amendment_indicator",
+    "amended_by_transaction_id",
+    "source_record_id",
+    "date_is_reliable",
+    "support_oppose",
+    "dissemination_date",
+    "aggregate_amount",
+)
+_TRANSACTION_STAGE_TABLE = "civibus_transaction_upsert_stage"
+_TransactionInputMode = Literal["arrays", "copy_stage"]
 
-@lru_cache(maxsize=8)
-def _filing_upsert_statement(*, row_count: int, column_count: int) -> str:
+
+@lru_cache(maxsize=16)
+def _filing_upsert_statement(
+    *,
+    row_count: int,
+    column_count: int,
+    conflict_mode: _FilingConflictMode,
+) -> str:
+    """Build a filing upsert for one explicit identity regime."""
+    conflict_target, conflict_predicate = _FILING_CONFLICT_SQL[conflict_mode]
     return f"""
         WITH input_rows (
             id,
             filing_fec_id,
+            data_source_id,
+            native_filing_id,
             committee_id,
             candidate_id,
             election_id,
@@ -99,6 +195,8 @@ def _filing_upsert_statement(*, row_count: int, column_count: int) -> str:
         INSERT INTO cf.filing (
             id,
             filing_fec_id,
+            data_source_id,
+            native_filing_id,
             committee_id,
             candidate_id,
             election_id,
@@ -116,6 +214,8 @@ def _filing_upsert_statement(*, row_count: int, column_count: int) -> str:
         SELECT
             id,
             filing_fec_id,
+            data_source_id::uuid,
+            native_filing_id,
             committee_id,
             candidate_id::uuid,
             election_id::uuid,
@@ -130,8 +230,9 @@ def _filing_upsert_statement(*, row_count: int, column_count: int) -> str:
             amended_from_filing_id::uuid,
             source_record_id::uuid
         FROM input_rows
-        ON CONFLICT (filing_fec_id)
+        ON CONFLICT ({conflict_target}) WHERE {conflict_predicate}
         DO UPDATE SET
+            filing_fec_id = EXCLUDED.filing_fec_id,
             committee_id = EXCLUDED.committee_id,
             candidate_id = COALESCE(EXCLUDED.candidate_id, cf.filing.candidate_id),
             election_id = COALESCE(EXCLUDED.election_id, cf.filing.election_id),
@@ -152,57 +253,55 @@ def _filing_upsert_statement(*, row_count: int, column_count: int) -> str:
             accepted_date = COALESCE(EXCLUDED.accepted_date, cf.filing.accepted_date),
             amended_from_filing_id = COALESCE(EXCLUDED.amended_from_filing_id, cf.filing.amended_from_filing_id),
             source_record_id = COALESCE(EXCLUDED.source_record_id, cf.filing.source_record_id)
-        RETURNING id, filing_fec_id
+        RETURNING id, filing_fec_id, data_source_id, native_filing_id
         """
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=6)
 def _transaction_upsert_statement(
     *,
-    row_count: int,
-    column_count: int,
     conflict_mode: _TransactionConflictMode,
+    input_mode: _TransactionInputMode = "arrays",
 ) -> str:
+    """Build a typed bulk upsert for one transaction identity regime."""
     conflict_target, conflict_predicate = _TRANSACTION_CONFLICT_SQL[conflict_mode]
-    return f"""
-        INSERT INTO cf.transaction (
-            id,
-            filing_id,
-            committee_id,
-            transaction_type,
-            transaction_identifier,
-            back_ref_transaction_id,
-            sub_id,
-            transaction_date,
-            amount,
-            contributor_name_raw,
-            contributor_entity_type,
-            contributor_employer,
-            contributor_occupation,
-            contributor_city,
-            contributor_state,
-            contributor_zip,
-            contributor_person_id,
-            contributor_organization_id,
-            contributor_address_id,
-            recipient_candidate_id,
-            recipient_committee_id,
-            memo_code,
-            memo_text,
-            is_memo,
-            amendment_indicator,
-            amended_by_transaction_id,
-            source_record_id,
-            date_is_reliable,
-            support_oppose,
-            dissemination_date,
-            aggregate_amount
+    array_parameters = ",\n            ".join(f"%s::{cast}[]" for cast in _TRANSACTION_ARRAY_CASTS)
+    column_sql = ",\n            ".join(_TRANSACTION_COLUMN_NAMES)
+    if input_mode == "arrays":
+        input_rows_sql = f"""
+        WITH input_rows (
+            {column_sql}
+        ) AS (
+            SELECT *
+            FROM UNNEST(
+                {array_parameters}
+            )
         )
-        VALUES {_values_placeholders(row_count=row_count, column_count=column_count)}
+        """
+    elif input_mode == "copy_stage":
+        input_rows_sql = f"""
+        WITH input_rows AS (
+            DELETE FROM pg_temp.{_TRANSACTION_STAGE_TABLE}
+            RETURNING
+                {column_sql}
+        )
+        """
+    else:
+        raise ValueError(f"unsupported transaction input mode: {input_mode}")
+    return f"""
+        {input_rows_sql}
+        INSERT INTO cf.transaction (
+            {column_sql}
+        )
+        SELECT
+            {column_sql}
+        FROM input_rows
         ON CONFLICT ({conflict_target}) WHERE {conflict_predicate}
         DO UPDATE SET
             filing_id = EXCLUDED.filing_id,
             committee_id = EXCLUDED.committee_id,
+            data_source_id = EXCLUDED.data_source_id,
+            native_transaction_id = EXCLUDED.native_transaction_id,
             transaction_type = EXCLUDED.transaction_type,
             transaction_identifier = COALESCE(EXCLUDED.transaction_identifier, cf.transaction.transaction_identifier),
             back_ref_transaction_id = COALESCE(EXCLUDED.back_ref_transaction_id, cf.transaction.back_ref_transaction_id),
@@ -237,8 +336,52 @@ def _transaction_upsert_statement(
             support_oppose = EXCLUDED.support_oppose,
             dissemination_date = EXCLUDED.dissemination_date,
             aggregate_amount = EXCLUDED.aggregate_amount
-        RETURNING id, (xmax = 0) AS inserted, sub_id, filing_id, transaction_identifier
+        RETURNING
+            id,
+            (xmax = 0) AS inserted,
+            sub_id,
+            filing_id,
+            transaction_identifier,
+            data_source_id,
+            native_transaction_id
         """
+
+
+def _transaction_array_parameters(rows: Sequence[tuple[object, ...]]) -> list[list[object]]:
+    if not rows:
+        raise ValueError("transaction array parameters require at least one row")
+    if any(len(row) != len(_TRANSACTION_ARRAY_CASTS) for row in rows):
+        raise ValueError("transaction row width does not match the typed array contract")
+    return [list(column) for column in zip(*rows, strict=True)]
+
+
+def _copy_stage_transaction_rows(
+    conn: psycopg.Connection,
+    rows: Sequence[tuple[object, ...]],
+    *,
+    conflict_mode: _TransactionConflictMode,
+) -> list[tuple[UUID, bool, int | None, UUID, str | None, UUID | None, str | None]]:
+    if any(len(row) != len(_TRANSACTION_COLUMN_NAMES) for row in rows):
+        raise ValueError("transaction row width does not match the COPY stage contract")
+    column_sql = ", ".join(_TRANSACTION_COLUMN_NAMES)
+    with conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            CREATE TEMP TABLE IF NOT EXISTS {_TRANSACTION_STAGE_TABLE}
+                (LIKE cf.transaction INCLUDING DEFAULTS)
+            ON COMMIT PRESERVE ROWS
+            """
+        )
+        with cursor.copy(f"COPY pg_temp.{_TRANSACTION_STAGE_TABLE} ({column_sql}) FROM STDIN") as copy:
+            for row in rows:
+                copy.write_row(row)
+        cursor.execute(
+            _transaction_upsert_statement(
+                conflict_mode=conflict_mode,
+                input_mode="copy_stage",
+            )
+        )
+        return cursor.fetchall()
 
 
 @lru_cache(maxsize=8)
@@ -258,22 +401,62 @@ def _dual_key_conflict_probe_statement(*, row_count: int, column_count: int) -> 
 
 
 def upsert_filings_bulk(conn: psycopg.Connection, filings: Sequence[Filing]) -> dict[str, UUID]:
-    """Upsert filings in one statement and return ids by filing_fec_id."""
+    """Upsert filings without collapsing authority-scoped native identities.
+
+    The legacy return contract is keyed by ``filing_fec_id``. A single call that
+    asks that mapping to represent two different scoped filings with the same
+    compatibility value is refused before any write.
+    """
     if not filings:
         return {}
 
-    deduped_by_filing_fec_id: dict[str, Filing] = {}
+    scoped_ids_by_compatibility_id: dict[str, set[tuple[UUID | None, str]]] = {}
     for filing in filings:
-        deduped_by_filing_fec_id[filing.filing_fec_id] = filing
+        native_key = filing.native_filing_id or filing.filing_fec_id
+        scoped_ids_by_compatibility_id.setdefault(filing.filing_fec_id, set()).add((filing.data_source_id, native_key))
+    ambiguous_compatibility_ids = sorted(
+        compatibility_id
+        for compatibility_id, scoped_ids in scoped_ids_by_compatibility_id.items()
+        if len(scoped_ids) > 1
+    )
+    if ambiguous_compatibility_ids:
+        raise ValueError(
+            "bulk filing return mapping cannot represent distinct authority-scoped filings "
+            f"sharing filing_fec_id: {ambiguous_compatibility_ids!r}"
+        )
 
-    ordered_filings = list(deduped_by_filing_fec_id.values())
-    rows = [_filing_values(filing) for filing in ordered_filings]
+    deduped_filings: dict[tuple[UUID | None, str], Filing] = {}
+    for filing in filings:
+        deduped_filings[(filing.data_source_id, filing.native_filing_id or filing.filing_fec_id)] = filing
+
     filing_id_by_fec_id: dict[str, UUID] = {}
-    for batch in _parameter_safe_batches(rows, len(rows[0])):
-        statement = _filing_upsert_statement(row_count=len(batch), column_count=len(batch[0]))
-        with conn.cursor() as cursor:
-            cursor.execute(statement, _flatten_rows(batch))
-            filing_id_by_fec_id.update({filing_fec_id: filing_id for filing_id, filing_fec_id in cursor.fetchall()})
+    for conflict_mode, mode_filings in (
+        (
+            "legacy_fec",
+            [filing for filing in deduped_filings.values() if filing.data_source_id is None],
+        ),
+        (
+            "authority_native",
+            [filing for filing in deduped_filings.values() if filing.data_source_id is not None],
+        ),
+    ):
+        rows = [_filing_values(filing) for filing in mode_filings]
+        if not rows:
+            continue
+        for batch in _parameter_safe_batches(rows, len(rows[0])):
+            statement = _filing_upsert_statement(
+                row_count=len(batch),
+                column_count=len(batch[0]),
+                conflict_mode=conflict_mode,
+            )
+            with conn.cursor() as cursor:
+                cursor.execute(statement, _flatten_rows(batch))
+                filing_id_by_fec_id.update(
+                    {
+                        filing_fec_id: filing_id
+                        for filing_id, filing_fec_id, _data_source_id, _native_filing_id in cursor.fetchall()
+                    }
+                )
     return filing_id_by_fec_id
 
 
@@ -282,20 +465,26 @@ def _bulk_upsert_transactions_for_conflict_target(
     *,
     transactions: Sequence[Transaction],
     conflict_mode: _TransactionConflictMode,
-) -> list[tuple[UUID, bool, int | None, UUID, str | None]]:
+) -> list[tuple[UUID, bool, int | None, UUID, str | None, UUID | None, str | None]]:
     if not transactions:
         return []
 
     rows = [(transaction.id, *_transaction_values(transaction)) for transaction in transactions]
-    results: list[tuple[UUID, bool, int | None, UUID, str | None]] = []
-    for batch in _parameter_safe_batches(rows, len(rows[0])):
-        statement = _transaction_upsert_statement(
-            row_count=len(batch),
-            column_count=len(batch[0]),
-            conflict_mode=conflict_mode,
-        )
+    results: list[tuple[UUID, bool, int | None, UUID, str | None, UUID | None, str | None]] = []
+    for start_index in range(0, len(rows), _TRANSACTION_ARRAY_BATCH_ROWS):
+        batch = rows[start_index : start_index + _TRANSACTION_ARRAY_BATCH_ROWS]
+        if len(batch) >= _TRANSACTION_COPY_MIN_ROWS:
+            results.extend(
+                _copy_stage_transaction_rows(
+                    conn,
+                    batch,
+                    conflict_mode=conflict_mode,
+                )
+            )
+            continue
+        statement = _transaction_upsert_statement(conflict_mode=conflict_mode)
         with conn.cursor() as cursor:
-            cursor.execute(statement, _flatten_rows(batch))
+            cursor.execute(statement, _transaction_array_parameters(batch))
             results.extend(cursor.fetchall())
     return results
 
@@ -304,9 +493,11 @@ def _has_duplicate_transaction_idempotency_keys(transactions: Sequence[Transacti
     seen_keys: set[tuple[str, object, object | None]] = set()
     for transaction in transactions:
         transaction_keys: list[tuple[str, object, object | None]] = []
-        if transaction.sub_id is not None:
+        if transaction.data_source_id is not None:
+            transaction_keys.append(("authority_native", transaction.data_source_id, transaction.native_transaction_id))
+        elif transaction.sub_id is not None:
             transaction_keys.append(("sub_id", transaction.sub_id, None))
-        if transaction.transaction_identifier is not None:
+        if transaction.data_source_id is None and transaction.transaction_identifier is not None:
             transaction_keys.append(("filing_identifier", transaction.filing_id, transaction.transaction_identifier))
         if not transaction_keys:
             raise RuntimeError("validated transaction unexpectedly lost its idempotency key")
@@ -348,7 +539,11 @@ def upsert_transactions_with_status_bulk(
 
     normalized_transactions = [_normalize_transaction(transaction) for transaction in transactions]
     for transaction in normalized_transactions:
-        if transaction.sub_id is None and transaction.transaction_identifier is None:
+        if (
+            transaction.data_source_id is None
+            and transaction.sub_id is None
+            and transaction.transaction_identifier is None
+        ):
             raise ValueError("upsert_transaction requires at least one idempotency key")
 
     if _has_duplicate_transaction_idempotency_keys(
@@ -358,8 +553,37 @@ def upsert_transactions_with_status_bulk(
 
     results_by_sub_id: dict[int, TransactionUpsertResult] = {}
     results_by_filing_identifier: dict[tuple[UUID, str], TransactionUpsertResult] = {}
+    results_by_authority_native: dict[tuple[UUID, str], TransactionUpsertResult] = {}
 
-    sub_id_transactions = [transaction for transaction in normalized_transactions if transaction.sub_id is not None]
+    authority_transactions = [
+        transaction for transaction in normalized_transactions if transaction.data_source_id is not None
+    ]
+    if authority_transactions:
+        for (
+            transaction_id,
+            inserted,
+            _sub_id,
+            _filing_id,
+            _transaction_identifier,
+            data_source_id,
+            native_transaction_id,
+        ) in _bulk_upsert_transactions_for_conflict_target(
+            conn,
+            transactions=authority_transactions,
+            conflict_mode="authority_native",
+        ):
+            if data_source_id is None or native_transaction_id is None:
+                raise RuntimeError("bulk authority upsert returned row without its scoped native key")
+            results_by_authority_native[(data_source_id, native_transaction_id)] = TransactionUpsertResult(
+                transaction_id=transaction_id,
+                inserted=inserted,
+            )
+
+    sub_id_transactions = [
+        transaction
+        for transaction in normalized_transactions
+        if transaction.data_source_id is None and transaction.sub_id is not None
+    ]
     if sub_id_transactions:
         for (
             transaction_id,
@@ -367,6 +591,8 @@ def upsert_transactions_with_status_bulk(
             sub_id,
             _filing_id,
             _transaction_identifier,
+            _data_source_id,
+            _native_transaction_id,
         ) in _bulk_upsert_transactions_for_conflict_target(
             conn,
             transactions=sub_id_transactions,
@@ -379,7 +605,11 @@ def upsert_transactions_with_status_bulk(
                 inserted=inserted,
             )
 
-    identifier_transactions = [transaction for transaction in normalized_transactions if transaction.sub_id is None]
+    identifier_transactions = [
+        transaction
+        for transaction in normalized_transactions
+        if transaction.data_source_id is None and transaction.sub_id is None
+    ]
     if identifier_transactions:
         for (
             transaction_id,
@@ -387,6 +617,8 @@ def upsert_transactions_with_status_bulk(
             _sub_id,
             filing_id,
             transaction_identifier,
+            _data_source_id,
+            _native_transaction_id,
         ) in _bulk_upsert_transactions_for_conflict_target(
             conn,
             transactions=identifier_transactions,
@@ -401,6 +633,11 @@ def upsert_transactions_with_status_bulk(
 
     results: list[TransactionUpsertResult] = []
     for transaction in normalized_transactions:
+        if transaction.data_source_id is not None:
+            if transaction.native_transaction_id is None:
+                raise RuntimeError("validated authority transaction lost its native key")
+            results.append(results_by_authority_native[(transaction.data_source_id, transaction.native_transaction_id)])
+            continue
         if transaction.sub_id is not None:
             results.append(results_by_sub_id[transaction.sub_id])
             continue

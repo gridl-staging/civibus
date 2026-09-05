@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildWashingtonNode } from '$lib/regional-navigation/test-fixtures';
 import { SEARCH_QUERY_MIN_LENGTH } from './contract';
 import {
   buildSearchResultKey,
@@ -22,6 +23,26 @@ describe('search presentation', () => {
     );
   });
 
+  it('does not claim zero matches when backend matches cannot be displayed', () => {
+    expect(
+      getSearchStatusMessage({
+        query: 'civ',
+        resultCount: 0,
+        hasUnrenderableResults: true
+      })
+    ).toBe('Matching records were found, but none could be displayed.');
+  });
+
+  it('qualifies the visible count when some backend matches cannot be displayed', () => {
+    expect(
+      getSearchStatusMessage({
+        query: 'civ',
+        resultCount: 2,
+        hasUnrenderableResults: true
+      })
+    ).toBe('2 results shown. Some matching records could not be displayed.');
+  });
+
   it('treats whitespace-only queries as submitted state once the backend has seen them', () => {
     expect(getSearchStatusMessage({ query: '  ', resultCount: 0 })).toBe('No matching records found.');
   });
@@ -38,6 +59,19 @@ describe('search presentation', () => {
     expect(buildSearchMetadata({ query: 'civ', resultCount: 2 })).toEqual({
       title: 'civ (2 results) | Search | Civibus',
       description: '2 results for "civ" across Civibus records.'
+    });
+  });
+
+  it('qualifies metadata when backend matches could not be displayed', () => {
+    expect(
+      buildSearchMetadata({
+        query: 'civ',
+        resultCount: 0,
+        hasUnrenderableResults: true
+      })
+    ).toEqual({
+      title: 'civ (0 results shown) | Search | Civibus',
+      description: '0 results shown for "civ"; some matching records could not be displayed.'
     });
   });
 
@@ -446,7 +480,8 @@ describe('search presentation', () => {
       { label: 'Committee', href: '/search?entity_type=committee' },
       { label: 'Candidate', href: '/search?entity_type=candidate' },
       { label: 'Office', href: '/search?entity_type=office' },
-      { label: 'Contest', href: '/search?entity_type=contest' }
+      { label: 'Contest', href: '/search?entity_type=contest' },
+      { label: 'Region', href: '/search?entity_type=region' }
     ]);
   });
 
@@ -543,6 +578,27 @@ describe('search presentation', () => {
     expect(pagePresentation.statusMessage).toBe('Searching...');
   });
 
+  it('does not attribute a loaded omission to a new query while submitting', () => {
+    const pagePresentation = buildSearchPagePresentation({
+      query: 'civ',
+      entityType: '',
+      results: [],
+      hasUnrenderableResults: true,
+      form: {
+        query: 'alice',
+        entityType: 'person',
+        validationMessage: ''
+      },
+      isSubmitting: true
+    });
+
+    expect(pagePresentation.statusMessage).toBe('Searching...');
+    expect(pagePresentation.metadata).toEqual({
+      title: 'alice (0 results) | Search | Civibus',
+      description: '0 results for "alice" across Civibus records.'
+    });
+  });
+
   // --- Five-state regression matrix (Stage 3) ---
 
   describe('five-state presentation matrix', () => {
@@ -615,6 +671,7 @@ describe('search presentation', () => {
             name: 'Civibus Org'
           }
         ],
+        hasUnrenderableResults: true,
         form: {
           query: 'c',
           entityType: 'candidate',
@@ -629,6 +686,10 @@ describe('search presentation', () => {
       expect(vm.selectedEntityType).toBe('candidate');
       expect(vm.inlineValidationMessage).toBe('query.q: String should have at least 2 characters');
       expect(vm.submitButtonLabel).toBe('Search');
+      expect(vm.metadata).toEqual({
+        title: 'c (0 results) | Search | Civibus',
+        description: '0 results for "c" across Civibus records.'
+      });
     });
 
     it('pending state: preserves submitted query/filter while forcing skeleton and clearing stale results', () => {
@@ -763,6 +824,30 @@ describe('search pagination presentation', () => {
     expect(vm.statusMessage).toBe('20 results shown.');
   });
 
+  it('reports a filtered backend page by its displayable count instead of a false offset range', () => {
+    const vm = buildSearchPagePresentation({
+      query: 'civ',
+      entityType: 'org',
+      results: buildPagedResults(1),
+      offset: 20,
+      hasNext: true,
+      hasUnrenderableResults: true
+    });
+
+    expect(vm.pagination).toEqual({
+      label: '1 displayable result on this page',
+      previousHref: '/search?q=civ&entity_type=org',
+      nextHref: '/search?q=civ&entity_type=org&offset=40'
+    });
+    expect(vm.statusMessage).toBe(
+      '1 result shown. Some matching records could not be displayed.'
+    );
+    expect(vm.metadata).toEqual({
+      title: 'civ (1 result shown) | Search | Civibus',
+      description: '1 result shown for "civ"; some matching records could not be displayed.'
+    });
+  });
+
   it('hides pagination entirely on a single-page result set', () => {
     const vm = buildSearchPagePresentation({
       query: 'civ',
@@ -831,5 +916,67 @@ describe('search pagination presentation', () => {
 
     expect(submitting.pagination).toBeNull();
     expect(invalid.pagination).toBeNull();
+  });
+
+  it('counts separately typed regional cards without changing entity pagination', () => {
+    const vm = buildSearchPagePresentation({
+      query: 'Washington',
+      entityType: '',
+      results: [],
+      regionalResults: [buildWashingtonNode()],
+      regionalIncompleteNodeKinds: ['county', 'municipality', 'school_district', 'special_district'],
+      regionalHasUnsafeOmissions: true
+    });
+
+    expect(vm.regionalCards).toEqual([
+      {
+        key: 'state:/state/WA',
+        name: 'Washington',
+        routeLabel: 'State',
+        contextLine: 'Finance available · authority translation refused',
+        href: '/state/WA'
+      }
+    ]);
+    expect(vm.resultCards).toEqual([]);
+    expect(vm.pagination).toBeNull();
+    expect(vm.statusMessage).toContain('No matching record results found.');
+    expect(vm.statusMessage).toContain('1 regional route shown separately from record results.');
+    expect(vm.statusMessage).toContain(
+      'Explicit routes may be omitted for county, municipality, school district, special district subjects'
+    );
+  });
+
+  it('keeps a regional card outside a full entity page count and its offset-20 pagination', () => {
+    const vm = buildSearchPagePresentation({
+      query: 'Washington',
+      entityType: '',
+      results: buildPagedResults(20),
+      hasNext: true,
+      regionalResults: [buildWashingtonNode()],
+      regionalIncompleteNodeKinds: ['county', 'municipality'],
+      regionalHasUnsafeOmissions: true
+    });
+
+    expect(vm.resultCards).toHaveLength(20);
+    expect(vm.regionalCards).toHaveLength(1);
+    expect(vm.statusMessage).toContain('20 results shown.');
+    expect(vm.statusMessage).toContain('1 regional route shown separately from record results.');
+    expect(vm.pagination).toEqual({
+      label: 'Showing 1–20',
+      previousHref: null,
+      nextHref: '/search?q=Washington&offset=20'
+    });
+    expect(vm.metadata.description).toContain('20 record results');
+  });
+
+  it('uses the single status owner for a safe Region-only result', () => {
+    const vm = buildSearchPagePresentation({
+      query: 'Washington',
+      entityType: 'region',
+      results: [],
+      regionalResults: [buildWashingtonNode()]
+    });
+
+    expect(vm.statusMessage).toBe('1 regional route found.');
   });
 });

@@ -554,6 +554,15 @@ describe("loadPersonMoneyBundle", () => {
       if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
         return Promise.reject(new Error("insights unavailable"));
       }
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return Promise.reject(new Error("candidate lookup unavailable"));
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-donors`) {
+        return Promise.reject(new Error("top donors unavailable"));
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-employers`) {
+        return Promise.reject(new Error("top employers unavailable"));
+      }
 
       return Promise.reject(new Error(`Unexpected path: ${path}`));
     });
@@ -564,23 +573,27 @@ describe("loadPersonMoneyBundle", () => {
 
     await expect(bundle.personMoneyHeadline).resolves.toEqual({
       kind: "temporarily_unavailable",
-      message: "Selected-cycle money summary is temporarily unavailable.",
-      selectedCycle: SELECTED_CYCLE
+      message: "Selected-cycle money summary is temporarily unavailable."
     });
+    await expect(bundle.personContributionInsights).rejects.toThrow("insights unavailable");
+    await expect(bundle.personFinanceSections).rejects.toThrow("candidate lookup unavailable");
+    await expect(bundle.personTopDonors).rejects.toThrow("top donors unavailable");
+    await expect(bundle.personTopEmployers).rejects.toThrow("top employers unavailable");
   });
 
   it("builds a temporary-unavailable headline when candidate lookup fails", async () => {
+    const backendSelectedCycle = 2024;
     const requestJson = vi.fn((path: string): Promise<unknown> => {
       if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
-        return Promise.resolve(buildContributionInsights(SELECTED_CYCLE));
+        return Promise.resolve(buildContributionInsights(backendSelectedCycle));
       }
       if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
         return Promise.reject(new Error("candidate lookup unavailable"));
       }
-      if (path === `/v1/person/${PERSON_ID}/top-donors?cycle=${SELECTED_CYCLE}`) {
+      if (path === `/v1/person/${PERSON_ID}/top-donors?cycle=${backendSelectedCycle}`) {
         return Promise.resolve([]);
       }
-      if (path === `/v1/person/${PERSON_ID}/top-employers?cycle=${SELECTED_CYCLE}`) {
+      if (path === `/v1/person/${PERSON_ID}/top-employers?cycle=${backendSelectedCycle}`) {
         return Promise.resolve([]);
       }
 
@@ -592,7 +605,7 @@ describe("loadPersonMoneyBundle", () => {
     await expect(bundle.personMoneyHeadline).resolves.toEqual({
       kind: "temporarily_unavailable",
       message: "Selected-cycle money summary is temporarily unavailable.",
-      selectedCycle: SELECTED_CYCLE
+      selectedCycle: backendSelectedCycle
     });
     await expect(bundle.personFinanceSections).rejects.toThrow("candidate lookup unavailable");
   });
@@ -689,6 +702,35 @@ describe("loadPersonMoneyBundle", () => {
     });
   });
 
+  it("keeps an explicit valid cycle label when insights and summary endpoints are unavailable", async () => {
+    const requestJson = vi.fn((path: string): Promise<unknown> => {
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return Promise.reject(new ApiResponseError(503, { detail: "Candidates unavailable." }));
+      }
+      if (path === `/v1/person/${PERSON_ID}/contribution-insights?cycle=2024`) {
+        return Promise.reject(new ApiResponseError(503, { detail: "Insights unavailable." }));
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-donors?cycle=2024`) {
+        return Promise.resolve([]);
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-employers?cycle=2024`) {
+        return Promise.resolve([]);
+      }
+
+      return Promise.reject(new Error(`Unexpected path: ${path}`));
+    });
+
+    const bundle = await loadPersonMoneyBundle(createApi(requestJson), PERSON_ID, 2024);
+
+    await expect(bundle.personMoneyHeadline).resolves.toEqual({
+      kind: "temporarily_unavailable",
+      message: "Selected-cycle money summary is temporarily unavailable.",
+      selectedCycle: 2024
+    });
+    await expect(bundle.personContributionInsights).rejects.toMatchObject({ status: 503 });
+    await expect(bundle.personFinanceSections).rejects.toMatchObject({ status: 503 });
+  });
+
   it("rejects backend-selected money streams by default when contribution insights fail", async () => {
     const requestJson = vi.fn((path: string): Promise<unknown> => {
       if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
@@ -709,10 +751,27 @@ describe("loadPersonMoneyBundle", () => {
     ]);
   });
 
-  it("resolves empty optional money data when opted into backend-selected fallback", async () => {
+  it("preserves independently available backend-selected streams when contribution insights fail", async () => {
     const requestJson = vi.fn((path: string): Promise<unknown> => {
       if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
         return Promise.reject(new Error("insights unavailable"));
+      }
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return Promise.resolve({ items: [], has_next: false, offset: 0, limit: 10 });
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-donors`) {
+        return Promise.resolve([{ name: "Backend donor", total_amount: "12.34", transaction_count: 1 }]);
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-employers`) {
+        return Promise.resolve([
+          {
+            employer: "BACKEND EMPLOYER",
+            total_amount: "12.34",
+            transaction_count: 1,
+            industry: "UNKNOWN_INDUSTRY",
+            industry_rollup_eligible: true
+          }
+        ]);
       }
 
       return Promise.reject(new Error(`Unexpected path: ${path}`));
@@ -722,19 +781,29 @@ describe("loadPersonMoneyBundle", () => {
       fallbackWhenBackendSelectedInsightsUnavailable: true
     });
 
-    await expect(bundle.personContributionInsights).resolves.toMatchObject({
-      person_id: PERSON_ID,
-      has_data: false,
-      metadata: {
-        selected_cycle: 2026,
-        caveats: ["temporarily_unavailable"]
-      }
+    await expect(bundle.personContributionInsights).rejects.toThrow("insights unavailable");
+    await expect(bundle.personMoneyHeadline).resolves.toEqual({
+      kind: "no_linked_candidate",
+      message: "No campaign-finance candidacies are linked yet."
     });
     await expect(bundle.personFinanceSections).resolves.toEqual([]);
-    await expect(bundle.personTopDonors).resolves.toEqual([]);
-    await expect(bundle.personTopEmployers).resolves.toEqual([]);
+    await expect(bundle.personTopDonors).resolves.toEqual([
+      { name: "Backend donor", total_amount: "12.34", transaction_count: 1 }
+    ]);
+    await expect(bundle.personTopEmployers).resolves.toEqual([
+      {
+        employer: "BACKEND EMPLOYER",
+        total_amount: "12.34",
+        transaction_count: 1,
+        industry: "UNKNOWN_INDUSTRY",
+        industry_rollup_eligible: true
+      }
+    ]);
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
-      `/v1/person/${PERSON_ID}/contribution-insights`
+      `/v1/person/${PERSON_ID}/contribution-insights`,
+      `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`,
+      `/v1/person/${PERSON_ID}/top-donors`,
+      `/v1/person/${PERSON_ID}/top-employers`
     ]);
   });
 });

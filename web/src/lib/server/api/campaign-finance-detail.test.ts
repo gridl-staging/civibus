@@ -119,11 +119,17 @@ const COMMITTEE_FILING_BREAKDOWN = {
 };
 
 const COMMITTEE_IE_ACTIVITY = {
+  ...SELECTED_CYCLE_FIELDS,
   committee_id: COMMITTEE_ID,
   support_total: "1500.00",
   oppose_total: "250.00",
   ie_transaction_count: 3,
   excluded_outlier_count: 1,
+  coverage: {
+    activity_state: "populated" as const,
+    completeness: "partial" as const,
+    basis: "fec_schedule_e_transactions" as const
+  },
   targets: [
     {
       candidate_id: CANDIDATE_ID,
@@ -464,9 +470,9 @@ describe("campaign-finance detail api", () => {
     ]);
   });
 
-  it("fetches committee-made independent expenditures only from the committee IE endpoint", async () => {
+  it("fetches committee-made independent expenditures from the selected-cycle committee IE endpoint", async () => {
     const requestJson = vi.fn(async (path: string) => {
-      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID, { cycle: 2024 })) {
         return COMMITTEE_IE_ACTIVITY;
       }
 
@@ -475,12 +481,14 @@ describe("campaign-finance detail api", () => {
 
     const activity = await fetchCommitteeIndependentExpendituresMade(
       { requestJson: requestJson as ApiClient["requestJson"] },
-      { id: COMMITTEE_ID }
+      { id: COMMITTEE_ID, cycle: 2024 }
     );
 
     expect(activity).toEqual(COMMITTEE_IE_ACTIVITY);
     expect(requestJson).toHaveBeenCalledTimes(1);
-    expect(requestJson).toHaveBeenCalledWith(buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID));
+    expect(requestJson).toHaveBeenCalledWith(
+      buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID, { cycle: 2024 })
+    );
   });
 
   it("fetches candidate detail without calling transactions", async () => {

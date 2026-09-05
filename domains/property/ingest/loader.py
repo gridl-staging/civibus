@@ -249,29 +249,45 @@ def ensure_durham_data_source(
 
 
 def ensure_durham_jurisdiction(conn: psycopg.Connection, config: Mapping[str, object] | None = None) -> UUID:
+    """Ensure the Durham County geography without reinterpreting its county GEOID."""
     config_payload = config if config is not None else load_durham_config()
     name = _required_nested_text(config_payload, "jurisdiction", "name")
     jurisdiction_type = _required_nested_text(config_payload, "jurisdiction", "type")
     fips = _required_nested_text(config_payload, "jurisdiction", "fips")
     state = _required_nested_text(config_payload, "jurisdiction", "state")
+    if jurisdiction_type != "county" or len(fips) != 5 or not fips.isascii() or not fips.isdigit():
+        raise ValueError(
+            "Durham jurisdiction must carry an explicit five-digit ASCII county_geoid "
+            f"with jurisdiction_type=county; received type={jurisdiction_type!r}, fips={fips!r}"
+        )
 
     with conn.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO core.jurisdiction (name, jurisdiction_type, fips, state)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO core.jurisdiction AS existing_jurisdiction (
+                name,
+                jurisdiction_type,
+                fips,
+                county_geoid,
+                state
+            )
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (fips) WHERE fips IS NOT NULL
             DO UPDATE SET
                 name = EXCLUDED.name,
-                jurisdiction_type = EXCLUDED.jurisdiction_type,
-                state = EXCLUDED.state
-            RETURNING id
+                county_geoid = EXCLUDED.county_geoid
+            WHERE existing_jurisdiction.jurisdiction_type = EXCLUDED.jurisdiction_type
+              AND existing_jurisdiction.state = EXCLUDED.state
+            RETURNING existing_jurisdiction.id
             """,
-            (name, jurisdiction_type, fips, state),
+            (name, jurisdiction_type, fips, fips, state),
         )
         row = cursor.fetchone()
     if row is None:
-        raise RuntimeError("Durham jurisdiction insert did not return an id")
+        raise ValueError(
+            "Refusing core.jurisdiction bare-FIPS reinterpretation for "
+            f"county_geoid={fips}: expected jurisdiction_type=county, state={state}"
+        )
     return row[0]
 
 

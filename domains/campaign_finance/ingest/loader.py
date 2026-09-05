@@ -44,11 +44,12 @@ def _select_fec_data_source_id(conn: psycopg.Connection) -> UUID | None:
             SELECT id
             FROM core.data_source
             WHERE domain = %s
-              AND jurisdiction = %s
+              AND filing_authority_type = 'federal'
+              AND filing_authority_code = 'FEC'
               AND name = %s
             LIMIT 1
             """,
-            (_FEC_DATA_SOURCE_DOMAIN, _FEC_DATA_SOURCE_JURISDICTION, _FEC_DATA_SOURCE_NAME),
+            (_FEC_DATA_SOURCE_DOMAIN, _FEC_DATA_SOURCE_NAME),
         )
         row = cursor.fetchone()
 
@@ -74,6 +75,8 @@ def _resolve_person_id(
     conn: psycopg.Connection,
     person: Person | None,
     address: Address | None,
+    *,
+    data_source_id: UUID,
 ) -> UUID | None:
     if person is None:
         return None
@@ -81,16 +84,32 @@ def _resolve_person_id(
     zip5 = address.zip5 if address is not None else None
     existing_person_id = None
     if person.last_name and person.first_name:
-        existing_person_id = find_person_by_name_and_zip(conn, person.last_name, person.first_name, zip5)
+        existing_person_id = find_person_by_name_and_zip(
+            conn,
+            person.last_name,
+            person.first_name,
+            zip5,
+            data_source_id=data_source_id,
+        )
     if existing_person_id is not None:
         return existing_person_id
     return insert_person(conn, person)
 
 
-def _resolve_organization_id(conn: psycopg.Connection, organization: Organization) -> UUID:
+def _resolve_organization_id(
+    conn: psycopg.Connection,
+    organization: Organization,
+    *,
+    data_source_id: UUID,
+) -> UUID:
     committee_id = organization.identifiers.get("fec_committee_id")
     if committee_id:
-        existing_org_id = find_organization_by_identifier(conn, "fec_committee_id", committee_id)
+        existing_org_id = find_organization_by_identifier(
+            conn,
+            "fec_committee_id",
+            committee_id,
+            data_source_id=data_source_id,
+        )
         if existing_org_id is not None:
             return existing_org_id
     return insert_organization(conn, organization)
@@ -118,13 +137,22 @@ def load_contribution(
         address_id = upsert_address(conn, extracted_address)
         insert_entity_source(conn, "address", address_id, source_record_id, "contributor_address")
 
-    person_id = _resolve_person_id(conn, extracted_person, extracted_address)
+    person_id = _resolve_person_id(
+        conn,
+        extracted_person,
+        extracted_address,
+        data_source_id=data_source_id,
+    )
     if person_id is not None:
         insert_entity_source(conn, "person", person_id, source_record_id, "donor")
         if address_id is not None:
             insert_entity_address(conn, "person", person_id, address_id, source_record_id, "mailing")
 
-    organization_id = _resolve_organization_id(conn, extracted_organization)
+    organization_id = _resolve_organization_id(
+        conn,
+        extracted_organization,
+        data_source_id=data_source_id,
+    )
     insert_entity_source(conn, "organization", organization_id, source_record_id, "recipient")
     if address_id is not None:
         insert_entity_address(conn, "organization", organization_id, address_id, source_record_id, "mailing")
@@ -150,6 +178,8 @@ def ensure_fec_data_source(conn: psycopg.Connection) -> UUID:
     data_source = DataSource(
         domain=_FEC_DATA_SOURCE_DOMAIN,
         jurisdiction=_FEC_DATA_SOURCE_JURISDICTION,
+        filing_authority_type="federal",
+        filing_authority_code="FEC",
         name=_FEC_DATA_SOURCE_NAME,
         source_url=_FEC_SCHEDULE_A_URL,
         source_format="api",

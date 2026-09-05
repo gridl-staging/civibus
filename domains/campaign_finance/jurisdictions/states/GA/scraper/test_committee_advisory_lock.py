@@ -20,13 +20,17 @@ def test_resolve_ga_committee_id_acquires_advisory_lock_for_known_identifier(
     mock_conn = MagicMock()
     existing_id = uuid4()
 
-    monkeypatch.setattr(ga_load, "find_organization_by_identifier", lambda _c, _k, _v: existing_id)
+    monkeypatch.setattr(
+        ga_load,
+        "find_organization_by_identifier",
+        lambda _c, _k, _v, *, data_source_id: existing_id,
+    )
 
     committee = Organization(
         canonical_name="TEST COMMITTEE FOR GA",
         identifiers={"ga_filer_id": "C2026000123"},
     )
-    result = ga_load._resolve_ga_committee_id(mock_conn, committee)
+    result = ga_load._resolve_ga_committee_id(mock_conn, committee, data_source_id=uuid4())
 
     advisory_calls = [call for call in mock_conn.execute.call_args_list if "pg_advisory_xact_lock" in str(call)]
     assert len(advisory_calls) == 1, "Expected exactly one advisory lock call"
@@ -46,7 +50,7 @@ def test_resolve_ga_committee_id_no_lock_without_identifier(
         canonical_name="UNKNOWN GA COMMITTEE",
         identifiers={},
     )
-    result = ga_load._resolve_ga_committee_id(mock_conn, committee)
+    result = ga_load._resolve_ga_committee_id(mock_conn, committee, data_source_id=uuid4())
 
     advisory_calls = [call for call in mock_conn.execute.call_args_list if "pg_advisory_xact_lock" in str(call)]
     assert len(advisory_calls) == 0, "No advisory lock expected without identifier"

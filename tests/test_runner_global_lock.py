@@ -1,4 +1,4 @@
-"""Tests for the refresh runner global flock-based mutual exclusion."""
+"""Tests for the refresh runner's local and database-backed mutual exclusion."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -46,6 +47,11 @@ def _redirect_runner_lock_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 
 class _FakeConnection:
+    def cursor(self) -> MagicMock:
+        cursor_context = MagicMock()
+        cursor_context.__enter__.return_value.fetchone.return_value = (True,)
+        return cursor_context
+
     def close(self) -> None:
         pass
 
@@ -83,6 +89,111 @@ def test_lock_released_after_close_allows_reacquire() -> None:
         fd2 = _acquire_runner_lock(lock_path)
         assert fd2 is not None
         os.close(fd2)
+
+
+def test_database_runner_locks_use_sorted_distinct_exact_job_keys() -> None:
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.side_effect = [(True,), (True,)]
+    jobs = [
+        _job_for_tests("state-wa-contributions"),
+        _job_for_tests("federal-fec-masters"),
+        _job_for_tests("state-wa-contributions"),
+    ]
+
+    assert runner._try_acquire_database_runner_locks(connection, jobs) is True
+
+    assert [call.args[1] for call in cursor.execute.call_args_list] == [
+        ("civibus-refresh-runner:federal-fec-masters",),
+        ("civibus-refresh-runner:state-wa-contributions",),
+    ]
+    assert all(
+        "pg_try_advisory_lock(hashtextextended(%s, 0))" in call.args[0] for call in cursor.execute.call_args_list
+    )
+
+
+def test_database_runner_lock_returns_false_immediately_on_partial_overlap(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.side_effect = [(True,), (False,)]
+    jobs = [
+        _job_for_tests("state-wa-contributions"),
+        _job_for_tests("state-pa-expenditures"),
+    ]
+
+    started_at = time.monotonic()
+    acquired = runner._try_acquire_database_runner_locks(connection, jobs)
+
+    assert acquired is False
+    assert time.monotonic() - started_at < 0.5
+    assert [call.args[1] for call in cursor.execute.call_args_list] == [
+        ("civibus-refresh-runner:state-pa-expenditures",),
+        ("civibus-refresh-runner:state-wa-contributions",),
+    ]
+    assert "database lock: state-wa-contributions" in capsys.readouterr().err
+
+
+def test_main_database_lock_contention_exits_two_before_ledger_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    job = _job_for_tests("state-wa-contributions")
+
+    class FakeConnection:
+        def close(self) -> None:
+            events.append("close_database_connection")
+
+    def fake_database_locks(connection: object, jobs: list[runner.RefreshJob]) -> bool:
+        events.append("try_database_locks")
+        assert isinstance(connection, FakeConnection)
+        assert jobs == [job]
+        return False
+
+    monkeypatch.setattr(job_builders, "build_refresh_plan", lambda **kwargs: events.append("build_plan") or [job])
+    monkeypatch.setattr(
+        runner,
+        "_acquire_runner_locks_for_jobs",
+        lambda jobs, wait_seconds=0.0: events.append("acquire_local_locks") or [101],
+    )
+    monkeypatch.setattr(
+        runner,
+        "get_connection",
+        lambda **kwargs: events.append("open_database_connection") or FakeConnection(),
+    )
+    monkeypatch.setattr(runner, "_try_acquire_database_runner_locks", fake_database_locks)
+    monkeypatch.setattr(
+        runner,
+        "run_all_jobs",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("ledger/callable path must not run")),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_release_runner_locks",
+        lambda held: events.append(f"release_local_locks:{held}"),
+    )
+
+    exit_code = runner.main(
+        [
+            "--scope",
+            "all",
+            "--job-key-prefix",
+            job.key,
+            "--execution-origin",
+            "operator_attended",
+        ]
+    )
+
+    assert exit_code == 2
+    assert events == [
+        "build_plan",
+        "acquire_local_locks",
+        "open_database_connection",
+        "try_database_locks",
+        "close_database_connection",
+        "release_local_locks:[101]",
+    ]
 
 
 def test_acquire_lock_surfaces_lock_path_setup_permission_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -135,7 +246,7 @@ def test_main_uses_fallback_lock_when_primary_lock_path_setup_fails(
     monkeypatch.setattr(
         runner,
         "run_all_jobs",
-        lambda connection, jobs, dry_run, force, on_result, stop_on_failure=False, on_heartbeat=None: [
+        lambda connection, jobs, dry_run, force, execution_origin, on_result, stop_on_failure=False, on_heartbeat=None: [
             _success_result(jobs[0].key)
         ],
     )
@@ -173,10 +284,20 @@ def test_main_allows_disjoint_key_when_old_global_lock_is_held(
         get_connection_calls += 1
         return _FakeConnection()
 
-    def fake_run_all_jobs(connection, jobs, dry_run, force, on_result, stop_on_failure=False, on_heartbeat=None):
+    def fake_run_all_jobs(
+        connection,
+        jobs,
+        dry_run,
+        force,
+        execution_origin,
+        on_result,
+        stop_on_failure=False,
+        on_heartbeat=None,
+    ):
         nonlocal run_all_jobs_calls
         run_all_jobs_calls += 1
         assert jobs == [job]
+        assert execution_origin == "legacy_unknown"
         return [_success_result(job.key)]
 
     monkeypatch.setattr(job_builders, "build_refresh_plan", lambda **kwargs: [job])

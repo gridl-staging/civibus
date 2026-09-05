@@ -1682,6 +1682,28 @@ describe("race money bars", () => {
     });
   });
 
+  it("keeps signed refunds exact while projecting bars from a zero baseline", () => {
+    const mixedPresentation = buildBarsPresentation([
+      buildMoneyRow({ person_name: "Refund Row", total_raised: "-125.50" }),
+      buildMoneyRow({ person_name: "Positive Row", total_raised: "250.00" })
+    ]);
+
+    expect(mixedPresentation.raceMoneyBars?.rankedRows).toMatchObject([
+      { personName: "Positive Row", barWidthPct: 100, amountLabel: "$250.00" },
+      { personName: "Refund Row", barWidthPct: 0, amountLabel: "-$125.50" }
+    ]);
+
+    const refundOnlyPresentation = buildBarsPresentation([
+      buildMoneyRow({ person_name: "Larger Refund", total_raised: "-250.00" }),
+      buildMoneyRow({ person_name: "Smaller Refund", total_raised: "-125.50" })
+    ]);
+
+    expect(refundOnlyPresentation.raceMoneyBars?.rankedRows).toMatchObject([
+      { personName: "Smaller Refund", barWidthPct: 0, amountLabel: "-$125.50" },
+      { personName: "Larger Refund", barWidthPct: 0, amountLabel: "-$250.00" }
+    ]);
+  });
+
   it("orders the not-loaded group by name so the tail is stable", () => {
     const presentation = buildBarsPresentation([
       buildMoneyRow({ person_name: "Zed Zero-Data", total_raised: null }),

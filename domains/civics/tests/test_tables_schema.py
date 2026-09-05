@@ -697,7 +697,8 @@ def test_seeded_wa_and_fl_state_offices_link_to_state_jurisdictions() -> None:
     rows = _run_psql_command(
         TEST_DATABASE,
         """
-        SELECT o.state || '|' || o.name || '|' || COALESCE(j.fips, '') || '|' || COALESCE(j.jurisdiction_type, '')
+        SELECT o.state || '|' || o.name || '|' || COALESCE(j.fips, '') || '|'
+               || COALESCE(j.state_fips, '') || '|' || COALESCE(j.jurisdiction_type, '')
         FROM civic.office AS o
         LEFT JOIN core.jurisdiction AS j
           ON j.id = o.jurisdiction_id
@@ -710,8 +711,9 @@ def test_seeded_wa_and_fl_state_offices_link_to_state_jurisdictions() -> None:
 
     state_to_observed_fips: dict[str, set[str]] = {state: set() for state in STATE_CODE_TO_FIPS}
     for row in rows:
-        state, _, fips, jurisdiction_type = row.split("|")
+        state, _, fips, state_fips, jurisdiction_type = row.split("|")
         assert fips, f"Expected non-null jurisdiction link for {state} office seed"
+        assert state_fips == fips, f"Expected typed state_fips dual-write for {state} office seed"
         assert jurisdiction_type == "state", f"Expected state jurisdiction_type for {state} office seed"
         state_to_observed_fips[state].add(fips)
 

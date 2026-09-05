@@ -317,6 +317,9 @@ def test_create_app_registers_unique_expected_v1_get_routes(monkeypatch: pytest.
         "/v1/er/summary",
         "/v1/er/{entity_type}/{entity_id}/matches",
         "/v1/graph/{entity_type}/{entity_id}/relationships",
+        "/v1/regional-navigation/resolve",
+        "/v1/regional-navigation/search",
+        "/v1/regional-navigation/children",
         "/v1/search",
     }
 

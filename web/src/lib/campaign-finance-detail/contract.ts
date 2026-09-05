@@ -93,6 +93,12 @@ export type CandidateListItem = {
    * must show unknown as unknown rather than `$0.00`.
    */
   total_receipts?: SerializedMoney | null;
+  /**
+   * Coverage end from the official FEC summary that supplied the totals.
+   * Optional/null means the API has no end-date precision for this row; it is
+   * not permission to infer a cycle, coverage start, or freshness timestamp.
+   */
+  summary_coverage_end_date?: string | null;
 };
 
 export type CommitteeListItem = {
@@ -269,13 +275,14 @@ export type CommitteeIndependentExpenditureTarget = {
   sources: SourceInfo[];
 };
 
-export type CommitteeIndependentExpenditureActivity = {
+export type CommitteeIndependentExpenditureActivity = SelectedCycleMetadata & {
   committee_id: string;
   support_total: SerializedMoney;
   oppose_total: SerializedMoney;
   ie_transaction_count: number;
   excluded_outlier_count: number;
   targets: CommitteeIndependentExpenditureTarget[];
+  coverage: CandidateMoneyCoverage;
 };
 
 export type CommitteeCycleSummary = {
@@ -557,8 +564,14 @@ export function buildFilingDetailPath(filingId: string): string {
   return buildCampaignFinancePath("filings", filingId);
 }
 
-export function buildCommitteeIndependentExpendituresMadePath(committeeId: string): string {
-  return buildCampaignFinancePath("committees", committeeId, "/independent-expenditures-made");
+export function buildCommitteeIndependentExpendituresMadePath(
+  committeeId: string,
+  request: SelectedCycleRequest = {}
+): string {
+  return buildSelectedCyclePath(
+    buildCampaignFinancePath("committees", committeeId, "/independent-expenditures-made"),
+    request
+  );
 }
 
 /**

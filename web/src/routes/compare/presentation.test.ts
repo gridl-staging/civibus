@@ -305,44 +305,44 @@ describe("compare presentation", () => {
     ]);
 
     expect(presentation.rows.map((row) => [row.id, row.label, row.scaleMax])).toEqual([
-      ["total-raised", "Total receipts", 2000],
-      ["total-spent", "Total disbursements", 1500],
-      ["cash-on-hand", "Cash on hand", 300],
-      ["ie-support", "Outside spending supporting", 400],
-      ["ie-oppose", "Outside spending opposing", 300],
-      ["small-dollar-share", "Small-dollar share", 0.25],
-      ["self-funded-share", "Self-funded share", 0.25]
+      ["total-raised", "Total receipts", "2000.00"],
+      ["total-spent", "Total disbursements", "1500.00"],
+      ["cash-on-hand", "Cash on hand", "300.00"],
+      ["ie-support", "Outside spending supporting", "400.00"],
+      ["ie-oppose", "Outside spending opposing", "300.00"],
+      ["small-dollar-share", "Small-dollar share", "25"],
+      ["self-funded-share", "Self-funded share", "25"]
     ]);
     expect(
       presentation.rows.map((row) => row.cells.map((cell) => [cell.state, cell.label, cell.value]))
     ).toEqual([
       [
-        ["available", "$1,200.00", 1200],
-        ["available", "$2,000.00", 2000]
+        ["available", "$1,200.00", "1200.00"],
+        ["available", "$2,000.00", "2000.00"]
       ],
       [
-        ["available", "$700.00", 700],
-        ["available", "$1,500.00", 1500]
+        ["available", "$700.00", "700.00"],
+        ["available", "$1,500.00", "1500.00"]
       ],
       [
-        ["available", "$300.00", 300],
-        ["available", "$200.00", 200]
+        ["available", "$300.00", "300.00"],
+        ["available", "$200.00", "200.00"]
       ],
       [
-        ["available", "$400.00", 400],
-        ["available", "$100.00", 100]
+        ["available", "$400.00", "400.00"],
+        ["available", "$100.00", "100.00"]
       ],
       [
-        ["available", "$25.00", 25],
-        ["available", "$300.00", 300]
+        ["available", "$25.00", "25.00"],
+        ["available", "$300.00", "300.00"]
       ],
       [
-        ["available", "12.5%", 0.125],
-        ["available", "25.0%", 0.25]
+        ["available", "12.5%", "12.5"],
+        ["available", "25.0%", "25"]
       ],
       [
-        ["available", "25.0%", 0.25],
-        ["available", "2.5%", 0.025]
+        ["available", "25.0%", "25"],
+        ["available", "2.5%", "2.5"]
       ]
     ]);
   });
@@ -390,15 +390,15 @@ describe("compare presentation", () => {
 
     expect(presentation.columns.map((column) => column.status)).toEqual(["ready", "ready", "error"]);
     expect(presentation.charts.map((chart) => chart.outsideSpending)).toEqual([null, null, null]);
-    expect(selfFundedRow?.scaleMax).toBe(0.1);
+    expect(selfFundedRow?.scaleMax).toBe("10");
     expect(selfFundedRow?.cells.map((cell) => [cell.state, cell.label, cell.value])).toEqual([
-      ["available", "10.0%", 0.1],
+      ["available", "10.0%", "10"],
       ["unavailable", "Not available", null],
       ["unavailable", "Not available", null]
     ]);
-    expect(smallDollarRow?.scaleMax).toBe(0.1);
+    expect(smallDollarRow?.scaleMax).toBe("10");
     expect(smallDollarRow?.cells.map((cell) => [cell.state, cell.label, cell.value])).toEqual([
-      ["available", "10.0%", 0.1],
+      ["available", "10.0%", "10"],
       ["unavailable", "Not available", null],
       ["unavailable", "Not available", null]
     ]);
@@ -469,15 +469,29 @@ describe("compare presentation", () => {
     expect(presentation.charts[2].contributionInsights).toBeNull();
   });
 
-  it("reports an unavailable chart scale when no column has plottable chart data", async () => {
+  it("reports exact table-only chart scales instead of a plausible zero for unsafe money", async () => {
     const columns: CompareColumn[] = [
       { personId: "ada", person: buildPerson("ada", "Ada North"), money: resolved({} as ResolvedPersonMoneyBundle) }
     ];
     const outcomes: PromiseSettledResult<ResolvedPersonMoneyBundle>[] = [
       fulfilled(
         buildMoneyBundle("ada", [buildSection("ada", "ada-1", buildSummary("ada-1"))], "0.1250", {
-          monthly_totals: [],
-          itemized_size_buckets: []
+          monthly_totals: [
+            {
+              month: "2026-01",
+              total_amount: "9007199254740993.01",
+              transaction_count: 1
+            }
+          ],
+          itemized_size_buckets: [
+            {
+              label: "$2,000 and over",
+              min_amount: "2000.00",
+              max_amount: null,
+              total_amount: "9007199254740993.01",
+              transaction_count: 1
+            }
+          ]
         })
       )
     ];
@@ -485,7 +499,158 @@ describe("compare presentation", () => {
     const presentation = await buildComparePresentation(columns, outcomes);
 
     expect(presentation.chartScales.monthlyContributions.max).toBe(0);
+    expect(presentation.chartScales.monthlyContributions.maxLabel).toBe(
+      "Exact values are table-only"
+    );
     expect(presentation.chartScales.sizeBucketDollars.max).toBe(0);
+    expect(presentation.chartScales.sizeBucketDollars.maxLabel).toBe(
+      "Exact values are table-only"
+    );
     expect(presentation.chartScales.outsideSpending.max).toBe(0);
+  });
+
+  it("keeps close serialized cents exact through max, leader, label, and bar geometry", async () => {
+    const columns: CompareColumn[] = [
+      { personId: "lower", person: buildPerson("lower", "Alpha Lower"), money: resolved({} as ResolvedPersonMoneyBundle) },
+      { personId: "higher", person: buildPerson("higher", "Beta Higher"), money: resolved({} as ResolvedPersonMoneyBundle) }
+    ];
+    const outcomes: PromiseSettledResult<ResolvedPersonMoneyBundle>[] = [
+      fulfilled(
+        buildMoneyBundle(
+          "lower",
+          [
+            buildSection(
+              "lower",
+              "lower-1",
+              buildSummary("lower-1", { total_raised: "9007199254740993.01" }),
+              buildIeSummary({ support_total: "9007199254740993.01" })
+            )
+          ],
+          "0.1000"
+        )
+      ),
+      fulfilled(
+        buildMoneyBundle(
+          "higher",
+          [
+            buildSection(
+              "higher",
+              "higher-1",
+              buildSummary("higher-1", { total_raised: "9007199254740993.02" }),
+              buildIeSummary({ support_total: "9007199254740993.02" })
+            )
+          ],
+          "0.1000"
+        )
+      )
+    ];
+
+    const presentation = await buildComparePresentation(columns, outcomes);
+    const raisedRow = presentation.rows.find((row) => row.id === "total-raised");
+    const supportRow = presentation.rows.find((row) => row.id === "ie-support");
+
+    expect(raisedRow?.scaleMax).toBe("9007199254740993.02");
+    expect(raisedRow?.scaleMaxLabel).toBe("$9,007,199,254,740,993.02");
+    expect(
+      raisedRow?.cells.map((cell) => [cell.value, cell.label, cell.widthPercentage])
+    ).toEqual([
+      [
+        "9007199254740993.01",
+        "$9,007,199,254,740,993.01",
+        "99.999999999999999889%"
+      ],
+      ["9007199254740993.02", "$9,007,199,254,740,993.02", "100%"]
+    ]);
+    expect(presentation.answerFirstSummary).toContain(
+      "Beta Higher has the most total receipts at $9,007,199,254,740,993.02"
+    );
+    expect(supportRow?.scaleMax).toBe("9007199254740993.02");
+    expect(supportRow?.cells.map((cell) => [cell.value, cell.widthPercentage])).toEqual([
+      ["9007199254740993.01", "99.999999999999999889%"],
+      ["9007199254740993.02", "100%"]
+    ]);
+    expect(presentation.answerFirstSummary).toContain(
+      "Beta Higher has the most outside support at $9,007,199,254,740,993.02"
+    );
+  });
+
+  it("keeps overflow-scale serialized money finite and proportionate", async () => {
+    const columns: CompareColumn[] = [
+      { personId: "half", person: buildPerson("half", "Half Scale"), money: resolved({} as ResolvedPersonMoneyBundle) },
+      { personId: "full", person: buildPerson("full", "Full Scale"), money: resolved({} as ResolvedPersonMoneyBundle) }
+    ];
+    const outcomes: PromiseSettledResult<ResolvedPersonMoneyBundle>[] = [
+      fulfilled(
+        buildMoneyBundle(
+          "half",
+          [buildSection("half", "half-1", buildSummary("half-1", { total_raised: "1e400" }))],
+          "0.1000"
+        )
+      ),
+      fulfilled(
+        buildMoneyBundle(
+          "full",
+          [buildSection("full", "full-1", buildSummary("full-1", { total_raised: "2e400" }))],
+          "0.1000"
+        )
+      )
+    ];
+
+    const presentation = await buildComparePresentation(columns, outcomes);
+    const raisedRow = presentation.rows.find((row) => row.id === "total-raised");
+
+    expect(raisedRow?.scaleMax).toBe("2e400");
+    expect(raisedRow?.cells.map((cell) => cell.widthPercentage)).toEqual(["50%", "100%"]);
+    expect(raisedRow?.cells.map((cell) => cell.label)).toEqual([
+      `$10${",000".repeat(133)}.00`,
+      `$20${",000".repeat(133)}.00`
+    ]);
+  });
+
+  it("preserves unavailable, genuine zero, negative, and ordinary proportional money", async () => {
+    const columns: CompareColumn[] = [
+      { personId: "full", person: buildPerson("full", "Full"), money: resolved({} as ResolvedPersonMoneyBundle) },
+      { personId: "quarter", person: buildPerson("quarter", "Quarter"), money: resolved({} as ResolvedPersonMoneyBundle) },
+      { personId: "zero", person: buildPerson("zero", "Zero"), money: resolved({} as ResolvedPersonMoneyBundle) },
+      { personId: "negative", person: buildPerson("negative", "Negative"), money: resolved({} as ResolvedPersonMoneyBundle) }
+    ];
+    const summaryOverrides: Partial<CandidateFundraisingSummary>[] = [
+      { total_raised: "100.00", cash_on_hand: null },
+      { total_raised: "25.00", cash_on_hand: "0.00" },
+      { total_raised: "0.00", cash_on_hand: "-25.00" },
+      { total_raised: "-10.00", cash_on_hand: "100.00" }
+    ];
+    const outcomes: PromiseSettledResult<ResolvedPersonMoneyBundle>[] = columns.map((column, index) =>
+      fulfilled(
+        buildMoneyBundle(
+          column.personId,
+          [
+            buildSection(
+              column.personId,
+              `${column.personId}-1`,
+              buildSummary(`${column.personId}-1`, summaryOverrides[index])
+            )
+          ],
+          "0.1000"
+        )
+      )
+    );
+
+    const presentation = await buildComparePresentation(columns, outcomes);
+    const raisedRow = presentation.rows.find((row) => row.id === "total-raised");
+    const cashRow = presentation.rows.find((row) => row.id === "cash-on-hand");
+
+    expect(raisedRow?.cells.map((cell) => [cell.state, cell.label, cell.widthPercentage])).toEqual([
+      ["available", "$100.00", "100%"],
+      ["available", "$25.00", "25%"],
+      ["available", "$0.00", "0%"],
+      ["available", "-$10.00", "0%"]
+    ]);
+    expect(cashRow?.cells.map((cell) => [cell.state, cell.label, cell.widthPercentage])).toEqual([
+      ["unavailable", "Not available", null],
+      ["available", "$0.00", "0%"],
+      ["available", "-$25.00", "0%"],
+      ["available", "$100.00", "100%"]
+    ]);
   });
 });

@@ -8,6 +8,9 @@ import {
 import { formatCountLabel } from "$lib/count-label";
 import { formatPersonDisplayName } from "$lib/display-name";
 import {
+  CANDIDATE_MONEY_ACTIVITY_STATES,
+  CANDIDATE_MONEY_COMPLETENESS_VALUES,
+  CANDIDATE_MONEY_EVIDENCE_BASIS_VALUES,
   buildCandidateHref,
   buildCommitteeHref,
   buildFilingDetailPath
@@ -22,6 +25,7 @@ import type {
   CandidateDetailResponse,
   CandidateListItem,
   CampaignFinanceTransactionResponse,
+  CandidateMoneyCoverage,
   CommitteeDetailResponse,
   CommitteeFilingBreakdown,
   CandidateFundraisingSummary,
@@ -265,6 +269,7 @@ export type CommitteeOutsideSpendingPresentation = {
   targetRows: CommitteeOutsideSpendingTargetRow[];
   sourceRows: CommitteeOutsideSpendingSourceRow[];
   emptyMessage: string | null;
+  showFigures: boolean;
 };
 
 export type CandidateDetailShellPresentation = {
@@ -386,6 +391,12 @@ export const CANDIDATE_IE_NOT_LOADED_MESSAGE =
 export const CANDIDATE_METHODOLOGY_HREF = "/methodology";
 const COMMITTEE_OUTSIDE_SPENDING_EMPTY_MESSAGE =
   "This committee reported no independent expenditures";
+const COMMITTEE_OUTSIDE_SPENDING_OUTLIER_ONLY_MESSAGE =
+  "No independent-expenditure totals are shown because all reported expenditures were excluded as outliers.";
+const COMMITTEE_OUTSIDE_SPENDING_NOT_LOADED_MESSAGE =
+  "Independent-expenditure coverage is not yet available for this committee and cycle.";
+const COMMITTEE_OUTSIDE_SPENDING_INVALID_COVERAGE_MESSAGE =
+  "Committee independent-expenditure data is temporarily unavailable.";
 const COMMITTEE_SPEND_CATEGORIES_UNAVAILABLE_MESSAGE =
   "Spend categories are not available for this committee.";
 const CANDIDATE_EMPTY_COMPLETENESS_WARNING =
@@ -404,6 +415,14 @@ const CURRENCY_FORMATTER = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2
 });
 const INTEGER_FORMATTER = new Intl.NumberFormat("en-US");
+const SERIALIZED_MONEY_PATTERN = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/;
+const INVALID_MONEY_MESSAGE = "Money value must be a finite decimal amount.";
+
+type NormalizedSerializedMoney = {
+  sign: -1 | 0 | 1;
+  significantDigits: string;
+  integerDigitCount: bigint;
+};
 
 /** Rows shown per full filing-table page; the final page renders the remainder. */
 export const COMMITTEE_FILINGS_PAGE_SIZE = 25;
@@ -423,6 +442,223 @@ export function resolveCanonicalName(rawName: string, fallbackLabel: "Candidate"
 
 function parseSerializedMoney(value: SerializedMoney | number): number {
   return typeof value === "number" ? value : Number(value);
+}
+
+function normalizeSerializedMoney(value: SerializedMoney): NormalizedSerializedMoney {
+  const match = SERIALIZED_MONEY_PATTERN.exec(value);
+  if (match === null) {
+    throw new Error(INVALID_MONEY_MESSAGE);
+  }
+
+  const integerDigits = match[2] ?? "";
+  const fractionalDigits = match[3] ?? match[4] ?? "";
+  const rawDigits = `${integerDigits}${fractionalDigits}`;
+  const firstSignificantIndex = rawDigits.search(/[1-9]/);
+  if (firstSignificantIndex === -1) {
+    return { sign: 0, significantDigits: "", integerDigitCount: 0n };
+  }
+
+  const exponent = BigInt(match[5] ?? "0");
+  return {
+    sign: match[1] === "-" ? -1 : 1,
+    significantDigits: rawDigits.slice(firstSignificantIndex).replace(/0+$/, ""),
+    integerDigitCount:
+      BigInt(integerDigits.length) + exponent - BigInt(firstSignificantIndex)
+  };
+}
+
+function compareNormalizedMagnitudes(
+  left: NormalizedSerializedMoney,
+  right: NormalizedSerializedMoney
+): number {
+  if (left.integerDigitCount !== right.integerDigitCount) {
+    return left.integerDigitCount < right.integerDigitCount ? -1 : 1;
+  }
+
+  const digitCount = Math.max(left.significantDigits.length, right.significantDigits.length);
+  for (let index = 0; index < digitCount; index += 1) {
+    const leftDigit = left.significantDigits.charCodeAt(index) || 48;
+    const rightDigit = right.significantDigits.charCodeAt(index) || 48;
+    if (leftDigit !== rightDigit) {
+      return leftDigit < rightDigit ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+function normalizedMoneyExponent(value: NormalizedSerializedMoney): bigint {
+  return value.integerDigitCount - BigInt(value.significantDigits.length);
+}
+
+function normalizedMoneyCoefficient(value: NormalizedSerializedMoney): bigint {
+  if (value.sign === 0) {
+    return 0n;
+  }
+  const magnitude = BigInt(value.significantDigits);
+  return value.sign === -1 ? -magnitude : magnitude;
+}
+
+/**
+ * Compare two serialized decimal amounts without narrowing through IEEE-754.
+ *
+ * This extends the exact money-formatting owner so display and ordering accept
+ * the same decimal grammar. The return value follows Array.sort conventions.
+ */
+export function compareSerializedMoney(left: SerializedMoney, right: SerializedMoney): number {
+  const normalizedLeft = normalizeSerializedMoney(left);
+  const normalizedRight = normalizeSerializedMoney(right);
+  if (normalizedLeft.sign !== normalizedRight.sign) {
+    return normalizedLeft.sign < normalizedRight.sign ? -1 : 1;
+  }
+  if (normalizedLeft.sign === 0) {
+    return 0;
+  }
+
+  const magnitudeOrder = compareNormalizedMagnitudes(normalizedLeft, normalizedRight);
+  return normalizedLeft.sign === -1 ? -magnitudeOrder : magnitudeOrder;
+}
+
+/**
+ * Add serialized decimal amounts without narrowing through IEEE-754.
+ *
+ * The compact coefficient/exponent result remains valid `SerializedMoney` and
+ * lets the existing formatter and comparator remain the only decimal grammar
+ * owners. Callers decide separately whether an absent value makes an aggregate
+ * unavailable; this function never turns null into zero.
+ */
+export function sumSerializedMoney(values: readonly SerializedMoney[]): SerializedMoney {
+  const normalizedValues = values.map(normalizeSerializedMoney);
+  const reportedValues = normalizedValues.filter((value) => value.sign !== 0);
+  if (reportedValues.length === 0) {
+    return "0";
+  }
+
+  const minimumExponent = reportedValues.reduce((minimum, value) => {
+    const exponent = normalizedMoneyExponent(value);
+    return exponent < minimum ? exponent : minimum;
+  }, normalizedMoneyExponent(reportedValues[0]));
+  const coefficient = reportedValues.reduce((total, value) => {
+    const exponentShift = normalizedMoneyExponent(value) - minimumExponent;
+    return total + normalizedMoneyCoefficient(value) * (10n ** exponentShift);
+  }, 0n);
+
+  return coefficient === 0n ? "0" : `${coefficient}e${minimumExponent}`;
+}
+
+/**
+ * Return `(numerator / denominator) * 100` as a fixed decimal string.
+ *
+ * Division and half-away-from-zero rounding stay in BigInt space, so close
+ * unsafe cents and values beyond Number's finite range retain truthful ratios.
+ */
+export function formatSerializedMoneyRatioPercentage(
+  numerator: SerializedMoney,
+  denominator: SerializedMoney,
+  fractionDigits: number
+): string {
+  if (!Number.isInteger(fractionDigits) || fractionDigits < 0 || fractionDigits > 24) {
+    throw new RangeError("Money ratio fraction digits must be an integer from 0 through 24.");
+  }
+
+  const normalizedNumerator = normalizeSerializedMoney(numerator);
+  const normalizedDenominator = normalizeSerializedMoney(denominator);
+  if (normalizedDenominator.sign === 0) {
+    throw new RangeError("Money ratio denominator must not be zero.");
+  }
+
+  if (normalizedNumerator.sign === 0) {
+    return fractionDigits === 0 ? "0" : `0.${"0".repeat(fractionDigits)}`;
+  }
+
+  const outputSign = normalizedNumerator.sign === normalizedDenominator.sign ? "" : "-";
+  let scaledNumerator = BigInt(normalizedNumerator.significantDigits);
+  let scaledDenominator = BigInt(normalizedDenominator.significantDigits);
+  const decimalShift =
+    normalizedMoneyExponent(normalizedNumerator) -
+    normalizedMoneyExponent(normalizedDenominator) +
+    2n +
+    BigInt(fractionDigits);
+  if (decimalShift >= 0n) {
+    scaledNumerator *= 10n ** decimalShift;
+  } else {
+    scaledDenominator *= 10n ** -decimalShift;
+  }
+
+  let roundedRatio = scaledNumerator / scaledDenominator;
+  const remainder = scaledNumerator % scaledDenominator;
+  if (remainder * 2n >= scaledDenominator) {
+    roundedRatio += 1n;
+  }
+
+  if (fractionDigits === 0) {
+    return `${outputSign}${roundedRatio}`;
+  }
+  const fixedDigits = roundedRatio.toString().padStart(fractionDigits + 1, "0");
+  return `${outputSign}${fixedDigits.slice(0, -fractionDigits)}.${fixedDigits.slice(-fractionDigits)}`;
+}
+
+/** Project an exact money magnitude ratio only after reducing it to a bounded percentage. */
+export function serializedMoneyMagnitudePercent(
+  value: SerializedMoney,
+  maximum: SerializedMoney
+): number {
+  const absoluteValue = value.startsWith("-") ? value.slice(1) : value;
+  const absoluteMaximum = maximum.startsWith("-") ? maximum.slice(1) : maximum;
+  if (compareSerializedMoney(absoluteMaximum, "0") === 0) {
+    return 0;
+  }
+
+  return Number(formatSerializedMoneyRatioPercentage(absoluteValue, absoluteMaximum, 0));
+}
+
+function getNormalizedMoneyDigit(value: NormalizedSerializedMoney, index: bigint): string {
+  if (index < 0n || index >= BigInt(value.significantDigits.length)) {
+    return "0";
+  }
+  return value.significantDigits[Number(index)] ?? "0";
+}
+
+function formatExpandedSerializedCurrency(
+  value: SerializedMoney,
+  normalized: NormalizedSerializedMoney
+): string {
+  const maximumExpandedIntegerDigits = 100_000n;
+  if (normalized.integerDigitCount > maximumExpandedIntegerDigits) {
+    throw new Error(INVALID_MONEY_MESSAGE);
+  }
+
+  const integerDigitCount =
+    normalized.integerDigitCount > 0n ? Number(normalized.integerDigitCount) : 0;
+  const integerDigits =
+    integerDigitCount === 0
+      ? "0"
+      : normalized.significantDigits.slice(0, integerDigitCount).padEnd(integerDigitCount, "0");
+  const cents = `${getNormalizedMoneyDigit(normalized, normalized.integerDigitCount)}${getNormalizedMoneyDigit(
+    normalized,
+    normalized.integerDigitCount + 1n
+  )}`;
+  const roundingDigit = getNormalizedMoneyDigit(normalized, normalized.integerDigitCount + 2n);
+  let minorUnits = BigInt(`${integerDigits}${cents}`);
+  if (roundingDigit >= "5") {
+    minorUnits += 1n;
+  }
+
+  const fixedMinorUnits = minorUnits.toString().padStart(3, "0");
+  const dollars = fixedMinorUnits.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const formattedCents = fixedMinorUnits.slice(-2);
+  const sign = value.startsWith("-") ? "-" : "";
+  return `${sign}$${dollars}.${formattedCents}`;
+}
+
+function formatSerializedCurrency(value: SerializedMoney): string {
+  const normalized = normalizeSerializedMoney(value);
+
+  const parts = CURRENCY_FORMATTER.formatToParts(value as Intl.StringNumericLiteral);
+  if (parts.some((part) => part.type === "infinity" || part.type === "nan")) {
+    return formatExpandedSerializedCurrency(value, normalized);
+  }
+
+  return parts.map((part) => part.value).join("");
 }
 
 function parseFiniteSerializedMoney(value: SerializedMoney | number | null): number | null {
@@ -500,7 +736,15 @@ function hasCoverageGap(previousEndDate: string | null, nextStartDate: string | 
 }
 
 export function formatCurrency(value: SerializedMoney | number): string {
-  return CURRENCY_FORMATTER.format(parseSerializedMoney(value));
+  if (typeof value === "string") {
+    return formatSerializedCurrency(value);
+  }
+
+  if (!Number.isFinite(value)) {
+    throw new Error(INVALID_MONEY_MESSAGE);
+  }
+
+  return CURRENCY_FORMATTER.format(value);
 }
 
 type NormalizedCommitteeFilingFact = {
@@ -720,7 +964,11 @@ function buildFilingBreakdownRow(fact: NormalizedCommitteeFilingFact): FilingBre
     receiptDate: formatDateValue(filing.receipt_date),
     totalReceipts: formatCurrency(filing.total_raised),
     totalDisbursements: formatCurrency(filing.total_spent),
-    cashOnHand: cashOnHandAmount === null ? "—" : formatCurrency(cashOnHandAmount),
+    // The numeric copy belongs to the chart; table text keeps the exact serialized amount.
+    cashOnHand:
+      cashOnHandAmount === null || filing.cash_on_hand === null
+        ? "—"
+        : formatCurrency(filing.cash_on_hand),
     transactionCount: filing.transaction_count
   };
 }
@@ -1235,12 +1483,44 @@ function hasNotLoadedFundraisingCoverage(summary: CandidateFundraisingSummary): 
   return summary.coverage.activity_state === "not_loaded";
 }
 
-function _computeDeviationRatio(currentTotal: number, expectedTotal: number): number {
-  if (expectedTotal === 0) {
-    return currentTotal === 0 ? 0 : Number.POSITIVE_INFINITY;
+function exceedsCandidateDeviationThreshold(
+  currentTotal: SerializedMoney,
+  expectedTotal: SerializedMoney,
+  deviationThresholdRatio: number
+): boolean {
+  const expectedTotalOrder = compareSerializedMoney(expectedTotal, "0");
+  if (expectedTotalOrder === 0) {
+    const deviationRatio =
+      compareSerializedMoney(currentTotal, "0") === 0 ? 0 : Number.POSITIVE_INFINITY;
+    return deviationRatio > deviationThresholdRatio;
   }
 
-  return Math.abs(currentTotal - expectedTotal) / expectedTotal;
+  if (
+    Number.isNaN(deviationThresholdRatio) ||
+    deviationThresholdRatio === Number.POSITIVE_INFINITY
+  ) {
+    return false;
+  }
+  if (deviationThresholdRatio === Number.NEGATIVE_INFINITY) {
+    return true;
+  }
+
+  const normalizedExpectedTotal = normalizeSerializedMoney(expectedTotal);
+  const normalizedThreshold = normalizeSerializedMoney(String(deviationThresholdRatio));
+  const negatedExpectedTotal =
+    `${-normalizedMoneyCoefficient(normalizedExpectedTotal)}e` +
+    `${normalizedMoneyExponent(normalizedExpectedTotal)}`;
+  const exactDifference = sumSerializedMoney([currentTotal, negatedExpectedTotal]);
+  const absoluteDifference = exactDifference.startsWith("-")
+    ? exactDifference.slice(1)
+    : exactDifference;
+  // Compare |current - expected| with expected * threshold without decimal division.
+  const allowedDifference =
+    `${normalizedMoneyCoefficient(normalizedExpectedTotal) * normalizedMoneyCoefficient(normalizedThreshold)}e` +
+    `${normalizedMoneyExponent(normalizedExpectedTotal) + normalizedMoneyExponent(normalizedThreshold)}`;
+  const differenceOrder = compareSerializedMoney(absoluteDifference, allowedDifference);
+
+  return expectedTotalOrder > 0 ? differenceOrder > 0 : differenceOrder < 0;
 }
 
 function sanitizeMethodologyHref(methodologyHref: string): string {
@@ -1267,15 +1547,17 @@ export function buildCandidateCompletenessWarnings(
   }
 
   if (l10Reference !== null) {
-    const currentTotalRaised = parseSerializedMoney(summary.total_raised);
-    const referenceTotalRaised = parseSerializedMoney(l10Reference.totalRaised);
-    const deviationRatio = _computeDeviationRatio(currentTotalRaised, referenceTotalRaised);
-
-    if (deviationRatio > l10Reference.deviationThresholdRatio) {
+    if (
+      exceedsCandidateDeviationThreshold(
+        summary.total_raised,
+        l10Reference.totalRaised,
+        l10Reference.deviationThresholdRatio
+      )
+    ) {
       warnings.push({
         message:
-          `Civibus shows ${formatCurrency(currentTotalRaised)} raised, ` +
-          `but the ${l10Reference.sourceLabel} reference is ${formatCurrency(referenceTotalRaised)}. ` +
+          `Civibus shows ${formatCurrency(summary.total_raised)} raised, ` +
+          `but the ${l10Reference.sourceLabel} reference is ${formatCurrency(l10Reference.totalRaised)}. ` +
           "Coverage may be incomplete.",
         methodologyHref: sanitizeMethodologyHref(l10Reference.methodologyHref)
       });
@@ -1555,13 +1837,88 @@ function buildCommitteeOutsideSpendingOutlierNote(excludedOutlierCount: number):
   return `${excludedOutlierCount} reported independent expenditures were excluded from these totals as outliers.`;
 }
 
-function isCommitteeOutsideSpendingEmpty(activity: CommitteeIndependentExpenditureActivity): boolean {
+type CommitteeOutsideSpendingCoverageState =
+  | "populated"
+  | "loaded_zero"
+  | "not_loaded"
+  | "invalid";
+
+function isCandidateMoneyCoverage(value: unknown): value is CandidateMoneyCoverage {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const coverage = value as Record<string, unknown>;
   return (
+    CANDIDATE_MONEY_ACTIVITY_STATES.includes(
+      coverage.activity_state as (typeof CANDIDATE_MONEY_ACTIVITY_STATES)[number]
+    ) &&
+    CANDIDATE_MONEY_COMPLETENESS_VALUES.includes(
+      coverage.completeness as (typeof CANDIDATE_MONEY_COMPLETENESS_VALUES)[number]
+    ) &&
+    CANDIDATE_MONEY_EVIDENCE_BASIS_VALUES.includes(
+      coverage.basis as (typeof CANDIDATE_MONEY_EVIDENCE_BASIS_VALUES)[number]
+    )
+  );
+}
+
+function committeeOutsideSpendingCoverageState(
+  activity: CommitteeIndependentExpenditureActivity
+): CommitteeOutsideSpendingCoverageState {
+  const coverage: unknown = activity.coverage;
+  if (!isCandidateMoneyCoverage(coverage)) {
+    return "invalid";
+  }
+
+  if (
+    (coverage.activity_state === "populated" || coverage.activity_state === "loaded_zero") &&
+    coverage.completeness === "partial" &&
+    coverage.basis === "fec_schedule_e_transactions"
+  ) {
+    return coverage.activity_state;
+  }
+
+  if (
+    coverage.activity_state === "not_loaded" &&
+    coverage.completeness === "unknown" &&
+    coverage.basis === "no_authoritative_load_evidence"
+  ) {
+    return "not_loaded";
+  }
+
+  return "invalid";
+}
+
+function buildCommitteeOutsideSpendingEmptyMessage(
+  activity: CommitteeIndependentExpenditureActivity,
+  coverageState: CommitteeOutsideSpendingCoverageState
+): string | null {
+  if (coverageState === "not_loaded") {
+    return COMMITTEE_OUTSIDE_SPENDING_NOT_LOADED_MESSAGE;
+  }
+  if (coverageState === "invalid") {
+    return COMMITTEE_OUTSIDE_SPENDING_INVALID_COVERAGE_MESSAGE;
+  }
+
+  const hasNoIncludedActivity =
     parseSerializedMoney(activity.support_total) === 0 &&
     parseSerializedMoney(activity.oppose_total) === 0 &&
     activity.ie_transaction_count === 0 &&
-    activity.targets.length === 0
-  );
+    activity.targets.length === 0;
+
+  if (!hasNoIncludedActivity) {
+    return coverageState === "loaded_zero"
+      ? COMMITTEE_OUTSIDE_SPENDING_INVALID_COVERAGE_MESSAGE
+      : null;
+  }
+
+  if (coverageState === "loaded_zero" && activity.excluded_outlier_count === 0) {
+    return COMMITTEE_OUTSIDE_SPENDING_EMPTY_MESSAGE;
+  }
+  if (coverageState === "populated" && activity.excluded_outlier_count > 0) {
+    return COMMITTEE_OUTSIDE_SPENDING_OUTLIER_ONLY_MESSAGE;
+  }
+  return COMMITTEE_OUTSIDE_SPENDING_INVALID_COVERAGE_MESSAGE;
 }
 
 /**
@@ -1569,17 +1926,25 @@ function isCommitteeOutsideSpendingEmpty(activity: CommitteeIndependentExpenditu
 export function buildCommitteeOutsideSpendingPresentation(
   activity: CommitteeIndependentExpenditureActivity
 ): CommitteeOutsideSpendingPresentation {
-  const targetRows = buildCommitteeOutsideSpendingTargetRows(activity.targets);
-  const sourceRows = buildCommitteeOutsideSpendingSourceRows(activity.targets);
+  const coverageState = committeeOutsideSpendingCoverageState(activity);
+  const emptyMessage = buildCommitteeOutsideSpendingEmptyMessage(activity, coverageState);
+  const showFigures =
+    coverageState === "loaded_zero" || (coverageState === "populated" && emptyMessage === null);
+  const targetRows = showFigures ? buildCommitteeOutsideSpendingTargetRows(activity.targets) : [];
+  const sourceRows = showFigures ? buildCommitteeOutsideSpendingSourceRows(activity.targets) : [];
 
   return {
     supportTotal: formatCurrency(activity.support_total),
     opposeTotal: formatCurrency(activity.oppose_total),
     ieCountLabel: formatCountLabel(activity.ie_transaction_count, "expenditure"),
-    outlierNote: buildCommitteeOutsideSpendingOutlierNote(activity.excluded_outlier_count),
+    outlierNote:
+      coverageState === "populated"
+        ? buildCommitteeOutsideSpendingOutlierNote(activity.excluded_outlier_count)
+        : null,
     targetRows,
     sourceRows,
-    emptyMessage: isCommitteeOutsideSpendingEmpty(activity) ? COMMITTEE_OUTSIDE_SPENDING_EMPTY_MESSAGE : null
+    emptyMessage,
+    showFigures
   };
 }
 

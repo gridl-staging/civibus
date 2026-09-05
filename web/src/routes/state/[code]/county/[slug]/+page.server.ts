@@ -1,101 +1,109 @@
+import { redirect } from "@sveltejs/kit";
 import {
   buildMapLayerVisibilityDefaults,
-  type CivicGeometryLevel
+  type CivicGeometryLevel,
 } from "$lib/config/app";
-import { buildTrustSection } from "$lib/detail-trust/presentation";
-import { extractCountySlugFromDivisionName } from "$lib/region-map/county-slug";
-import {
-  fetchCountyCampaignFinanceSummary
-} from "$lib/server/api/campaign-finance-detail";
+import { buildRegionalAliasRedirect } from "$lib/regional-navigation/presentation";
 import { ApiResponseError } from "$lib/server/api/client";
 import {
-  fetchCivicGeometry,
+  fetchOptionalCivicGeometry,
   type CivicGeometryFeature,
-  type CivicGeometryFeatureCollection
+  type CivicGeometryFeatureCollection,
 } from "$lib/server/api/civic-geometry";
 import { withApiResponseErrorHandling } from "$lib/server/api/error";
+import { fetchRegionalNavigationNode } from "$lib/server/api/state-pages";
+import type { RegionalNavigationNode } from "$lib/server/api/state-pages-contract";
 import type { PageServerLoad } from "./$types";
 
 function createEmptyFeatureCollection(): CivicGeometryFeatureCollection {
   return {
     type: "FeatureCollection",
-    features: []
+    features: [],
   };
 }
 
-function createGeometryByLevelRecord(): Record<CivicGeometryLevel, CivicGeometryFeatureCollection> {
+function createGeometryByLevelRecord(): Record<
+  CivicGeometryLevel,
+  CivicGeometryFeatureCollection
+> {
   return {
     state: createEmptyFeatureCollection(),
     county: createEmptyFeatureCollection(),
-    congressional_district: createEmptyFeatureCollection()
+    congressional_district: createEmptyFeatureCollection(),
   };
 }
 
-function buildCountyName(countySlug: string): string {
-  return countySlug
-    .split("_")
-    .filter((segment) => segment !== "")
-    .map((segment) => `${segment[0]?.toUpperCase() ?? ""}${segment.slice(1)}`)
-    .join(" ");
-}
-
-function findCountyFeatureBySlug(
+function findCountyFeatureByReference(
   countyFeatures: CivicGeometryFeature[],
-  stateCode: string,
-  countySlug: string
+  node: RegionalNavigationNode,
 ): CivicGeometryFeature | null {
-  for (const countyFeature of countyFeatures) {
-    const featureCountySlug = extractCountySlugFromDivisionName(countyFeature.properties.name, stateCode);
-    if (featureCountySlug === countySlug) {
-      return countyFeature;
-    }
-  }
+  const reference = node.geometry_reference;
+  if (reference === null) return null;
 
-  return null;
+  const matches = countyFeatures.filter(
+    (feature) =>
+      feature.properties.name === reference.value &&
+      feature.properties.state === node.state_code &&
+      feature.properties.division_type === node.kind,
+  );
+  return matches.length === 1 ? matches[0] : null;
 }
 
-/**
- */
-export const load: PageServerLoad = ({ params, locals }) =>
+export const load: PageServerLoad = ({ params, url, locals }) =>
   withApiResponseErrorHandling(async () => {
     const stateCode = params.code.toUpperCase();
-    const countySlug = params.slug.toLowerCase();
-
-    // Slug rule must stay aligned with `_slugify_name` in tiger_geometry.py and
-    // `_COUNTY_PROXY_CITIES_BY_STATE` keys: lowercase with non-alphanumeric runs collapsed to `_`.
-    const [countyGeometry, congressionalDistrictGeometry] = await Promise.all([
-      fetchCivicGeometry(locals.api, { level: "county", state: stateCode }),
-      fetchCivicGeometry(locals.api, { level: "congressional_district", state: stateCode })
-    ]);
-
-    const matchedCountyFeature = findCountyFeatureBySlug(countyGeometry.features, stateCode, countySlug);
-    if (matchedCountyFeature === null) {
-      throw new ApiResponseError(404, { detail: "County geometry not found" });
+    const countySlug = params.slug;
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(countySlug)) {
+      throw new ApiResponseError(404, {
+        detail: "Regional navigation node not found",
+      });
     }
 
-    const summary = await fetchCountyCampaignFinanceSummary(locals.api, {
-      state: stateCode,
-      countySlug
+    const navigationNode = await fetchRegionalNavigationNode(locals.api, {
+      kind: "county",
+      stateCode,
+      slug: countySlug,
     });
+    const canonicalRedirect = buildRegionalAliasRedirect(navigationNode, url);
+    if (canonicalRedirect !== null) redirect(308, canonicalRedirect);
+
+    const [countyGeometry, congressionalDistrictGeometry] = await Promise.all([
+      fetchOptionalCivicGeometry(locals.api, {
+        level: "county",
+        state: stateCode,
+      }),
+      fetchOptionalCivicGeometry(locals.api, {
+        level: "congressional_district",
+        state: stateCode,
+      }),
+    ]);
+
+    const matchedCountyFeature = findCountyFeatureByReference(
+      countyGeometry.features,
+      navigationNode,
+    );
 
     const geometryByLevel = createGeometryByLevelRecord();
-    geometryByLevel.county = {
-      type: "FeatureCollection",
-      features: [matchedCountyFeature]
-    };
+    if (matchedCountyFeature !== null) {
+      geometryByLevel.county = {
+        type: "FeatureCollection",
+        features: [matchedCountyFeature],
+      };
+    }
     geometryByLevel.congressional_district = congressionalDistrictGeometry;
 
     return {
       stateCode,
       countySlug,
-      countyName: buildCountyName(countySlug),
+      countyName: navigationNode.name,
+      hasCountyGeometry: matchedCountyFeature !== null,
       pageLevel: "county" as const,
       geometryByLevel,
       layerVisibilityDefaults: buildMapLayerVisibilityDefaults("county"),
-      donor_total_cents: summary.donor_total_cents,
-      transaction_count: summary.transaction_count,
-      top_recipient_committees: summary.top_recipient_committees,
-      top_linked_candidates: summary.top_linked_candidates,
-      trustSection: buildTrustSection(summary.sources, { includeJurisdictionFreshnessNote: true })
+      navigationNode,
+      // The inherited summary endpoint cannot prove aggregate-level source
+      // completeness. Keep the labeled control visible, but never expose its
+      // amounts until an owner can prove every included transaction.
+      proxySummary: null,
     };
   }, "Backend county drilldown request failed.");

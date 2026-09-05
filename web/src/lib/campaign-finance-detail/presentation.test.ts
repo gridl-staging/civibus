@@ -28,6 +28,7 @@ import {
   DEFAULT_CANDIDATE_SUMMARY,
   DEFAULT_COMMITTEE_DETAIL,
   DEFAULT_FILING_BREAKDOWN,
+  DEFAULT_SELECTED_CYCLE_FIELDS,
   DEFAULT_SUMMARY,
   FILING_ID,
   ORG_ID,
@@ -35,6 +36,12 @@ import {
   buildCandidateBundle,
   buildCommitteeBundle
 } from "./presentation_test_fixtures";
+
+const POPULATED_SCHEDULE_E_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "partial" as const,
+  basis: "fec_schedule_e_transactions" as const
+};
 
 describe("campaign finance detail presentation", () => {
   it("builds committee fact rows including routable canonical organization links", () => {
@@ -452,11 +459,13 @@ describe("campaign finance detail presentation", () => {
       ]
     };
     const presentation = buildCommitteeDeferredOutsideSpending({
+      ...DEFAULT_SELECTED_CYCLE_FIELDS,
       committee_id: COMMITTEE_ID,
       support_total: "1500.00",
       oppose_total: "250.00",
       ie_transaction_count: 4,
       excluded_outlier_count: 0,
+      coverage: POPULATED_SCHEDULE_E_COVERAGE,
       targets: [
         target,
         {
@@ -483,11 +492,13 @@ describe("campaign finance detail presentation", () => {
 
   it("builds committee-made outside spending rows with person links and source-filing links", () => {
     const presentation = buildCommitteeDeferredOutsideSpending({
+      ...DEFAULT_SELECTED_CYCLE_FIELDS,
       committee_id: COMMITTEE_ID,
       support_total: "1500.00",
       oppose_total: "250.00",
       ie_transaction_count: 3,
       excluded_outlier_count: 1,
+      coverage: POPULATED_SCHEDULE_E_COVERAGE,
       targets: [
         {
           candidate_id: CANDIDATE_ID,
@@ -525,6 +536,7 @@ describe("campaign finance detail presentation", () => {
       ieCountLabel: "3 expenditures",
       outlierNote: "1 reported independent expenditure was excluded from these totals as an outlier.",
       emptyMessage: null,
+      showFigures: true,
       targetRows: [
         {
           rowKey: CANDIDATE_ID,
@@ -550,11 +562,13 @@ describe("campaign finance detail presentation", () => {
 
   it("uses stable committee outside-spending row keys when target names repeat", () => {
     const presentation = buildCommitteeDeferredOutsideSpending({
+      ...DEFAULT_SELECTED_CYCLE_FIELDS,
       committee_id: COMMITTEE_ID,
       support_total: "300.00",
       oppose_total: "0.00",
       ie_transaction_count: 2,
       excluded_outlier_count: 0,
+      coverage: POPULATED_SCHEDULE_E_COVERAGE,
       targets: [
         {
           candidate_id: CANDIDATE_ID,
@@ -937,6 +951,23 @@ describe("buildPaginatedCommitteeFilingBreakdown", () => {
         transactionCount: 1
       }
     ]);
+  });
+
+  it("preserves exact serialized cash-on-hand amounts in filing rows", () => {
+    const page = buildPaginatedCommitteeFilingBreakdown(
+      {
+        ...DEFAULT_FILING_BREAKDOWN,
+        filings: [
+          {
+            ...DEFAULT_FILING_BREAKDOWN.filings[0],
+            cash_on_hand: "9007199254740993.01"
+          }
+        ]
+      },
+      null
+    );
+
+    expect(page.rows[0].cashOnHand).toBe("$9,007,199,254,740,993.01");
   });
 
   it("renders newest-first page 1 with an honest recent-vs-all-time label", () => {

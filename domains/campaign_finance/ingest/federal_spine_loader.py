@@ -184,6 +184,8 @@ def ensure_federal_spine_data_source(conn: psycopg.Connection) -> UUID:
         DataSource(
             domain="campaign_finance",
             jurisdiction="federal/congress",
+            filing_authority_type="federal",
+            filing_authority_code="FEC",
             name=FEDERAL_SPINE_DATA_SOURCE_NAME,
             source_url="https://github.com/unitedstates/congress-legislators",
         ),
@@ -648,10 +650,20 @@ def _converge_spine_identity(
     with conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE cf.candidate
+            UPDATE cf.candidate AS candidate
             SET person_id = %s
-            WHERE fec_candidate_id = ANY(%s)
-              AND (person_id IS NULL OR person_id <> %s)
+            WHERE candidate.fec_candidate_id = ANY(%s)
+              AND (
+                    candidate.data_source_id IS NULL
+                    OR EXISTS (
+                        SELECT 1
+                        FROM core.data_source AS data_source
+                        WHERE data_source.id = candidate.data_source_id
+                          AND data_source.filing_authority_type = 'federal'
+                          AND data_source.filing_authority_code = 'FEC'
+                    )
+              )
+              AND (candidate.person_id IS NULL OR candidate.person_id <> %s)
             """,
             (person_id, normalized_fec_ids, person_id),
         )

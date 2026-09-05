@@ -124,6 +124,8 @@ def run_federal_officeholder_refresh(
             DataSource(
                 domain="campaign_finance",
                 jurisdiction=f"federal/officeholder/{chamber_lower}",
+                filing_authority_type="federal",
+                filing_authority_code="FEC",
                 name=source_name,
                 source_url=source_url,
             ),

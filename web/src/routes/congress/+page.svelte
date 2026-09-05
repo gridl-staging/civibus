@@ -3,13 +3,15 @@
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
   import ListNavigationLoading from "$lib/campaign-finance-detail/ListNavigationLoading.svelte";
+  import { formatCurrency } from "$lib/campaign-finance-detail/presentation";
   import ComparisonBar from "$lib/charts/ComparisonBar.svelte";
-  import { formatCurrency, formatCurrencyShort } from "$lib/charts/finance";
   import {
     buildCongressCompareHref,
     buildCongressDirectory,
+    CONGRESS_MONEY_SUMMARIES_UNAVAILABLE_MESSAGE,
     getCongressMoneyMetric,
     getCongressMoneySourceHref,
+    getCongressMoneyValue,
     type CongressDirectoryFilters,
     type CongressMemberRow,
     type CongressMoneySort
@@ -174,20 +176,28 @@
       {/each}
     </select>
 
-    <label for="congress-money-sort">Sort money by</label>
-    <select
-      id="congress-money-sort"
-      name="sort"
-      data-testid="congress-money-sort"
-      on:change={(event) => updateSort(valueFromEvent(event))}
-    >
-      {#each MONEY_SORT_OPTIONS as option}
-        <option value={option.value} selected={directory.activeSort === option.value}>{option.label}</option>
-      {/each}
-    </select>
+    {#if !data.moneySummariesUnavailable}
+      <label for="congress-money-sort">Sort money by</label>
+      <select
+        id="congress-money-sort"
+        name="sort"
+        data-testid="congress-money-sort"
+        on:change={(event) => updateSort(valueFromEvent(event))}
+      >
+        {#each MONEY_SORT_OPTIONS as option}
+          <option value={option.value} selected={directory.activeSort === option.value}>{option.label}</option>
+        {/each}
+      </select>
+    {/if}
 
     <a href={CONGRESS_PAGE_PATH}>Reset</a>
   </form>
+
+  {#if data.moneySummariesUnavailable}
+    <p data-testid="congress-money-summaries-unavailable">
+      {CONGRESS_MONEY_SUMMARIES_UNAVAILABLE_MESSAGE}
+    </p>
+  {/if}
 
   <ListNavigationLoading routePath={CONGRESS_PAGE_PATH} filterParams={["search", "chamber", "state", "party", "sort"]} label="Updating results…" let:isFilterNavigation>
     {#if isFilterNavigation}
@@ -205,6 +215,7 @@
       <ul class="congress-directory__items">
         {#each directory.rows as row, index (row.id)}
           {@const activeMetric = getCongressMoneyMetric(row, directory.activeSort)}
+          {@const activeMoneyValue = getCongressMoneyValue(row, directory.activeSort)}
           {@const moneySourceHref = getCongressMoneySourceHref(row)}
           <li class="congress-directory__item" data-testid={`congress-member-row-${index}`}>
             <div class="congress-directory__selection">
@@ -225,13 +236,14 @@
                   href: row.personHref,
                   linkTestId: "congress-member-profile-link",
                   value: activeMetric,
-                  valueLabel: activeMetric === null ? "" : formatCurrencyShort(activeMetric)
+                  valueLabel: activeMoneyValue === null ? "" : formatCurrency(activeMoneyValue),
+                  showMissingValueLabel: !data.moneySummariesUnavailable
                 }]}
                 scaleMax={activeMetricMaximum}
               />
               <p class="congress-directory__context">{row.contextLine}</p>
 
-              {#if row.hasFecMoney}
+              {#if !data.moneySummariesUnavailable && row.hasFecMoney}
                 <dl class="congress-directory__money" aria-label={`Money summary for ${row.personName}`}>
                   {#each MONEY_COLUMNS as column}
                     {@const value = column.value(row)}
@@ -241,9 +253,9 @@
                         {#if value === null}
                           <span class="congress-directory__money-missing">Not reported/loaded</span>
                         {:else if moneySourceHref !== null}
-                          <a href={moneySourceHref} target="_blank" rel="noreferrer">{formatCurrency(Number(value))}</a>
+                          <a href={moneySourceHref} target="_blank" rel="noreferrer">{formatCurrency(value)}</a>
                         {:else}
-                          <span>{formatCurrency(Number(value))}</span>
+                          <span>{formatCurrency(value)}</span>
                           <span class="congress-directory__source-unavailable">Source link unavailable</span>
                         {/if}
                       </dd>
@@ -351,6 +363,7 @@
   .congress-directory__money-cell dd > span:first-child {
     font-variant-numeric: tabular-nums;
     font-weight: 650;
+    overflow-wrap: anywhere;
   }
 
   .congress-directory__source-unavailable,

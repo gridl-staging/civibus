@@ -7,6 +7,11 @@ COPY sources.yaml ./sources.yaml
 COPY api ./api
 COPY core ./core
 COPY domains ./domains
+COPY infra/fly/regional_refresh_machine_profile.json ./infra/fly/regional_refresh_machine_profile.json
+# The deploy owner materializes only a strictly validated immutable bundle in
+# this tracked build-context directory. Keeping it inside the image makes an
+# API rollback restore code and its matching evidence atomically.
+COPY infra/api/authority_promotion_bundle /app/private/civibus/authority-promotion
 # The coverage registry is a runtime data dependency of the states/summary
 # endpoint (see .dockerignore negation) — keep the repo-relative path the
 # code default expects.
@@ -19,6 +24,15 @@ RUN uv sync --locked --extra api \
     && groupadd --system --gid 10001 civibus \
     && useradd --system --uid 10001 --gid civibus --create-home --home-dir /home/civibus --shell /usr/sbin/nologin civibus \
     && chmod 0555 /usr/local/bin/civibus-api-entrypoint \
+    && test -f /app/infra/fly/regional_refresh_machine_profile.json \
+    && test ! -L /app/infra/fly/regional_refresh_machine_profile.json \
+    && chmod 0444 /app/infra/fly/regional_refresh_machine_profile.json \
+    && test -d /app/private/civibus/authority-promotion \
+    && test ! -L /app/private/civibus/authority-promotion \
+    && test -z "$(find /app/private/civibus/authority-promotion -type l -print -quit)" \
+    && chmod 0555 /app/private/civibus/authority-promotion \
+    && find /app/private/civibus/authority-promotion -mindepth 1 -type d -exec chmod 0555 {} + \
+    && find /app/private/civibus/authority-promotion -type f -exec chmod 0444 {} + \
     && chmod -R a+rX /app/api /app/core /app/domains /app/docs
 
 ENV PATH="/app/.venv/bin:$PATH"

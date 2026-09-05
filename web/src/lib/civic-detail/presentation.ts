@@ -149,9 +149,10 @@ export type RaceMoneyBarRow = {
   /** Candidate page when linkable, else person page — the table's href rules. */
   href: string | null;
   /**
-   * 0–100, unrounded: this row's total raised over the race's maximum measured
-   * total. Exactly 0 for a measured $0.00, which renders as an empty track with
-   * its figure — visibly different from the not-loaded group below the list.
+   * 0–100, unrounded: this row's total raised over the race's maximum positive
+   * measured total. Exactly 0 for measured $0.00 or a signed refund, which
+   * renders as an empty zero-baseline track with its exact figure — visibly
+   * different from the not-loaded group below the list.
    */
   barWidthPct: number;
   /** The exact formatted figure. Always rendered: no information is bar-only. */
@@ -802,17 +803,22 @@ function buildRaceMoneyBars(
     return null;
   }
 
-  const measured: { row: ContestCandidateMoneyRow; metric: number }[] = [];
+  const measured: { row: ContestCandidateMoneyRow; metric: number; moneyValue: string }[] = [];
   const notLoaded: ContestCandidateMoneyRow[] = [];
   for (const row of candidateMoney.rows) {
     // One discriminator, shared with the scoreboard cells: the value itself is
     // null exactly when nothing was measured (no linked FEC candidate, or no
     // loaded filings). Never infer coverage from any other field here.
-    const metric = parseMoneyMetric(row.total_raised);
-    if (metric === null) {
+    const moneyValue = row.total_raised;
+    if (moneyValue === null) {
       notLoaded.push(row);
     } else {
-      measured.push({ row, metric });
+      const metric = parseMoneyMetric(moneyValue);
+      if (metric === null) {
+        notLoaded.push(row);
+      } else {
+        measured.push({ row, metric, moneyValue });
+      }
     }
   }
 
@@ -824,7 +830,7 @@ function buildRaceMoneyBars(
   }
 
   measured.sort((left, right) => {
-    const metricOrder = compareMoneyMetricsDescUnknownLast(left.metric, right.metric);
+    const metricOrder = compareMoneyMetricsDescUnknownLast(left.moneyValue, right.moneyValue);
     return metricOrder !== 0
       ? metricOrder
       : left.row.person_name.localeCompare(right.row.person_name) ||
@@ -836,8 +842,9 @@ function buildRaceMoneyBars(
       left.person_id.localeCompare(right.person_id)
   );
 
-  // Widths share one scale: the race's largest measured total. An all-zero
-  // race has maxMetric 0; the guard yields 0% for every row rather than NaN%.
+  // Widths share one scale: the race's largest positive measured total. An
+  // all-zero or all-refund race has maxMetric 0; the guard yields 0% for every
+  // row rather than NaN% or an out-of-range signed percentage.
   const maxMetric = Math.max(...measured.map((entry) => entry.metric));
 
   const buildHref = (row: ContestCandidateMoneyRow): string | null =>
@@ -845,12 +852,12 @@ function buildRaceMoneyBars(
     appendSelectedCycleToHref(buildEntityRouteHref("person", row.person_id), selectedCycle);
 
   return {
-    rankedRows: measured.map(({ row, metric }) => ({
+    rankedRows: measured.map(({ row, metric, moneyValue }) => ({
       personId: row.person_id,
       personName: row.person_name,
       href: buildHref(row),
       barWidthPct: maxMetric === 0 ? 0 : (metric / maxMetric) * 100,
-      amountLabel: formatCurrency(metric)
+      amountLabel: formatCurrency(moneyValue)
     })),
     notLoadedRows: notLoaded.map((row) => ({
       personId: row.person_id,

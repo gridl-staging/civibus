@@ -15,6 +15,8 @@ from .registry import (
     CoverageRegistry,
     CoverageRegistryRow,
     collect_duplicate_jurisdiction_codes,
+    coverage_authority_linkage_errors,
+    coverage_parent_linkage_error,
     format_validation_errors,
     load_registry_json,
 )
@@ -78,25 +80,13 @@ def _validate_cross_layer_linkage(rows: list[CoverageRegistryRow]) -> list[str]:
     code_to_row = {row.jurisdiction_code: row for row in rows}
 
     for row in rows:
-        if row.parent_jurisdiction_code is None:
-            continue
-
-        # Parent must exist in the registry
-        parent = code_to_row.get(row.parent_jurisdiction_code)
-        if parent is None:
-            errors.append(
-                f"row '{row.jurisdiction_code}': orphan parent_jurisdiction_code "
-                f"'{row.parent_jurisdiction_code}' not found in registry"
-            )
-            continue
-
-        # covered_by_parent requires parent covers_sub_jurisdictions=true
-        if row.municipal_audit_decision == "covered_by_parent" and not parent.covers_sub_jurisdictions:
-            errors.append(
-                f"row '{row.jurisdiction_code}': municipal_audit_decision is "
-                f"'covered_by_parent' but parent '{parent.jurisdiction_code}' "
-                f"has covers_sub_jurisdictions=false"
-            )
+        linkage_error = coverage_parent_linkage_error(row, code_to_row)
+        if linkage_error is not None:
+            errors.append(f"row '{row.jurisdiction_code}': {linkage_error}")
+        errors.extend(
+            f"row '{row.jurisdiction_code}': {authority_error}"
+            for authority_error in coverage_authority_linkage_errors(row, code_to_row)
+        )
 
     return errors
 
@@ -115,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Validation summary: checked=0 passed=0 failed=1 warnings=0")
         return 1
 
-    unknown_top_level_fields = sorted(set(raw_payload.keys()) - {"rows"})
+    unknown_top_level_fields = sorted(set(raw_payload.keys()) - {"identity_translations", "rows"})
     if unknown_top_level_fields:
         failed += 1
         joined_unknown_fields = ", ".join(unknown_top_level_fields)

@@ -2,6 +2,7 @@ import {
   assertDonorSearchResponse,
   hasDonorShortNameQueryGuidance,
   type DonorSearchByMode,
+  type DonorSearchPathParams,
   type DonorSearchResponse
 } from '$lib/donors/contract';
 import { ApiResponseError } from '$lib/server/api/client';
@@ -17,37 +18,95 @@ const DONOR_SHORT_QUERY_MESSAGE = 'Enter at least 3 characters to search by name
 const DONOR_ZIP_QUERY_MESSAGE = 'Enter a 5-digit ZIP or ZIP+4 to search by ZIP.';
 const DONOR_VALIDATION_FALLBACK_MESSAGE =
   'The donor search request could not be validated. Review your query and try again.';
+const UNAVAILABLE_DONOR_PAGE_MESSAGE =
+  'The requested donor page could not be displayed safely. Submit the search to return to the first page.';
 
 type DonorPageData = Omit<DonorSearchResponse, 'by' | 'rollup_completed_at'> & {
   by: string;
   rollup_completed_at: string | null;
   validationMessage?: string;
   shortQueryGuidance?: boolean;
-  rollupUnavailable?: boolean;
 };
 
-function readIntegerParam(searchParams: URLSearchParams, key: string, fallback: number): number {
+type DonorPageParams = Pick<DonorPageData, 'query' | 'by' | 'limit' | 'offset'>;
+
+type DonorIntegerParam = {
+  requestValue: number | string;
+  pageValue: number;
+};
+
+function readIntegerParam(
+  searchParams: URLSearchParams,
+  key: string,
+  fallback: number
+): DonorIntegerParam {
   const rawValue = searchParams.get(key);
   if (rawValue === null || rawValue.trim() === '') {
-    return fallback;
+    return {
+      requestValue: fallback,
+      pageValue: fallback
+    };
   }
 
-  const parsedValue = Number.parseInt(rawValue, 10);
-  return Number.isNaN(parsedValue) ? fallback : parsedValue;
-}
-
-function readDonorRouteParams(url: URL): Pick<DonorPageData, 'query' | 'by' | 'limit' | 'offset'> {
+  const parsedValue = Number(rawValue);
   return {
-    query: url.searchParams.get('q') ?? '',
-    by: url.searchParams.get('by') ?? DEFAULT_DONOR_SEARCH_BY,
-    limit: readIntegerParam(url.searchParams, 'limit', DEFAULT_DONOR_SEARCH_LIMIT),
-    offset: readIntegerParam(url.searchParams, 'offset', DEFAULT_DONOR_SEARCH_OFFSET)
+    // FastAPI owns lexical and bounds validation; this exact text is the request value.
+    requestValue: rawValue,
+    pageValue:
+      /^[+-]?\d+$/.test(rawValue.trim()) && Number.isSafeInteger(parsedValue)
+        ? parsedValue
+        : fallback
   };
 }
 
+function readDonorRouteParams(url: URL): {
+  pageParams: DonorPageParams;
+  requestParams: DonorSearchPathParams;
+} {
+  const query = url.searchParams.get('q') ?? '';
+  const by = url.searchParams.get('by') ?? DEFAULT_DONOR_SEARCH_BY;
+  const limit = readIntegerParam(url.searchParams, 'limit', DEFAULT_DONOR_SEARCH_LIMIT);
+  const offset = readIntegerParam(url.searchParams, 'offset', DEFAULT_DONOR_SEARCH_OFFSET);
+
+  return {
+    pageParams: {
+      query,
+      by,
+      limit: limit.pageValue,
+      offset: offset.pageValue
+    },
+    requestParams: {
+      q: query,
+      by,
+      limit: limit.requestValue,
+      offset: offset.requestValue
+    }
+  };
+}
+
+/** Keeps page labels and Previous/Next arithmetic inside JavaScript's exact range. */
+function hasSafeDonorPagination(
+  request: Pick<DonorSearchPathParams, 'limit' | 'offset'>,
+  response: DonorSearchResponse
+): boolean {
+  const requestedLimit = Number(request.limit);
+  const requestedOffset = Number(request.offset);
+  const forwardStep = Math.max(requestedLimit, response.results.length);
+
+  return (
+    Number.isSafeInteger(requestedLimit) &&
+    requestedLimit > 0 &&
+    Number.isSafeInteger(requestedOffset) &&
+    requestedOffset >= 0 &&
+    Number.isSafeInteger(requestedOffset + forwardStep) &&
+    response.limit === requestedLimit &&
+    response.offset === requestedOffset
+  );
+}
+
 function emptyDonorPageData(
-  params: Pick<DonorPageData, 'query' | 'by' | 'limit' | 'offset'>,
-  extra: Pick<DonorPageData, 'validationMessage' | 'shortQueryGuidance' | 'rollupUnavailable'> = {}
+  params: DonorPageParams,
+  extra: Pick<DonorPageData, 'validationMessage' | 'shortQueryGuidance'> = {}
 ): DonorPageData {
   return {
     ...params,
@@ -64,19 +123,6 @@ function readFastApiDetail(errorBody: unknown): string | null {
 
   const detail = (errorBody as { detail: unknown }).detail;
   return typeof detail === 'string' ? detail : null;
-}
-
-function isDonorRollupUnavailable(error: ApiResponseError): boolean {
-  if (error.status !== 503 || error.body === null || typeof error.body !== 'object') {
-    return false;
-  }
-
-  const detail = (error.body as { detail?: unknown }).detail;
-  return (
-    detail !== null &&
-    typeof detail === 'object' &&
-    (detail as { code?: unknown }).code === 'donor_search_rollup_unavailable'
-  );
 }
 
 /**
@@ -100,39 +146,44 @@ function getDonorValidationMessage(errorBody: unknown): string {
 }
 
 export const load = (async ({ url, locals }): Promise<DonorPageData> => {
-  const params = readDonorRouteParams(url);
+  const { pageParams, requestParams } = readDonorRouteParams(url);
 
-  if (params.query.trim() === '') {
+  if (pageParams.query.trim() === '') {
     return emptyDonorPageData({
-      ...params,
+      ...pageParams,
       query: ''
     });
   }
 
-  if (hasDonorShortNameQueryGuidance(params.query, params.by)) {
-    return emptyDonorPageData(params, {
+  if (hasDonorShortNameQueryGuidance(pageParams.query, pageParams.by)) {
+    return emptyDonorPageData(pageParams, {
       shortQueryGuidance: true
     });
   }
 
   try {
-    const response = await fetchDonorSearch(locals.api, {
-      q: params.query,
-      by: params.by,
-      limit: params.limit,
-      offset: params.offset
-    });
+    const response = await fetchDonorSearch(locals.api, requestParams);
     assertDonorSearchResponse(response);
+
+    if (!hasSafeDonorPagination(requestParams, response)) {
+      return emptyDonorPageData(
+        {
+          ...pageParams,
+          limit: DEFAULT_DONOR_SEARCH_LIMIT,
+          offset: DEFAULT_DONOR_SEARCH_OFFSET
+        },
+        {
+          validationMessage: UNAVAILABLE_DONOR_PAGE_MESSAGE
+        }
+      );
+    }
+
     return response;
   } catch (cause) {
     if (cause instanceof ApiResponseError && cause.status === 422) {
-      return emptyDonorPageData(params, {
+      return emptyDonorPageData(pageParams, {
         validationMessage: getDonorValidationMessage(cause.body)
       });
-    }
-
-    if (cause instanceof ApiResponseError && isDonorRollupUnavailable(cause)) {
-      return emptyDonorPageData(params, { rollupUnavailable: true });
     }
 
     if (cause instanceof ApiResponseError) {

@@ -14,6 +14,7 @@ import {
   buildPersonRaceRows,
   getIdentifierEmptyMessage
 } from "./presentation";
+import { buildPersonReceiptCompositionPresentation } from "./person-contribution-chart-presentation";
 
 const PERSON_ID = "11111111-1111-4111-8111-111111111111";
 const ORG_ID = "22222222-2222-4222-8222-222222222222";
@@ -610,6 +611,24 @@ describe("entity detail presentation", () => {
         }
       ]
     });
+
+    const exactLargeSummary = buildPersonMoneyAtGlanceSummary([
+      {
+        ...firstSummary,
+        total_raised: "90999999999999.09",
+        receipt_source_composition: [
+          {
+            label: "Gross individual contributions",
+            total_amount: "90999999999999.09",
+            source: "fec_committee_summary" as const
+          }
+        ]
+      }
+    ]);
+    expect(exactLargeSummary.total_raised).toBe("90999999999999.09");
+    expect(exactLargeSummary.receipt_source_composition[0]?.total_amount).toBe(
+      "90999999999999.09"
+    );
   });
 
   it("keeps negative receipt-source reconciliation components table-only", () => {
@@ -929,6 +948,144 @@ describe("entity detail presentation", () => {
     });
     expect(viewModel.topDonors[0]).toMatchObject({ barPercent: 100 });
     expect(viewModel.topDonors[1]).toMatchObject({ barPercent: 50 });
+  });
+
+  it("keeps finite unsafe contribution money exact and out of numeric chart geometry", () => {
+    const unsafeAmount = "90999999999999.09";
+    const viewModel = buildPersonContributionInsightsPresentation({
+      ...CONTRIBUTION_INSIGHTS,
+      metadata: {
+        ...CONTRIBUTION_INSIGHTS.metadata,
+        selected_cycle: 2024,
+        available_cycles: [2024, 2026]
+      },
+      monthly_totals: [
+        { month: "2024-01", total_amount: unsafeAmount, transaction_count: 1 },
+        { month: "2024-02", total_amount: "0.00", transaction_count: 0 },
+        { month: "2024-03", total_amount: "-25.00", transaction_count: 1 }
+      ],
+      itemized_size_buckets: [
+        {
+          ...CONTRIBUTION_INSIGHTS.itemized_size_buckets[0],
+          total_amount: unsafeAmount
+        }
+      ],
+      geography: {
+        ...CONTRIBUTION_INSIGHTS.geography,
+        classified_amount: unsafeAmount,
+        unknown_amount: "0.00",
+        unknown_transaction_count: 0,
+        by_district: [
+          { label: "In district", total_amount: unsafeAmount, transaction_count: 1 },
+          { label: "Refunds", total_amount: "-25.00", transaction_count: 1 }
+        ]
+      }
+    });
+
+    expect(viewModel.monthlyContributions.cycle).toBe(2024);
+    expect(viewModel.monthlyContributions.rows).toEqual([
+      {
+        month: "2024-01",
+        amount: null,
+        amountLabel: "$90,999,999,999,999.09",
+        transactionCount: 1,
+        covered: true
+      },
+      {
+        month: "2024-02",
+        amount: 0,
+        transactionCount: 0,
+        covered: true
+      },
+      {
+        month: "2024-03",
+        amount: -25,
+        transactionCount: 1,
+        covered: true
+      }
+    ]);
+    expect(viewModel.sizeBuckets.rowsByUnit.dollars[0]).toMatchObject({
+      amount: null,
+      amountLabel: "$90,999,999,999,999.09",
+      canPlot: false
+    });
+    expect(viewModel.geographyShare.rows).toEqual([
+      expect.objectContaining({
+        label: "In district",
+        amount: null,
+        amountLabel: "$90,999,999,999,999.09",
+        denominator: null
+      }),
+      expect.objectContaining({
+        label: "Refunds",
+        amount: -25,
+        denominator: null
+      }),
+      expect.objectContaining({
+        label: "Unknown",
+        amount: 0,
+        denominator: null
+      })
+    ]);
+  });
+
+  it("keeps beyond-finite receipt money exact and table-only instead of fabricating zero", () => {
+    const veryLargeAmount = `${"9".repeat(400)}.01`;
+    const amountLabel = `$9${",999".repeat(133)}.01`;
+    const viewModel = buildPersonReceiptCompositionPresentation({
+      selected_cycle: 2024,
+      coverage_end_date: "2024-12-31",
+      total_raised: veryLargeAmount,
+      receipt_source_composition: [
+        {
+          label: "Gross individual contributions",
+          total_amount: veryLargeAmount,
+          source: "fec_committee_summary"
+        }
+      ],
+      can_render_share: true,
+      receipt_source_caveats: []
+    });
+
+    expect(viewModel).toMatchObject({
+      cycle: 2024,
+      totalReceipts: null,
+      canPlot: false,
+      rows: [
+        {
+          label: "Gross individual contributions",
+          amount: null,
+          amountLabel,
+          denominator: null,
+          denominatorLabel: amountLabel,
+          canPlot: false
+        }
+      ]
+    });
+  });
+
+  it("computes a cancelling geography denominator in exact cents before projection", () => {
+    const viewModel = buildPersonContributionInsightsPresentation({
+      ...CONTRIBUTION_INSIGHTS,
+      geography: {
+        ...CONTRIBUTION_INSIGHTS.geography,
+        classified_amount: "9007199254740993.01",
+        unknown_amount: "-9007199254740992.00",
+        unknown_transaction_count: 1,
+        by_district: [
+          {
+            label: "In district",
+            total_amount: "9007199254740993.01",
+            transaction_count: 1
+          }
+        ]
+      }
+    });
+
+    expect(viewModel.geographyShare.rows).toEqual([
+      expect.objectContaining({ label: "In district", amount: null, denominator: 1.01 }),
+      expect.objectContaining({ label: "Unknown", amount: null, denominator: 1.01 })
+    ]);
   });
 
   it("aggregates eligible server-owned industries with exact classified coverage", () => {

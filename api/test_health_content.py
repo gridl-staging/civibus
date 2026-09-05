@@ -1711,6 +1711,7 @@ def test_evaluate_content_health_rejects_stale_fec_bulk_freshness_with_source_ep
         ("null", (None,)),
         ("non_success_canonical_row", (None,)),
         ("future", (FIXED_NOW + timedelta(seconds=1),)),
+        ("subsecond_future", (FIXED_NOW + timedelta(microseconds=1),)),
         ("malformed", ("2026-07-24T12:00:00Z",)),
         ("naive_datetime", (datetime(2026, 7, 24, 12, 0),)),
         ("aggregate_no_row", None),
@@ -1805,14 +1806,15 @@ def test_content_health_endpoint_returns_503_when_failing(monkeypatch: pytest.Mo
     assert body["failures"] == [{"check": "cf_transaction_total", "actual": 0, "floor": 1_000_000}]
 
 
-def test_content_health_endpoint_returns_503_when_db_unreachable(
+def test_content_health_endpoint_returns_generic_503_when_db_unreachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api_main = _load_api_main(monkeypatch)
+    sensitive_exception_detail = "postgresql://db-internal:5432/civibus relation cf.transaction does not exist"
 
     class _BrokenPool:
         def connection(self):
-            raise RuntimeError("simulated db outage")
+            raise RuntimeError(sensitive_exception_detail)
 
         def open(self, *, wait: bool) -> None:
             return None
@@ -1826,9 +1828,8 @@ def test_content_health_endpoint_returns_503_when_db_unreachable(
         response = client.get("/health/content")
 
     assert response.status_code == 503
-    body = response.json()
-    assert body["healthy"] is False
-    assert body["error"] == "db_unreachable"
+    assert response.json() == {"healthy": False, "error": "db_unreachable"}
+    assert sensitive_exception_detail not in response.text
 
 
 def test_content_health_endpoint_does_not_require_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

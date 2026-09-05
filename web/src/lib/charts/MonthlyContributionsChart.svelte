@@ -3,7 +3,7 @@
   import Chart from "./Chart.svelte";
   import {
     formatCount,
-    formatCurrency,
+    formatChartMoneyValue,
     formatMonthKey,
     getReadableTickCeiling,
     zeroFillCoveredMonths
@@ -11,6 +11,7 @@
   import type { ChartHeadingLevel, ChartFrameProps, ChartSeries, ExactDisclosureRow, MonthlyContributionRow } from "./types";
 
   export let testId: string;
+  export let disclosureContext: string;
   export let cycle: number;
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
@@ -24,8 +25,12 @@
   export let scaleMax: number | undefined = undefined;
 
   $: filledRows = zeroFillCoveredMonths(rows, coveredMonths);
-  $: totalAmount = filledRows.reduce((sum, row) => sum + row.amount, 0);
-  $: maxAmount = Math.max(0, ...filledRows.map((row) => row.amount));
+  $: geometryIsSafe = filledRows.every((row) => row.amount !== null);
+  $: plottedRows = filledRows.filter(
+    (row): row is MonthlyContributionRow & { amount: number } => row.amount !== null
+  );
+  $: totalAmount = plottedRows.reduce((sum, row) => sum + row.amount, 0);
+  $: maxAmount = Math.max(0, ...plottedRows.map((row) => row.amount));
   $: tickCeiling = getReadableTickCeiling(scaleMax ?? maxAmount);
   $: chartSeries = buildChartSeries(filledRows);
   $: state =
@@ -34,19 +39,27 @@
           kind: "no-data" as const,
           message: "No itemized individual contribution rows are loaded yet."
         }
-      : { kind: "ready" as const };
+      : !geometryIsSafe
+        ? {
+            kind: "table-only" as const,
+            message:
+              "Amounts exceed the safely plottable range; exact values are shown in the chart data table."
+          }
+        : { kind: "ready" as const };
   $: exactRows = filledRows.map(
     (row): ExactDisclosureRow => ({
       label: formatMonthKey(row.month),
       values: [
-        { label: "Dollars", value: formatCurrency(row.amount) },
+        { label: "Dollars", value: formatChartMoneyValue(row.amount, row.amountLabel) },
         { label: "Transactions", value: formatCount(row.transactionCount) },
         { label: "Coverage", value: row.covered ? "Covered" : "Missing source coverage" }
       ]
     })
   );
   $: summary = {
-    sentence: `Itemized individual contributions total ${formatCurrency(totalAmount)} in the ${cycle} cycle.`
+    sentence: geometryIsSafe
+      ? `Itemized individual contributions total ${formatChartMoneyValue(totalAmount)} in the ${cycle} cycle.`
+      : `Exact itemized individual contribution amounts are shown for the ${cycle} cycle.`
   };
 
   function buildChartSeries(inputRows: MonthlyContributionRow[]): ChartSeries[] {
@@ -57,7 +70,9 @@
         // ceiling is a domain calculation, not something to say to a person, and it
         // stays in `tickCeiling` where it is used.
         label: "Contributions",
-        points: inputRows.map((row) => ({ x: row.month, y: row.amount }))
+        points: inputRows.flatMap((row) =>
+          row.amount === null ? [] : [{ x: row.month, y: row.amount }]
+        )
       }
     ];
   }
@@ -65,6 +80,7 @@
 
 <ChartFrame
   {testId}
+  {disclosureContext}
   title="Itemized individual contributions by month"
   unit="dollars"
   {cycle}
@@ -87,7 +103,7 @@
     {#each filledRows as row (row.month)}
       <div class="monthly-contributions__row">
         <span>{formatMonthKey(row.month)}</span>
-        <span>{formatCurrency(row.amount)}</span>
+        <span>{formatChartMoneyValue(row.amount, row.amountLabel)}</span>
         <span>{formatCount(row.transactionCount)} {row.transactionCount === 1 ? "transaction" : "transactions"}</span>
       </div>
     {/each}

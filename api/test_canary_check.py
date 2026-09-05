@@ -206,13 +206,29 @@ def test_canary_exits_one_when_any_federal_floor_exceeds_actual(
 
 def test_canary_exits_one_when_db_unreachable_past_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CIVIBUS_STARTUP_CANARY", raising=False)
-    # Tight deadline keeps the test fast.
     monkeypatch.setenv("CIVIBUS_STARTUP_CANARY_TIMEOUT_SECONDS", "0.5")
     canary = _fresh_canary_module()
 
+    class _FakeTime:
+        def __init__(self) -> None:
+            self._monotonic_values = iter((100.0, 100.25, 100.5))
+            self.sleep_calls: list[float] = []
+
+        def monotonic(self) -> float:
+            return next(self._monotonic_values)
+
+        def sleep(self, seconds: float) -> None:
+            self.sleep_calls.append(seconds)
+
+    fake_time = _FakeTime()
+    connection_attempts = 0
+
     def _boom() -> None:
+        nonlocal connection_attempts
+        connection_attempts += 1
         raise RuntimeError("simulated db outage")
 
+    monkeypatch.setattr(canary, "time", fake_time)
     monkeypatch.setattr(canary, "get_connection", _boom)
     missing_required_schema_checks = MagicMock(return_value=[])
     evaluate_content_health = MagicMock(return_value=[])
@@ -220,5 +236,7 @@ def test_canary_exits_one_when_db_unreachable_past_deadline(monkeypatch: pytest.
     monkeypatch.setattr(canary, "evaluate_content_health", evaluate_content_health)
 
     assert canary.main() == 1
+    assert connection_attempts == 2
+    assert fake_time.sleep_calls == [1.0]
     missing_required_schema_checks.assert_not_called()
     evaluate_content_health.assert_not_called()

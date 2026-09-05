@@ -14,6 +14,11 @@ DEBBIE_CONFIG_PATH = REPO_ROOT / ".debbie.toml"
 GITIGNORE_PATH = REPO_ROOT / ".gitignore"
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
 COMPOSE_PATH = REPO_ROOT / "infra/docker-compose.yml"
+REGIONAL_REFRESH_PROFILE_PATH = REPO_ROOT / "infra/fly/regional_refresh_machine_profile.json"
+AUTHORITY_PROMOTION_BUILD_CONTEXT_PATH = REPO_ROOT / "infra/api/authority_promotion_bundle"
+API_FLY_CONFIG_PATH = REPO_ROOT / "infra/fly/api.fly.toml"
+AUTHORITY_PROMOTION_INSTALL_DIRECTORY = "/app/private/civibus/authority-promotion"
+AUTHORITY_PROMOTION_RECEIPT_PATH = f"{AUTHORITY_PROMOTION_INSTALL_DIRECTORY}/authority-promotion-receipt.json"
 
 
 def _non_comment_code(text: str) -> str:
@@ -78,6 +83,64 @@ def test_api_dockerfile_contract_inputs_and_entrypoint() -> None:
     # script (docker-entrypoint.sh) is the ONLY runtime invocation surface, and
     # it lives at infra/api/docker-entrypoint.sh — not in the Dockerfile.
     assert "python -m" not in dockerfile_code
+
+
+def test_api_dockerfile_copies_regional_refresh_profile_as_a_runtime_regular_file() -> None:
+    dockerfile_text = DOCKERFILE_PATH.read_text(encoding="utf-8")
+    dockerfile_code = _dockerfile_code(dockerfile_text)
+    runtime_path = "/app/infra/fly/regional_refresh_machine_profile.json"
+
+    assert REGIONAL_REFRESH_PROFILE_PATH.is_file()
+    assert not REGIONAL_REFRESH_PROFILE_PATH.is_symlink()
+    assert (
+        "COPY infra/fly/regional_refresh_machine_profile.json ./infra/fly/regional_refresh_machine_profile.json"
+    ) in dockerfile_code
+    for guard in (
+        f"test -f {runtime_path}",
+        f"test ! -L {runtime_path}",
+        f"chmod 0444 {runtime_path}",
+    ):
+        assert guard in dockerfile_code
+        assert dockerfile_code.index(guard) < dockerfile_code.index("USER civibus")
+
+
+def test_api_image_owns_private_immutable_authority_promotion_bundle() -> None:
+    dockerfile_text = DOCKERFILE_PATH.read_text(encoding="utf-8")
+    dockerfile_code = _dockerfile_code(dockerfile_text)
+
+    assert AUTHORITY_PROMOTION_BUILD_CONTEXT_PATH.is_dir()
+    assert (AUTHORITY_PROMOTION_BUILD_CONTEXT_PATH / ".gitkeep").is_file()
+    assert (f"COPY infra/api/authority_promotion_bundle {AUTHORITY_PROMOTION_INSTALL_DIRECTORY}") in dockerfile_code
+    for guard in (
+        f"test -d {AUTHORITY_PROMOTION_INSTALL_DIRECTORY}",
+        f"test ! -L {AUTHORITY_PROMOTION_INSTALL_DIRECTORY}",
+        f"chmod 0555 {AUTHORITY_PROMOTION_INSTALL_DIRECTORY}",
+        f"find {AUTHORITY_PROMOTION_INSTALL_DIRECTORY} -type f -exec chmod 0444",
+    ):
+        assert guard in dockerfile_code
+        assert dockerfile_code.index(guard) < dockerfile_code.index("USER civibus")
+    assert f"find {AUTHORITY_PROMOTION_INSTALL_DIRECTORY} -type l" in dockerfile_code
+
+
+def test_api_entrypoint_binds_only_the_image_local_promotion_receipt() -> None:
+    entrypoint_code = _shell_code(ENTRYPOINT_PATH.read_text(encoding="utf-8"))
+    fly_config = API_FLY_CONFIG_PATH.read_text(encoding="utf-8")
+
+    assert f'promotion_receipt="{AUTHORITY_PROMOTION_RECEIPT_PATH}"' in entrypoint_code
+    assert "CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON" in entrypoint_code
+    assert 'export CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON="$promotion_receipt"' in entrypoint_code
+    assert "unset CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON" in entrypoint_code
+    assert 'test -f "$promotion_receipt"' in entrypoint_code
+    assert 'test ! -L "$promotion_receipt"' in entrypoint_code
+    assert "conflicting authority promotion receipt path" in entrypoint_code
+    assert "CIVIBUS_AUTHORITY_PROMOTION_RECEIPT_JSON" not in fly_config
+    assert "file-local" not in fly_config
+
+
+def test_dockerignore_refuses_accidental_raw_promotion_transport_archive() -> None:
+    dockerignore_text = DOCKERIGNORE_PATH.read_text(encoding="utf-8")
+
+    assert "authority-promotion-bundle.tar" in dockerignore_text
 
 
 def test_api_dockerfile_stamps_build_provenance_env() -> None:

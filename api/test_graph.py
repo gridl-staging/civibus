@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from api import queries_graph
+from api.deps import get_db
+from api.middleware.logging import RequestLoggingMiddleware
 from api.models import (
     AGE_LABEL_TO_NEIGHBOR_TYPE,
     EntityRelationshipsResponse,
@@ -12,6 +17,7 @@ from api.models import (
     GRAPH_ENTITY_TYPE_TO_RELATIONAL_ENTITY_TYPE,
     GraphNeighbor,
 )
+from api.routes import graph as graph_routes
 from api.test_graph_support import create_graph_edge, create_graph_node
 from core.graph.loader import (
     merge_candidate_node,
@@ -22,6 +28,74 @@ from core.graph.loader import (
     merge_organization_node,
     merge_person_node,
 )
+
+
+def _build_graph_contract_app(*, with_request_logging: bool = False) -> FastAPI:
+    app = FastAPI()
+    if with_request_logging:
+        app.add_middleware(RequestLoggingMiddleware)
+    app.include_router(graph_routes.router, prefix="/v1")
+    app.dependency_overrides[get_db] = lambda: object()
+    return app
+
+
+def test_graph_missing_entity_response_is_stable_and_omits_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entity_id = UUID("11111111-1111-4111-8111-111111111111")
+    monkeypatch.setattr(queries_graph, "_graph_entity_exists", lambda *_args, **_kwargs: False)
+    app = _build_graph_contract_app()
+
+    with TestClient(app) as client:
+        response = client.get(f"/v1/graph/person/{entity_id}/relationships")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Graph entity not found"}
+    assert str(entity_id) not in response.text
+
+
+def test_graph_unexpected_lookup_failure_uses_generic_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    internal_detail = "missing internal graph result key"
+
+    def raise_unexpected_lookup_error(*_args: object, **_kwargs: object) -> None:
+        raise KeyError(internal_detail)
+
+    monkeypatch.setattr(graph_routes, "fetch_entity_relationships", raise_unexpected_lookup_error)
+    app = _build_graph_contract_app(with_request_logging=True)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/v1/graph/person/22222222-2222-4222-8222-222222222222/relationships")
+
+    assert response.status_code == 500
+    assert response.text == "Internal Server Error"
+    assert internal_detail not in response.text
+
+
+def test_graph_openapi_documents_stable_not_found_response() -> None:
+    operation = _build_graph_contract_app().openapi()["paths"]["/v1/graph/{entity_type}/{entity_id}/relationships"][
+        "get"
+    ]
+
+    assert operation["responses"]["404"] == {
+        "description": "The requested graph entity was not found.",
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "detail": {
+                            "type": "string",
+                            "const": "Graph entity not found",
+                        }
+                    },
+                    "required": ["detail"],
+                    "additionalProperties": False,
+                }
+            }
+        },
+    }
 
 
 @pytest.mark.integration

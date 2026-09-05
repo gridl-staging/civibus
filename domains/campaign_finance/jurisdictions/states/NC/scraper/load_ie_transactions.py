@@ -238,12 +238,15 @@ def _build_transaction(
     row: NCIEReportRow,
     source_record_id: UUID,
     source_record_key: str,
+    data_source_id: UUID,
     recipient_candidate_id: UUID | None,
 ) -> Transaction:
     normalized_state = normalize_optional_text(row.payee_state)
     return Transaction(
         filing_id=filing.filing_id,
         committee_id=filing.committee_id,
+        data_source_id=data_source_id,
+        native_transaction_id=source_record_key,
         transaction_type="Independent Expenditure",
         transaction_identifier=source_record_key,
         transaction_date=row.transaction_date,
@@ -303,6 +306,7 @@ def _load_filing_transactions(
                 row=row,
                 source_record_id=source_record_id,
                 source_record_key=source_record_key,
+                data_source_id=data_source_id,
                 recipient_candidate_id=_resolve_candidate_id(
                     conn,
                     target_name=row.target_name,

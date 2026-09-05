@@ -75,6 +75,7 @@ export type ChartFrameState =
 export type ChartFrameProps = {
   testId: string;
   title: string;
+  disclosureContext?: string;
   unit: FinanceChartUnit;
   cycle: number;
   coverageThrough: string | null;
@@ -87,14 +88,17 @@ export type ChartFrameProps = {
 export type ReceiptCompositionRow = {
   id: string;
   label: string;
-  amount: number;
-  denominator: number;
+  amount: number | null;
+  amountLabel?: string;
+  denominator: number | null;
+  denominatorLabel?: string;
   canPlot: boolean;
 };
 
 export type MonthlyContributionRow = {
   month: string;
-  amount: number;
+  amount: number | null;
+  amountLabel?: string;
   transactionCount: number;
   covered: boolean;
 };
@@ -108,7 +112,8 @@ export type CashOnHandPoint = {
 export type HorizontalBarRow = {
   id: string;
   label: string;
-  amount: number;
+  amount: number | null;
+  amountLabel?: string;
   transactionCount: number;
   unit: "dollars" | "reported_transactions";
   canPlot: boolean;
@@ -117,9 +122,11 @@ export type HorizontalBarRow = {
 export type GeographyShareRow = {
   id: string;
   label: string;
-  amount: number;
+  amount: number | null;
+  amountLabel?: string;
   transactionCount: number;
-  denominator: number;
+  denominator: number | null;
+  denominatorLabel?: string;
   approximate: boolean;
 };
 

@@ -50,6 +50,14 @@ export function formatCurrency(value: number): string {
   return CURRENCY_FORMATTER.format(value);
 }
 
+/** Prefer the exact serialized-money label carried beside lossy plot geometry. */
+export function formatChartMoneyValue(value: number | null, exactLabel?: string): string {
+  if (exactLabel !== undefined) {
+    return exactLabel;
+  }
+  return value === null ? "Not safely plottable" : formatCurrency(value);
+}
+
 export function formatCurrencyShort(value: number): string {
   // The sign is carried outside the dollar glyph ("-$1.2M", not "$-1.2M") and the
   // magnitude is chosen from the absolute value, because the zero-centered
@@ -207,6 +215,7 @@ export function zeroFillCoveredMonths(
       rowsByMonth.set(month, {
         month,
         amount: 0,
+        amountLabel: "$0.00",
         transactionCount: 0,
         covered: true
       });
@@ -227,8 +236,13 @@ export function getReadableTickCeiling(maximumValue: number): number {
 }
 
 export function summarizeShare(row: GeographyShareRow): string {
+  const amountLabel = formatChartMoneyValue(row.amount, row.amountLabel);
+  const denominatorLabel = formatChartMoneyValue(row.denominator, row.denominatorLabel);
+  if (row.amount === null || row.denominator === null) {
+    return `${row.label} is ${amountLabel} of ${denominatorLabel}; exact values are table-only.`;
+  }
   const share = row.denominator === 0 ? 0 : row.amount / row.denominator;
-  return `${row.label} is ${formatCurrency(row.amount)} of ${formatCurrency(row.denominator)} (${formatPercent(share)}).`;
+  return `${row.label} is ${amountLabel} of ${denominatorLabel} (${formatPercent(share)}).`;
 }
 
 /**
@@ -306,18 +320,30 @@ export function getContrastRatio(foreground: string, background: string): number
 /**
  */
 export function toExactRows(
-  rows: Array<{ label: string; amount: number; transactionCount?: number; denominator?: number }>
+  rows: Array<{
+    label: string;
+    amount: number | null;
+    amountLabel?: string;
+    transactionCount?: number;
+    denominator?: number | null;
+    denominatorLabel?: string;
+  }>
 ): ExactDisclosureRow[] {
   return rows.map((row) => ({
     label: row.label,
     values: [
-      { label: "Dollars", value: formatCurrency(row.amount) },
+      { label: "Dollars", value: formatChartMoneyValue(row.amount, row.amountLabel) },
       ...(row.transactionCount === undefined
         ? []
         : [{ label: "Transactions", value: formatCount(row.transactionCount) }]),
       ...(row.denominator === undefined
         ? []
-        : [{ label: "Denominator", value: formatCurrency(row.denominator) }])
+        : [
+            {
+              label: "Denominator",
+              value: formatChartMoneyValue(row.denominator, row.denominatorLabel)
+            }
+          ])
     ]
   }));
 }

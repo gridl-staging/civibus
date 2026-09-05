@@ -1,10 +1,11 @@
 <script lang="ts">
   import ChartFrame from "./ChartFrame.svelte";
   import Chart from "./Chart.svelte";
-  import { formatCount, formatCurrency, toExactRows } from "./finance";
+  import { formatChartMoneyValue, formatCount, toExactRows } from "./finance";
   import type { ChartHeadingLevel, ChartFrameProps, ChartSeries, GeographyShareRow } from "./types";
 
   export let testId: string;
+  export let disclosureContext: string;
   export let cycle: number;
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
@@ -18,6 +19,7 @@
   $: hasGeographyRows = rows.length > 0;
   $: unknownSummary = rows.find((row) => row.label === "Unknown");
   $: hasUnknownRow = Boolean(unknownSummary);
+  $: geometryIsSafe = rows.every((row) => row.amount !== null && row.denominator !== null);
   $: chartSeries = buildChartSeries(rows);
   $: state =
     !hasGeographyRows
@@ -27,7 +29,13 @@
             kind: "table-only" as const,
             message: "Unknown geography row is required before rendering a denominator chart."
           }
-      : { kind: "ready" as const };
+        : !geometryIsSafe
+          ? {
+              kind: "table-only" as const,
+              message:
+                "Amounts exceed the safely plottable range; exact values are shown in the chart data table."
+            }
+          : { kind: "ready" as const };
   $: exactRows = toExactRows(rows);
   $: summary = {
     sentence: getSummarySentence(hasGeographyRows, unknownSummary, unknownIncludedInDenominator)
@@ -46,10 +54,12 @@
         ? "Unknown is included in the visible geography denominator"
         : "Unknown is shown outside the classified geography denominator";
       const denominatorLabel = includesUnknown ? "visible denominator" : "classified denominator";
-      return `${denominatorCopy}. Unknown is ${formatCurrency(
-        unknownRow.amount
-      )} with ${formatCount(unknownRow.transactionCount)} reported transactions; ${denominatorLabel} is ${formatCurrency(
-        unknownRow.denominator
+      return `${denominatorCopy}. Unknown is ${formatChartMoneyValue(
+        unknownRow.amount,
+        unknownRow.amountLabel
+      )} with ${formatCount(unknownRow.transactionCount)} reported transactions; ${denominatorLabel} is ${formatChartMoneyValue(
+        unknownRow.denominator,
+        unknownRow.denominatorLabel
       )}.`;
     }
     return `Geography includes visible denominators for the ${cycle} cycle.`;
@@ -74,7 +84,9 @@
         // chart instead of this one needing a bespoke percentage axis. Bar heights
         // are unchanged where the denominator is shared across rows, since dividing
         // every row by the same number only rescales the axis.
-        points: inputRows.map((row) => ({ x: row.label, y: row.amount }))
+        points: inputRows.flatMap((row) =>
+          row.amount === null ? [] : [{ x: row.label, y: row.amount }]
+        )
       }
     ];
   }
@@ -82,6 +94,7 @@
 
 <ChartFrame
   {testId}
+  {disclosureContext}
   title="Geography"
   unit="dollars"
   {cycle}
@@ -103,7 +116,7 @@
     {#each rows as row (row.id)}
       <div class="geography-share__row">
         <span>{row.label}</span>
-        <span>{formatCurrency(row.amount)} of {formatCurrency(row.denominator)}</span>
+        <span>{formatChartMoneyValue(row.amount, row.amountLabel)} of {formatChartMoneyValue(row.denominator, row.denominatorLabel)}</span>
         <span>{formatCount(row.transactionCount)} {row.transactionCount === 1 ? "transaction" : "transactions"}</span>
       </div>
     {/each}

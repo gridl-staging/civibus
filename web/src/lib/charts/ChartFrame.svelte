@@ -5,6 +5,7 @@
 
   export let testId: ChartFrameProps["testId"];
   export let title: ChartFrameProps["title"];
+  export let disclosureContext: ChartFrameProps["disclosureContext"] = undefined;
   export let unit: ChartFrameProps["unit"];
   export let cycle: ChartFrameProps["cycle"];
   export let coverageThrough: ChartFrameProps["coverageThrough"];
@@ -15,6 +16,10 @@
   export let children: Snippet | undefined = undefined;
 
   $: coverageLabel = formatDate(coverageThrough);
+  $: normalizedDisclosureContext = disclosureContext?.trim() ?? "";
+  $: disclosureLabel = normalizedDisclosureContext
+    ? `View chart data: ${title} for ${normalizedDisclosureContext}, ${cycle} cycle`
+    : undefined;
 
   function sanitizeHref(href: string | null | undefined): string | null {
     if (typeof href !== "string") {
@@ -88,7 +93,7 @@
   </p>
 
   <details class="finance-chart__details">
-    <summary>View chart data</summary>
+    <summary aria-label={disclosureLabel}>View chart data</summary>
     <table>
       <thead>
         <tr>

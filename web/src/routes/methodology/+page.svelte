@@ -28,8 +28,12 @@
   <p>{APP_SHELL.methodology.coverageSummary}</p>
 
   {#each APP_SHELL.methodology.sections as section}
-    <section class="methodology__section" data-testid={section.testId}>
-      <h3>{section.heading}</h3>
+    <section
+      class="methodology__section"
+      data-testid={section.testId}
+      aria-labelledby={`${section.testId}-heading`}
+    >
+      <h3 id={`${section.testId}-heading`}>{section.heading}</h3>
       {#each section.paragraphs as paragraph}
         <p>{paragraph}</p>
       {/each}

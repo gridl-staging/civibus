@@ -66,6 +66,32 @@ def test_protocols_routes_resolve_to_v2_owners() -> None:
         assert v2_path in protocols
 
 
+def test_codex_governance_routes_to_one_inactive_civibus_profile() -> None:
+    protocols = (REPO_ROOT / "docs" / "protocols.md").read_text(encoding="utf-8")
+    profile_path = REPO_ROOT / "docs/howto/operations/codex_governance_profile.md"
+    profile = profile_path.read_text(encoding="utf-8")
+
+    assert protocols.count("$codex-campaign-governance") == 1
+    assert protocols.count("docs/howto/operations/codex_governance_profile.md") == 1
+    fields = {}
+    for line in profile.splitlines():
+        if not line.startswith("|") or line.startswith("| ---") or line == "| Field | Value |":
+            continue
+        cells = [cell.strip().replace("`", "") for cell in line.strip("|").split("|")]
+        if len(cells) == 2:
+            fields[cells[0]] = cells[1]
+
+    assert fields["Profile"] == "civibus-national/v1"
+    assert fields["Protocol"] == "$codex-campaign-governance / codex-campaign-governance/v1"
+    assert fields["Status"] == "INACTIVE"
+    assert fields["Owner repository"] == "Civibus (gridl-dev/civibus_dev)"
+    assert fields["Control ledger"] == "Civibus Beads epic civibus-yd6"
+    assert "Batman-selected work" in profile
+    assert "never substitutes manual `bd close`" in profile
+    assert "source_thread_id" not in profile
+    assert "GOV_TRANSITION" not in profile
+
+
 def test_no_v2_suffix_markdown_remains() -> None:
     v2_files = list(REPO_ROOT.glob("**/*_v2.md"))
 

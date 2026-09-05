@@ -1,7 +1,11 @@
 /** Presentation helpers for source provenance and freshness sections. */
 import type { SourceInfo } from "$lib/entity-detail/contract";
 import { sanitizeExternalUrl } from "$lib/url/sanitize-external-url";
-import { formatAbsolutePullDate, formatRelativePullDate } from "./relative-date";
+import {
+  formatAbsolutePullDate,
+  formatRelativePullDate,
+  parsePullDateTimestamp
+} from "./relative-date";
 
 export type FreshnessSeverity = "fresh" | "stale" | "unknown";
 
@@ -74,16 +78,6 @@ function buildSourceLabel(source: SourceInfo): string {
   }
 
   return source.domain;
-}
-
-function parsePullDateTimestamp(value: string): number | null {
-  const timestamp = Date.parse(value);
-
-  if (Number.isNaN(timestamp)) {
-    return null;
-  }
-
-  return timestamp;
 }
 
 // Detail-source pull dates use a seven-day presentation window. Other consumers

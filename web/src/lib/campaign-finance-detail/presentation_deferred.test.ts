@@ -20,8 +20,12 @@ import {
   buildFundraisingSummaryPresentation,
   buildKeyMetrics,
   buildOutsideSpendingPresentation,
+  compareSerializedMoney,
   formatCurrency,
-  getCampaignFinanceEmptyMessage
+  formatSerializedMoneyRatioPercentage,
+  getCampaignFinanceEmptyMessage,
+  serializedMoneyMagnitudePercent,
+  sumSerializedMoney
 } from "./presentation";
 import {
   CANDIDATE_ID,
@@ -37,7 +41,7 @@ import {
 
 const POPULATED_SCHEDULE_E_COVERAGE = {
   activity_state: "populated" as const,
-  completeness: "complete" as const,
+  completeness: "partial" as const,
   basis: "fec_schedule_e_transactions" as const
 };
 const LEGACY_LOADED_ZERO_SCHEDULE_E_COVERAGE = {
@@ -51,6 +55,84 @@ describe("campaign finance deferred detail presentation", () => {
     expect(formatCurrency(0)).toBe("$0.00");
     expect(formatCurrency(1234567.8)).toBe("$1,234,567.80");
     expect(formatCurrency(-90.12)).toBe("-$90.12");
+  });
+
+  it("formats serialized money exactly without narrowing through a number", () => {
+    const veryLargeAmount = `${"9".repeat(400)}.01`;
+
+    expect(formatCurrency("9007199254740993.01")).toBe("$9,007,199,254,740,993.01");
+    expect(formatCurrency("-9007199254740993.01")).toBe("-$9,007,199,254,740,993.01");
+    expect(formatCurrency(veryLargeAmount)).toBe(`$9${",999".repeat(133)}.01`);
+    expect(formatCurrency("0.00")).toBe("$0.00");
+    expect(formatCurrency("1E+3")).toBe("$1,000.00");
+  });
+
+  it("compares serialized money exactly across large cents, signs, and exponent forms", () => {
+    expect(compareSerializedMoney("9007199254740993.01", "9007199254740993.02")).toBeLessThan(0);
+    expect(compareSerializedMoney("1.00", "0.00")).toBeGreaterThan(0);
+    expect(compareSerializedMoney("-1.01", "-1.00")).toBeLessThan(0);
+    expect(compareSerializedMoney("-0.00", "0.00")).toBe(0);
+    expect(compareSerializedMoney("1E+3", "1000.00")).toBe(0);
+  });
+
+  it("projects exact serialized sums and ratios without finite-number overflow", () => {
+    expect(sumSerializedMoney(["9007199254740993.01", "0.01"])).toBe(
+      "900719925474099302e-2"
+    );
+    expect(
+      formatSerializedMoneyRatioPercentage(
+        "9007199254740993.01",
+        "9007199254740993.02",
+        18
+      )
+    ).toBe("99.999999999999999889");
+    expect(formatSerializedMoneyRatioPercentage("1e400", "2e400", 18)).toBe(
+      "50.000000000000000000"
+    );
+    expect(sumSerializedMoney(["-10.25", "5.00", "0.00"])).toBe("-525e-2");
+    expect(sumSerializedMoney(["1.00", "-1.00"])).toBe("0");
+    expect(formatSerializedMoneyRatioPercentage("-1", "4", 1)).toBe("-25.0");
+    expect(formatSerializedMoneyRatioPercentage("0", "4", 2)).toBe("0.00");
+    expect(() => formatSerializedMoneyRatioPercentage("1", "0", 2)).toThrow(
+      "Money ratio denominator must not be zero."
+    );
+    expect(
+      compareSerializedMoney(
+        sumSerializedMoney(["9007199254740993.01", "-9007199254740992.00"]),
+        "1.01"
+      )
+    ).toBe(0);
+    expect(compareSerializedMoney(sumSerializedMoney(["1E+3", "0.01"]), "1000.01")).toBe(
+      0
+    );
+  });
+
+  it("projects only the bounded percentage for unsafe money magnitudes", () => {
+    expect(
+      serializedMoneyMagnitudePercent(
+        "9007199254740993.01",
+        "18014398509481986.02"
+      )
+    ).toBe(50);
+    expect(serializedMoneyMagnitudePercent("-1.01", "4.04")).toBe(25);
+    expect(serializedMoneyMagnitudePercent("0.00", "0.00")).toBe(0);
+  });
+
+  it("formats serialized money beyond the finite Number range", () => {
+    expect(formatCurrency("1e309")).toBe(`$1${",000".repeat(103)}.00`);
+  });
+
+  it.each(["", " ", "0x10", "Infinity", "NaN"])(
+    "rejects unsupported serialized money %j instead of manufacturing currency",
+    (value) => {
+      expect(() => formatCurrency(value)).toThrow("Money value must be a finite decimal amount.");
+    }
+  );
+
+  it("rejects non-finite numeric money instead of manufacturing currency", () => {
+    expect(() => formatCurrency(Number.POSITIVE_INFINITY)).toThrow(
+      "Money value must be a finite decimal amount."
+    );
   });
 
   it("builds fundraising summary presentation with formatted currency", () => {
@@ -507,6 +589,34 @@ describe("campaign finance deferred detail presentation", () => {
     ]);
   });
 
+  it("preserves exact serialized totals at the L10 deviation threshold", () => {
+    expect(
+      buildCandidateCompletenessWarnings(
+        {
+          ...DEFAULT_CANDIDATE_SUMMARY,
+          total_raised: "9500000000000000",
+          coverage: {
+            activity_state: "populated",
+            completeness: "partial",
+            basis: "qualifying_transactions"
+          }
+        },
+        {
+          totalRaised: "10000000000000001",
+          sourceLabel: "L10",
+          methodologyHref: "/methodology",
+          deviationThresholdRatio: 0.05
+        }
+      )
+    ).toEqual([
+      {
+        message:
+          "Civibus shows $9,500,000,000,000,000.00 raised, but the L10 reference is $10,000,000,000,000,001.00. Coverage may be incomplete.",
+        methodologyHref: "/methodology"
+      }
+    ]);
+  });
+
   it("builds candidate committee breakdown with null data_through and jurisdiction", () => {
     const summary = {
       ...DEFAULT_CANDIDATE_SUMMARY,
@@ -698,11 +808,17 @@ describe("campaign finance deferred detail presentation", () => {
   it("builds committee deferred outside-spending empty and populated states", () => {
     expect(
       buildCommitteeDeferredOutsideSpending({
+        ...DEFAULT_SELECTED_CYCLE_FIELDS,
         committee_id: COMMITTEE_ID,
         support_total: "0.00",
         oppose_total: "0.00",
         ie_transaction_count: 0,
         excluded_outlier_count: 0,
+        coverage: {
+          activity_state: "loaded_zero",
+          completeness: "partial",
+          basis: "fec_schedule_e_transactions"
+        },
         targets: []
       })
     ).toEqual({
@@ -712,15 +828,18 @@ describe("campaign finance deferred detail presentation", () => {
       outlierNote: null,
       targetRows: [],
       sourceRows: [],
-      emptyMessage: "This committee reported no independent expenditures"
+      emptyMessage: "This committee reported no independent expenditures",
+      showFigures: true
     });
 
     const populated = buildCommitteeDeferredOutsideSpending({
+      ...DEFAULT_SELECTED_CYCLE_FIELDS,
       committee_id: COMMITTEE_ID,
       support_total: "200.00",
       oppose_total: "25.00",
       ie_transaction_count: 2,
       excluded_outlier_count: 2,
+      coverage: POPULATED_SCHEDULE_E_COVERAGE,
       targets: [
         {
           candidate_id: CANDIDATE_ID,
@@ -743,6 +862,7 @@ describe("campaign finance deferred detail presentation", () => {
     });
 
     expect(populated.emptyMessage).toBeNull();
+    expect(populated.showFigures).toBe(true);
     expect(populated.ieCountLabel).toBe("2 expenditures");
     expect(populated.outlierNote).toBe(
       "2 reported independent expenditures were excluded from these totals as outliers."

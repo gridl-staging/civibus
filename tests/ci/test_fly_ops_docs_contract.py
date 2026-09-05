@@ -18,12 +18,7 @@ from tests.ci.fly_doctrine_helpers import (
     lede_is_parked,
     relpath,
 )
-
-
-pytestmark = pytest.mark.dev_repo_only(
-    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
-    owner="Fly ops documentation and private open-work ledger",
-)
+from tests.ci.public_mirror_contract import DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -209,6 +204,45 @@ def _run_lane10_digest_proof(
     )
 
 
+def test_public_mirror_fly_nodes_match_private_file_boundary() -> None:
+    prefix = f"{Path(__file__).relative_to(REPO_ROOT).as_posix()}::"
+    private_test_names = {
+        node_id.removeprefix(prefix)
+        for node_id in DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID
+        if node_id.startswith(prefix)
+    }
+
+    assert private_test_names == {
+        "test_active_table_stage6_owned_rows_are_single_line_and_unique_active_table",
+        "test_aug03_batch_stage2_roadmap_reconciliation_is_falsifiable",
+        "test_current_production_doctrine_points_to_fly_and_parks_hetzner",
+        "test_end_the_person_outage_receipt_is_falsifiable",
+        "test_feature_matrix_history_split_preserves_owner_contract_and_continuations",
+        "test_fly_runbook_documents_current_deploy_workflow_model",
+        "test_fly_runbook_documents_current_refresh_machine_model",
+        "test_fly_runbook_password_guidance_points_to_pgpass_owners",
+        "test_lane10_refresh_digest_proof_accepts_the_deployed_workflow_image",
+        "test_lane10_refresh_digest_proof_rejects_old_image_after_unrelated_machine_update",
+        "test_project_overview_current_scope_matches_implemented_fly_refresh_model",
+        "test_roadmap_tracks_only_unresolved_stage4_and_rotation_work",
+        "test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open",
+        "test_stage_owned_runnable_docs_do_not_publish_password_prefix_commands",
+    }
+    assert private_test_names.isdisjoint(
+        {
+            "test_campaign_finance_runbook_non_federal_run_is_executable_and_not_federally_scoped",
+            "test_campaign_finance_runbook_routes_non_federal_refreshes_through_fly_proxy",
+            "test_current_production_doctrine_fly_claim_helper_regressions",
+            "test_current_production_doctrine_legacy_helper_regressions",
+            "test_refresh_writer_gate_is_job_key_scoped_not_database_wide",
+        }
+    )
+
+
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_fly_runbook_documents_current_refresh_machine_model() -> None:
     runbook_text = _read_text(RUNBOOK_PATH)
     refresh_runbook_text = _read_text(CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH)
@@ -242,6 +276,89 @@ def test_fly_runbook_documents_current_refresh_machine_model() -> None:
         "docs/live-state/2026_07_31_refresh_machine_image_deploy.md",
     ):
         assert fragment in refresh_runbook_text
+
+
+def test_authority_scoped_identity_migration_runbook_contract() -> None:
+    runbook_text = _read_text(CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH)
+    command = _fenced_code_block_containing(
+        runbook_text,
+        "--production-authority-scoped-identity preflight",
+    )
+
+    for fragment in (
+        ': "${CIVIBUS_PROBE_PORT:?set the already-running lane-owned proxy port}"',
+        ': "${PGPASSFILE:?set the temporary mode-0600 password file}"',
+        'export POSTGRES_HOST=127.0.0.1 POSTGRES_PORT="$CIVIBUS_PROBE_PORT" POSTGRES_DB=civibus',
+        "PGOPTIONS='-c default_transaction_read_only=on'",
+        "--production-authority-scoped-identity preflight --expected-host 127.0.0.1",
+        "--production-authority-scoped-identity apply --expected-host 127.0.0.1",
+        "--production-authority-scoped-identity verify --expected-host 127.0.0.1",
+        '--expected-port "$CIVIBUS_PROBE_PORT" --expected-database civibus',
+    ):
+        assert fragment in command
+    assert command.count("python -m core.schema.apply_migrations") == 3
+    assert command.count("PGOPTIONS='-c default_transaction_read_only=on'") == 2
+    assert "POSTGRES_PASSWORD" not in command
+    assert "psql" not in command
+
+    normalized = " ".join(line.strip() for line in runbook_text.splitlines())
+    for fragment in (
+        "domains/campaign_finance/schema/migrations/2026_08_28_authority_scoped_identity.sql",
+        "310cfcd3106c70039d947bdd20ba1cc001072d8bf96969390ad162edab9416ed",
+        "safely superseded",
+        "It never scans or applies another domain migration",
+        "reject any unrelated pending core migration",
+        "fail closed while a refresh writer or long-idle transaction exists",
+        "session advisory lock",
+        "`core.authority_scoped_identity_migration_progress`",
+        "UUID-keyset batches of at most 10,000 rows",
+        "5-minute statement timeout",
+        "15-minute statement timeout",
+        "`CREATE UNIQUE INDEX CONCURRENTLY`",
+        "short final cutover transaction",
+        "records the original exact filename in `core.schema_migrations` atomically",
+        "partial_resumable",
+        "R19 is terminal RED",
+        "must never be retried",
+        "must never raise the 60-minute limit",
+        "trigger and trigger-function definitions",
+        "rolls back only that bounded transaction",
+        "locks and reads that relation's durable `last_id`",
+        "materializes only the next target primary-key IDs",
+        "`LIMIT 10000`, and `FOR UPDATE`",
+        "fixed before any authority-null filter or `core.source_record` join",
+        "counting selected target IDs as loop progress",
+        "already-populated or source-less selected row still advances the cursor",
+        "pinned migration artifact and its progress digest remain unchanged",
+        "cycle-safe recursive closure",
+        "`amended_from_filing_id` ancestors",
+        "`amended_by_transaction_id` successors",
+        "Recursion stops at 32 edges",
+        "distinct closure may contain at most 20,000 rows",
+        "Before any row or cursor change",
+        "actual scope mismatch rolls back the bounded transaction",
+        "existing AFTER STATEMENT amendment triggers observe both ends",
+        "cursor still advances only to the maximum ID in the original target batch",
+        "idempotently accepted when a later target batch visits them",
+        "never authorizes lifecycle, coverage, or public-claim promotion",
+        "Any final mismatch rolls back the cutover and ledger together",
+        "Repeating `apply` is idempotent only for that fully verified applied state",
+        "standalone operation",
+        "fresh transaction-local `READ ONLY` transaction",
+        "15-minute per-statement timeout and 5-second lock timeout",
+        "those settings reset when it commits or rolls back",
+        "does not claim a 15-minute total wall-time bound",
+        "timeout fails closed without success JSON",
+        "prior session timeout",
+    ):
+        assert fragment in normalized
+
+    for obsolete_monolith_fragment in (
+        "takes one transaction-scoped advisory lock",
+        "executes only the pinned SQL, and records",
+        "60-minute transaction-local statement timeout",
+    ):
+        assert obsolete_monolith_fragment not in normalized
 
 
 def test_refresh_writer_gate_is_job_key_scoped_not_database_wide() -> None:
@@ -308,18 +425,35 @@ def test_refresh_writer_gate_is_job_key_scoped_not_database_wide() -> None:
         "byte-identical to the selected job key",
         "same-job in-flight work is not detected here by design",
         "No normal refresh job class requires database-wide quiescence",
-        "one named launcher per job key per lane",
     ):
         assert preflight_fragment in normalized_runbook_text
 
     for ownership_fragment in (
-        "`core/refresh/runner.py` is the single same-host same-job serialization owner",
-        "per-job-key `flock`",
+        "`core/refresh/runner.py` is the same-job serialization owner",
+        "local per-job-key `flock`",
+        "nonblocking, session-scoped PostgreSQL advisory lock",
         "no single fixed execution host",
-        "It provides no cross-host serialization",
-        "not distinguishable in `pg_stat_activity` today",
+        "Cross-host exclusion comes from `_try_acquire_database_runner_locks`",
+        "`civibus-refresh-runner:<exact job key>`",
+        "A scheduled regional Machine and an operator-attended run therefore contend",
+        "The federal Machine's `--scope federal` keys remain disjoint from regional keys",
+        "Every production runner that can write the shared database must retain both guards",
+        "`authority-plan:<kind>/<code>`",
+        "Plans for two different authorities share neither ownership nor job keys",
     ):
         assert ownership_fragment in normalized_runbook_text
+
+    for authority_plan_fragment in (
+        "one strict authority operations profile over the existing refresh registry",
+        "It is neither another job registry nor another scheduler",
+        "--authority-plan-json infra/fly/regional_refresh_machine_profile.json --execution-mode scheduled",
+        "python -m core.refresh.authority_ledger",
+        "A proof cannot be reused by another authority or plan",
+        "byte-for-byte hard-pinned to the federal app and Machine",
+    ):
+        assert authority_plan_fragment in normalized_runbook_text
+
+    assert "--wa-contributions-canary" not in runbook_text
 
     for in_flight_visibility_fragment in (
         "Refresh-run in-flight visibility",
@@ -339,6 +473,10 @@ def test_refresh_writer_gate_is_job_key_scoped_not_database_wide() -> None:
         assert superseded_ledger_deviation_fragment not in runbook_text
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_fly_runbook_documents_current_deploy_workflow_model() -> None:
     runbook_text = _read_text(RUNBOOK_PATH)
 
@@ -363,6 +501,10 @@ def test_fly_runbook_documents_current_deploy_workflow_model() -> None:
         assert fragment not in runbook_text
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_lane10_refresh_digest_proof_accepts_the_deployed_workflow_image(tmp_path: Path) -> None:
     digest = f"registry.fly.io/civibus-refresh@sha256:{'a' * 64}"
 
@@ -376,6 +518,10 @@ def test_lane10_refresh_digest_proof_accepts_the_deployed_workflow_image(tmp_pat
     assert "refresh_machine_digest_match" in result.stdout
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_lane10_refresh_digest_proof_rejects_old_image_after_unrelated_machine_update(
     tmp_path: Path,
 ) -> None:
@@ -392,6 +538,10 @@ def test_lane10_refresh_digest_proof_rejects_old_image_after_unrelated_machine_u
     assert "does not match workflow-proven digest" in result.stderr
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_fly_runbook_password_guidance_points_to_pgpass_owners() -> None:
     runbook_text = _read_text(RUNBOOK_PATH)
     live_state_text = _read_text(LIVE_STATE_PATH)
@@ -427,6 +577,10 @@ def test_fly_runbook_password_guidance_points_to_pgpass_owners() -> None:
     assert not SECRET_SHAPED_FLY_IMPORT_RE.search(live_state_text)
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_stage_owned_runnable_docs_do_not_publish_password_prefix_commands() -> None:
     offenders: list[str] = []
     for path in RUNNABLE_PASSWORD_DOC_PATHS:
@@ -437,6 +591,10 @@ def test_stage_owned_runnable_docs_do_not_publish_password_prefix_commands() -> 
     assert offenders == []
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_roadmap_tracks_only_unresolved_stage4_and_rotation_work() -> None:
     roadmap_text = _read_text(ROADMAP_PATH)
     runbook_text = _read_text(RUNBOOK_PATH)
@@ -466,6 +624,10 @@ def test_roadmap_tracks_only_unresolved_stage4_and_rotation_work() -> None:
         assert fragment not in roadmap_text
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open() -> None:
     receipt_text = _read_text(SCHEDULER_BOUNDARY_RED_RECEIPT_PATH)
     no_start_receipt_text = _read_text(SCHEDULER_BOUNDARY_NO_START_RECEIPT_PATH)
@@ -612,6 +774,10 @@ def test_campaign_finance_runbook_non_federal_run_is_executable_and_not_federall
     assert "d2944415-3ec6-47b0-b44f-2cd28ddfbc0b" in current_text
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_feature_matrix_history_split_preserves_owner_contract_and_continuations() -> None:
     archive_text_by_path = {path: _read_text(path) for path in FEATURE_MATRIX_ARCHIVE_PATHS}
     owner_text = archive_text_by_path[FEATURE_MATRIX_PATH]
@@ -656,6 +822,10 @@ def test_feature_matrix_history_split_preserves_owner_contract_and_continuations
             assert f"`{FEATURE_MATRIX_PATH.name}`" in text
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_end_the_person_outage_receipt_is_falsifiable() -> None:
     assert END_PERSON_OUTAGE_RECEIPT_PATH.is_file()
     receipt_text = _read_text(END_PERSON_OUTAGE_RECEIPT_PATH)
@@ -762,6 +932,10 @@ def test_end_the_person_outage_receipt_is_falsifiable() -> None:
     assert receipt_text.rstrip().endswith(verdict[6])
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_active_table_stage6_owned_rows_are_single_line_and_unique_active_table() -> None:
     active_rows = _active_table_rows(_read_text(ROADMAP_PATH))
 
@@ -777,6 +951,10 @@ def test_active_table_stage6_owned_rows_are_single_line_and_unique_active_table(
         assert sum(row_id in row for row in active_rows) == 1
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_aug03_batch_stage2_roadmap_reconciliation_is_falsifiable() -> None:
     roadmap_text = _read_text(ROADMAP_PATH)
     required_fragments = (
@@ -825,6 +1003,10 @@ def test_aug03_batch_stage2_roadmap_reconciliation_is_falsifiable() -> None:
     assert "fails closed on a timer at 2026-08-12T01:52:38Z" not in provenance_expiry_line
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_project_overview_current_scope_matches_implemented_fly_refresh_model() -> None:
     overview_text = _read_text(PROJECT_OVERVIEW_PATH)
 
@@ -924,6 +1106,10 @@ def test_current_production_doctrine_legacy_helper_regressions() -> None:
     assert not lede_is_parked("The Hetzner stack was parked. It is now active.")
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 def test_current_production_doctrine_points_to_fly_and_parks_hetzner() -> None:
     doctrine_paths = (SCRAI_RULES_PATH, AGENTS_DOC_PATH, CLAUDE_DOC_PATH, PROD_OPS_DISCIPLINE_PATH)
     docs = {path: _read_text(path) for path in (*doctrine_paths, RUNBOOK_PATH, HETZNER_RUNBOOK_PATH)}

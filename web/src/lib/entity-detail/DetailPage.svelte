@@ -61,9 +61,11 @@
   const EMPTY_PERSON_TOP_EMPLOYERS: PersonTopEmployerRow[] = [];
   let selectedContributionTotalView: "cycle" | "career" = "cycle";
   let selectedSizeBucketUnit: "dollars" | "reported_transactions" = "dollars";
+  let personDisclosureContext: string;
 
   $: personDetail =
     data.entityType === "person" ? (data.detail as PersonDetailResponse) : null;
+  $: personDisclosureContext = shellViewModel.canonicalName.trim() || "This person";
   // The direct person -> race links (civibus-7qj). Server-ordered nearest
   // election first; empty (or an omitted key on an older payload) means no panel.
   let personRaceRows: PersonRaceRow[];
@@ -99,6 +101,14 @@
 
   function buildMetricTestId(label: string): string {
     return `entity-metric-${label.toLowerCase().replace(/\s+/g, "-")}`;
+  }
+
+  function buildCandidateDisclosureContext(
+    candidate: PersonCandidateFinanceSection["candidate"],
+    candidateIndex: number
+  ): string {
+    const candidateName = formatCandidatePublicName(candidate).trim() || "Candidate";
+    return `${candidateName} (candidacy ${candidateIndex + 1})`;
   }
 
   function normalizeSafeExternalHttpUrl(url: string | null | undefined): string | null {
@@ -236,6 +246,7 @@
         {/if}
         <MonthlyContributionsChart
           testId={fundraisingDetail.monthlyContributions.testId}
+          disclosureContext={personDisclosureContext}
           cycle={fundraisingDetail.monthlyContributions.cycle}
           coverageThrough={fundraisingDetail.monthlyContributions.coverageThrough}
           sources={fundraisingDetail.monthlyContributions.sources}
@@ -262,6 +273,7 @@
         </div>
         <HorizontalBarChart
           testId={fundraisingDetail.sizeBuckets.testId}
+          disclosureContext={personDisclosureContext}
           title={fundraisingDetail.sizeBuckets.title}
           cycle={fundraisingDetail.sizeBuckets.cycle}
           coverageThrough={fundraisingDetail.sizeBuckets.coverageThrough}
@@ -282,6 +294,7 @@
         </dl>
         <GeographyShareChart
           testId={fundraisingDetail.geographyShare.testId}
+          disclosureContext={personDisclosureContext}
           cycle={fundraisingDetail.geographyShare.cycle}
           coverageThrough={fundraisingDetail.geographyShare.coverageThrough}
           sources={fundraisingDetail.geographyShare.sources}
@@ -473,6 +486,7 @@
 )}
   <ReceiptCompositionChart
     {testId}
+    disclosureContext={personDisclosureContext}
     cycle={moneyAtGlance.receiptComposition.cycle}
     coverageThrough={moneyAtGlance.receiptComposition.coverageThrough}
     sources={moneyAtGlance.receiptComposition.sources}
@@ -529,7 +543,9 @@
   {:else}
     <section class="detail__money-glance" aria-label="Money at a glance">
       <h4>Money at a glance</h4>
-      <p>{headline.selectedCycle} cycle</p>
+      {#if headline.selectedCycle !== undefined}
+        <p>{headline.selectedCycle} cycle</p>
+      {/if}
       <p>{headline.message}</p>
     </section>
   {/if}
@@ -804,6 +820,7 @@
                       </dl>
                       <OutsideSpendingChart
                         testId="person-outside-spending"
+                        disclosureContext={buildCandidateDisclosureContext(section.candidate, candidateIndex)}
                         cycle={ieSummary.selected_cycle}
                         coverageThrough={ieSummary.coverage_end_date}
                         sources={[

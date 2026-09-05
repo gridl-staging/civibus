@@ -82,12 +82,14 @@ def test_load_nc_ie_document_index_row_keeps_filing_upsert_when_source_record_ex
     resolve_committee_bridge.assert_called_once_with(
         conn,
         "NC-IE-committee",
+        data_source_id=data_source_id,
         committee_name="Example IE Committee",
     )
     build_filing.assert_called_once_with(
         row,
         committee_id=committee_id,
         source_record_id=source_record_id,
+        data_source_id=data_source_id,
     )
     upsert_filing.assert_called_once_with(conn, filing)
     persist_report_section_url.assert_called_once_with(

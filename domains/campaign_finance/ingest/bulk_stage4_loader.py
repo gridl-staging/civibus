@@ -23,7 +23,6 @@ from domains.campaign_finance.ingest.bulk_transaction_loader import (
     build_filing_from_contribution,
     build_transaction_from_contribution,
     resolve_source_record_id,
-    resolve_source_record_ids,
 )
 from domains.campaign_finance.ingest.fec_lookup import (
     current_federal_officeholder_committee_fec_ids,
@@ -728,6 +727,7 @@ def _load_stage4_relational_row(
         conn,
         contribution_record,
         source_record_id=source_record_id,
+        data_source_id=data_source_id,
     )
     filing_id = upsert_filing(conn, filing)
 
@@ -737,6 +737,7 @@ def _load_stage4_relational_row(
         filing_id=filing_id,
         committee_id=filing.committee_id,
         source_record_id=source_record_id,
+        data_source_id=data_source_id,
         resolve_counterparty=resolve_counterparty,
     )
     return upsert_transaction_with_status(conn, transaction).inserted
@@ -755,6 +756,7 @@ def _load_stage4_transactions_batch(
     committee_id_by_fec_id = find_committee_ids_by_fec_ids(
         conn,
         list(dict.fromkeys(str(row.contribution_record["committee_id"]) for row in rows)),
+        data_source_id=request.data_source_id,
     )
 
     row_outcomes = [_Stage4RowLoadOutcome(source_row_committable=False) for _row in rows]
@@ -781,12 +783,12 @@ def _load_stage4_transactions_batch(
 
     try:
         provenance_inserted_by_row_index: dict[int, bool] = {}
-        source_record_keys = [row.source_record_key for _row_index, row, _committee_id in resolved_rows]
         source_records = [
             _build_stage4_source_record(request.data_source_id, row.contribution_record)
             for _row_index, row, _committee_id in resolved_rows
         ]
         provenance_results = try_insert_source_records_bulk(conn, source_records)
+        source_record_id_by_key: dict[str, UUID] = {}
         for (_row_index, row, _committee_id), provenance_result in zip(
             resolved_rows,
             provenance_results,
@@ -794,7 +796,12 @@ def _load_stage4_transactions_batch(
         ):
             provenance_inserted = provenance_result.inserted
             provenance_inserted_by_row_index[_row_index] = provenance_inserted
-        source_record_id_by_key = resolve_source_record_ids(conn, request.data_source_id, source_record_keys)
+            if provenance_result.source_record_id is None:
+                raise RuntimeError(
+                    "bulk source-record owner returned no id for "
+                    f"data_source_id={request.data_source_id} source_record_key={row.source_record_key}"
+                )
+            source_record_id_by_key[row.source_record_key] = provenance_result.source_record_id
 
         filings = [
             build_filing_from_contribution(
@@ -802,6 +809,7 @@ def _load_stage4_transactions_batch(
                 row.contribution_record,
                 committee_id=committee_id,
                 source_record_id=source_record_id_by_key[row.source_record_key],
+                data_source_id=request.data_source_id,
             )
             for _row_index, row, committee_id in resolved_rows
         ]
@@ -813,7 +821,15 @@ def _load_stage4_transactions_batch(
                 if (other_id := _normalize_optional_text(row.contribution_record.get("other_id"))) is not None
             )
         )
-        recipient_committee_id_by_fec_id = find_committee_ids_by_fec_ids(conn, other_ids) if other_ids else {}
+        recipient_committee_id_by_fec_id = (
+            find_committee_ids_by_fec_ids(
+                conn,
+                other_ids,
+                data_source_id=request.data_source_id,
+            )
+            if other_ids
+            else {}
+        )
         transactions = [
             build_transaction_from_contribution(
                 conn,
@@ -821,6 +837,7 @@ def _load_stage4_transactions_batch(
                 filing_id=filing_id_by_fec_id[filing.filing_fec_id],
                 committee_id=committee_id,
                 source_record_id=source_record_id_by_key[row.source_record_key],
+                data_source_id=request.data_source_id,
                 resolve_counterparty=request.options.entity_extraction,
                 recipient_committee_id_by_fec_id=recipient_committee_id_by_fec_id,
             )
@@ -1220,7 +1237,13 @@ def _load_stage4_contributions(
             limit=None,
             next_source_row_number=checkpoint_context.start_row,
         )
-    resolve_committee = functools.cache(lambda fec_id: find_committee_id_by_fec_id(conn, fec_id))
+    resolve_committee = functools.cache(
+        lambda fec_id: find_committee_id_by_fec_id(
+            conn,
+            fec_id,
+            data_source_id=request.data_source_id,
+        )
+    )
     for raw_row in raw_rows:
         _process_stage4_raw_row(
             conn,

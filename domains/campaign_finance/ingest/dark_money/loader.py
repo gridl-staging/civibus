@@ -52,6 +52,8 @@ def ensure_irs_527_data_source(conn: psycopg.Connection) -> UUID:
     data_source = DataSource(
         domain=_IRS_527_DATA_SOURCE_DOMAIN,
         jurisdiction=_IRS_527_DATA_SOURCE_JURISDICTION,
+        filing_authority_type="federal",
+        filing_authority_code="IRS_527",
         name=_IRS_527_DATA_SOURCE_NAME,
         source_url=IRS_527_FULL_DATA_URL,
         source_format=_IRS_527_DATA_SOURCE_FORMAT,

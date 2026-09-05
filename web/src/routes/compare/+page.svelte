@@ -100,12 +100,18 @@
       label: presentation.columns[index].name,
       href: presentation.columns[index].href,
       value: cell.value,
-      valueLabel: cell.label
+      valueLabel: cell.label,
+      widthPercentage: cell.widthPercentage ?? undefined
     }));
   }
 
   function firstCoveredMonth(months: string[]): string {
     return months[0] ?? "not available";
+  }
+
+  function buildComparisonDisclosureContext(name: string, columnIndex: number): string {
+    const officeholderName = name.trim() || "Officeholder";
+    return `${officeholderName} (comparison column ${columnIndex + 1})`;
   }
 </script>
 
@@ -236,6 +242,7 @@
                 <p>Shared scale maximum: {presentation.chartScales.monthlyContributions.maxLabel}</p>
                 <MonthlyContributionsChart
                   testId={`compare-${chart.personId}-monthly`}
+                  disclosureContext={buildComparisonDisclosureContext(column.name, index)}
                   cycle={chart.contributionInsights.monthlyContributions.cycle}
                   coverageThrough={chart.contributionInsights.monthlyContributions.coverageThrough}
                   sources={chart.contributionInsights.monthlyContributions.sources}
@@ -246,6 +253,7 @@
                 <p>Shared scale maximum: {presentation.chartScales.sizeBucketDollars.maxLabel}</p>
                 <HorizontalBarChart
                   testId={`compare-${chart.personId}-size`}
+                  disclosureContext={buildComparisonDisclosureContext(column.name, index)}
                   title={chart.contributionInsights.sizeBuckets.title}
                   cycle={chart.contributionInsights.sizeBuckets.cycle}
                   coverageThrough={chart.contributionInsights.sizeBuckets.coverageThrough}
@@ -256,6 +264,7 @@
                 <p>Geography basis: {chart.contributionInsights.geographyNote}</p>
                 <GeographyShareChart
                   testId={`compare-${chart.personId}-geography`}
+                  disclosureContext={buildComparisonDisclosureContext(column.name, index)}
                   cycle={chart.contributionInsights.geographyShare.cycle}
                   coverageThrough={chart.contributionInsights.geographyShare.coverageThrough}
                   sources={chart.contributionInsights.geographyShare.sources}
@@ -269,6 +278,7 @@
                   <p>Shared scale maximum: {presentation.chartScales.outsideSpending.maxLabel}</p>
                   <OutsideSpendingChart
                     testId={`compare-${chart.personId}-outside-spending`}
+                    disclosureContext={buildComparisonDisclosureContext(column.name, index)}
                     cycle={chart.outsideSpending.cycle}
                     coverageThrough={chart.outsideSpending.coverageThrough}
                     sources={FEC_SCHEDULE_E_SOURCE}

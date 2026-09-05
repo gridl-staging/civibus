@@ -1,4 +1,88 @@
 {
+  "identity_translations": [
+    {
+      "geographic_subject": {
+        "domain": "geographic_subject",
+        "kind": "municipality",
+        "value": "CA_LOS_ANGELES"
+      },
+      "acquisition_scope": {
+        "domain": "acquisition_scope",
+        "kind": "municipality",
+        "value": "LA"
+      }
+    },
+    {
+      "geographic_subject": {
+        "domain": "geographic_subject",
+        "kind": "municipality",
+        "value": "CA_SAN_FRANCISCO"
+      },
+      "acquisition_scope": {
+        "domain": "acquisition_scope",
+        "kind": "municipality",
+        "value": "SF"
+      }
+    },
+    {
+      "geographic_subject": {
+        "domain": "geographic_subject",
+        "kind": "municipality",
+        "value": "NY_NEW_YORK"
+      },
+      "acquisition_scope": {
+        "domain": "acquisition_scope",
+        "kind": "municipality",
+        "value": "NYC"
+      },
+      "public_route": {
+        "domain": "public_route",
+        "kind": "municipality",
+        "value": "/state/NY/municipality/new-york-city"
+      }
+    },
+    {
+      "geographic_subject": {
+        "domain": "geographic_subject",
+        "kind": "municipality",
+        "value": "PA_PHILADELPHIA"
+      },
+      "acquisition_scope": {
+        "domain": "acquisition_scope",
+        "kind": "municipality",
+        "value": "PHL"
+      }
+    },
+    {
+      "geographic_subject": {
+        "domain": "geographic_subject",
+        "kind": "state",
+        "value": "WA"
+      },
+      "acquisition_scope": {
+        "domain": "acquisition_scope",
+        "kind": "state",
+        "value": "WA"
+      },
+      "public_route": {
+        "domain": "public_route",
+        "kind": "state",
+        "value": "/state/WA"
+      }
+    },
+    {
+      "geographic_subject": {
+        "domain": "geographic_subject",
+        "kind": "municipality",
+        "value": "WA_SEATTLE"
+      },
+      "public_route": {
+        "domain": "public_route",
+        "kind": "municipality",
+        "value": "/state/WA/municipality/seattle"
+      }
+    }
+  ],
   "rows": [
     {
       "jurisdiction_code": "FEC",
@@ -987,10 +1071,10 @@
       ],
       "runner_wired": true,
       "tier": "launch-support candidate",
-      "evidence_summary": "PA ZIPs are updated weekly (~4 day lag), not annual as originally classified. Verified MAR28 PM1. 3K rows loaded on Hetzner.",
-      "operational_reason": "Weekly cadence meets launch freshness threshold.",
-      "next_action": "RESOLVED (MAR28 PM1): PA \"annual\" ZIPs are actually updated ~weekly with ~4 day lag. Loaded 3K rows on Hetzner.",
-      "evidence_date": "2026-03-28",
+      "evidence_summary": "The authorized 2026-08-27 state-pa-contributions launch was terminal-negative before Machine creation: flyctl v0.4.93 composed a double-digest image identifier. Production counts were unchanged at N_pre=N_post=5,996 with F=0; no qualifying core.refresh_run row, elapsed time, throughput rate, projection, or full run exists. Canonical receipt: docs/live-state/2026_08_27_state_pa_contributions_probe_dispatch_receipt.md at 5e4f4c473.",
+      "operational_reason": "The source contract and weekly source cadence remain encoded, but current production-run proof is absent. The 2026-08-27 launch attempt did not create a Machine or CLI process and cannot support a live, recurring, or public-scope promotion.",
+      "next_action": "Complete no-production immutable-selector compatibility proof in civibus-aji.35.1 before any retry; civibus-aji.35 then owns the separately authorized production proof, and civibus-aji.8 owns PA closeout. Do not retry under the terminal-negative receipt or treat A4b as authorized.",
+      "evidence_date": "2026-08-27",
       "loaded_count": null,
       "expected_count": null,
       "ie_coverage_available": null,
@@ -1783,7 +1867,7 @@
       "name": "San Francisco",
       "jurisdiction_type": "municipality",
       "best_update_frequency": "daily",
-      "best_last_verified_working": "2026-03-31",
+      "best_last_verified_working": "2026-08-27",
       "covers_sub_jurisdictions": false,
       "source_count": 1,
       "source_names": [
@@ -1791,10 +1875,10 @@
       ],
       "runner_wired": true,
       "tier": "implemented but unproven",
-      "evidence_summary": "Pipeline implemented at domains/campaign_finance/jurisdictions/cities/SF/ and the refresh plan declares city-sf-transactions in core/refresh/job_builders.py via run_sf_refresh. Stage 2 observed zero production core.refresh_run city rows, including city-sf-transactions, so this row reflects static implementation and runner wiring only.",
-      "operational_reason": "SF is implemented but unproven: the static city package and city-sf-transactions runner job exist, but no production runner execution, ledger row, or recurring freshness receipt has been observed.",
-      "next_action": "Run city-sf-transactions through the production refresh runner and capture a qualifying core.refresh_run receipt plus recurring freshness evidence before any stronger claim.",
-      "evidence_date": "2026-08-22",
+      "evidence_summary": "A manual city-sf-transactions production run completed successfully on 2026-08-27: run d13bedaf-fdec-459c-999a-f068b4510945 inserted 32, skipped 279,095, and recorded zero quarantined, superseded, or error rows. Canonical receipt: docs/live-state/2026_08_26_sf_transactions_corrected_recovery_receipt.md at ede0bf0f3.",
+      "operational_reason": "SF now has qualifying live runner execution, but only as a manual one-shot. Recurring or unattended freshness, full-history completeness, and any stronger public claim remain unproven.",
+      "next_action": "Capture separately authorized recurring or unattended freshness evidence before changing operational maturity or public tier; do not infer full-history or public regional launch from the successful manual row.",
+      "evidence_date": "2026-08-27",
       "loaded_count": null,
       "expected_count": null,
       "ie_coverage_available": null,
@@ -2884,7 +2968,7 @@
     },
     {
       "jurisdiction_code": "NY_NEW_YORK",
-      "name": "New York",
+      "name": "New York City",
       "jurisdiction_type": "municipality",
       "best_update_frequency": "monthly",
       "best_last_verified_working": "2026-04-08",
@@ -2904,7 +2988,84 @@
       "ie_coverage_available": null,
       "parent_jurisdiction_code": "NY",
       "municipal_audit_decision": "independent_target",
-      "municipal_portal_url": "https://www.nyccfb.info/follow-the-money/data-library/"
+      "municipal_portal_url": "https://www.nyccfb.info/follow-the-money/data-library/",
+      "authority_relation": {
+        "relation": "partitioned_overlapping",
+        "authorities": [
+          {
+            "kind": "state",
+            "code": "NY"
+          },
+          {
+            "kind": "municipality",
+            "code": "NY_NEW_YORK"
+          }
+        ],
+        "precedence": [
+          {
+            "authority": {
+              "kind": "municipality",
+              "code": "NY_NEW_YORK"
+            },
+            "scope": "For registrations and filings made on or after 2020-04-27, NYC CFB is authoritative for the five proved city-office candidate and authorized-committee lanes."
+          },
+          {
+            "authority": {
+              "kind": "state",
+              "code": "NY"
+            },
+            "scope": "NYSBOE remains authoritative for other proved Article 14 lanes; no single-authority precedence is established for conditional independent-expenditure or municipal-ballot overlap."
+          }
+        ],
+        "partitions": [
+          {
+            "authority": {
+              "kind": "municipality",
+              "code": "NY_NEW_YORK"
+            },
+            "scope": "For registrations and filings made on or after 2020-04-27, NYC CFB substitutes only for candidates and their authorized political committees for Mayor, Public Advocate, Comptroller, Borough President, and City Council."
+          },
+          {
+            "authority": {
+              "kind": "state",
+              "code": "NY"
+            },
+            "scope": "Other NYC office and committee classes remain NYSBOE, applicable federal, or separately proved; CFB and NYSBOE independent-expenditure or municipal-ballot obligations overlap only when both systems' definitions and thresholds apply."
+          }
+        ],
+        "provenance": [
+          {
+            "authority": {
+              "kind": "municipality",
+              "code": "NY_NEW_YORK"
+            },
+            "source_scope": "Accepted civibus-aji.46 receipt: NYC CFB five-office post-2020-04-27 substitution and bounded CFB publication families."
+          },
+          {
+            "authority": {
+              "kind": "state",
+              "code": "NY"
+            },
+            "source_scope": "Accepted civibus-aji.46 receipt: NYSBOE Article 14 parent lanes and authority-specific provenance for conditional overlap."
+          }
+        ],
+        "deduplication": {
+          "disposition": "refuse_combination",
+          "identity_keys": []
+        },
+        "refusals": [
+          "Education Law elections",
+          "special-district elections",
+          "fire-district elections",
+          "library-district elections"
+        ],
+        "evidence": {
+          "owner": "civibus-aji.46",
+          "receipt": "receipts/wave-01-ny-nyc-receipt.json",
+          "receipt_sha256": "40aa23427cd6ba0a817d615b8b1b6e29b7903de368705fb0d0a26bb11090cc01",
+          "packet_sha256": "2bf162ae4f2051d86cb9cb39ff100e568fb4e52153e7ee7205fc19349de39731"
+        }
+      }
     },
     {
       "jurisdiction_code": "OH_CINCINNATI",
@@ -3616,16 +3777,129 @@
       ],
       "runner_wired": true,
       "tier": "launch-support candidate",
-      "evidence_summary": "Stage 5 municipal inheritance (updated 2026-03-28), confirmed by Stage 1 browser-verified city portal research (2026-03-31): WA PDC covers both state and local races through unified statewide filing system. Seattle does not operate a materially separate filing system; all Seattle candidate committees register and file with WA PDC. Seattle Democracy Voucher program is supplementary data (not blocking). Municipal audit decision remains covered_by_parent.",
-      "operational_reason": "Inherited parent-state direct live proof, bounded runner proof, production-serving proof, and the bounded 2026-08-23 independent-expenditures disposition all exist for the ingest-supported Washington PDC sources; WA still lacks qualifying recurring/unattended production refresh evidence.",
-      "next_action": "Inherit parent-state path: WA -> Use the bounded 2026-08-23 independent-expenditures receipt as the current IE disposition; keep WA below operational until qualifying recurring/unattended production refresh evidence exists for `state-wa-*`.",
-      "evidence_date": "2026-08-23",
+      "evidence_summary": "Accepted civibus-aji.46 discovery receipt (2026-08-28): Seattle is partitioned/overlapping, not flat inherited or flat independent. PDC receives and publishes Title 29B filings; the Seattle City Clerk is statutory recipient for ordinary local C-series and local F-1; SEEC separately administers intake, certification, publication, enforcement, report-specific Commission receipts, and Democracy Voucher records for the receipt-bounded city scope. Municipal Court and Seattle School District are excluded from City filing; Port and non-City judicial races are outside the evidenced Seattle scope. The retained covered_by_parent value is historical compatibility only and does not select the typed relation.",
+      "operational_reason": "Current ingest support remains bounded to existing Washington PDC sources. The accepted receipt proves separate Seattle authority families but no official PDC-to-SEEC report/amendment crosswalk or conflict-precedence rule, so combined Seattle totals and cross-system deduplication refuse.",
+      "next_action": "Keep PDC and Seattle authority families isolated; prove the SEEC acquisition/history contract, paired version crosswalk, and formal conflict rule before any combined projection.",
+      "evidence_date": "2026-08-28",
       "loaded_count": null,
       "expected_count": null,
       "ie_coverage_available": null,
       "parent_jurisdiction_code": "WA",
       "municipal_audit_decision": "covered_by_parent",
-      "municipal_portal_url": null
+      "municipal_portal_url": null,
+      "authority_relation": {
+        "relation": "partitioned_overlapping",
+        "authorities": [
+          {
+            "kind": "state",
+            "code": "WA"
+          },
+          {
+            "kind": "named_other",
+            "code": "WA_SEATTLE_CITY_CLERK",
+            "name": "Seattle City Clerk"
+          },
+          {
+            "kind": "named_other",
+            "code": "WA_SEEC",
+            "name": "Seattle Ethics and Elections Commission"
+          }
+        ],
+        "precedence": [
+          {
+            "authority": {
+              "kind": "state",
+              "code": "WA"
+            },
+            "scope": "PDC receives and publishes Title 29B filings and remains the directed authority for receipt-bounded excluded or outside Seattle scope; that direction does not prove universal exclusivity."
+          },
+          {
+            "authority": {
+              "kind": "named_other",
+              "code": "WA_SEATTLE_CITY_CLERK",
+              "name": "Seattle City Clerk"
+            },
+            "scope": "The Seattle City Clerk is the statutory recipient for ordinary local C-series reports and the local F-1."
+          },
+          {
+            "authority": {
+              "kind": "named_other",
+              "code": "WA_SEEC",
+              "name": "Seattle Ethics and Elections Commission"
+            },
+            "scope": "SEEC administers local electronic intake, separate certification and publication, enforcement, report-specific Commission receipts, and Democracy Voucher records for the proved City scope."
+          }
+        ],
+        "partitions": [
+          {
+            "authority": {
+              "kind": "state",
+              "code": "WA"
+            },
+            "scope": "Title 29B PDC filings; Municipal Court and Seattle School District are expressly excluded from City filing, while Port and non-City judicial races are outside the evidenced Seattle scope and directed to PDC without a universal exclusivity inference."
+          },
+          {
+            "authority": {
+              "kind": "named_other",
+              "code": "WA_SEATTLE_CITY_CLERK",
+              "name": "Seattle City Clerk"
+            },
+            "scope": "Ordinary local C-series reports and the local F-1 for the receipt-bounded Seattle filing scope."
+          },
+          {
+            "authority": {
+              "kind": "named_other",
+              "code": "WA_SEEC",
+              "name": "Seattle Ethics and Elections Commission"
+            },
+            "scope": "Mayor, City Attorney, all nine City Council positions, City ballot propositions, and defined covered committees, including SEEC-specific administration, receipts, enforcement publications, and Democracy Voucher records."
+          }
+        ],
+        "provenance": [
+          {
+            "authority": {
+              "kind": "state",
+              "code": "WA"
+            },
+            "source_scope": "Accepted civibus-aji.46 WA/Seattle receipt: PDC Title 29B publication and receipt-bounded PDC-directed excluded/outside lanes."
+          },
+          {
+            "authority": {
+              "kind": "named_other",
+              "code": "WA_SEATTLE_CITY_CLERK",
+              "name": "Seattle City Clerk"
+            },
+            "source_scope": "Accepted civibus-aji.46 WA/Seattle receipt: City Clerk statutory receipt for ordinary local C-series and local F-1."
+          },
+          {
+            "authority": {
+              "kind": "named_other",
+              "code": "WA_SEEC",
+              "name": "Seattle Ethics and Elections Commission"
+            },
+            "source_scope": "Accepted civibus-aji.46 WA/Seattle receipt: SEEC intake, certification, publication, enforcement, Commission receipts, and Democracy Voucher records."
+          }
+        ],
+        "deduplication": {
+          "disposition": "refuse_combination",
+          "identity_keys": []
+        },
+        "refusals": [
+          "Municipal Court is excluded from Seattle City filing.",
+          "Seattle School District is excluded from Seattle City filing.",
+          "Port races are outside the evidenced Seattle scope.",
+          "Non-City judicial races are outside the evidenced Seattle scope.",
+          "PDC-to-Seattle record merging, cross-system deduplication, and combined Seattle totals refuse without an official report/amendment crosswalk and conflict-precedence rule."
+        ],
+        "evidence": {
+          "owner": "civibus-aji.46",
+          "receipt": "receipts/wave-01-wa-seattle-receipt.json",
+          "receipt_sha256": "5d0d37182299b1261a86ea7fd02338598f91d32714770dea7923e16e17fda669",
+          "packet_sha256": "c86804d46312d5fb524a8f2c1f56f30413dc6d200a24086d00b69c9e011d50c8",
+          "aggregate_receipt": "receipts/wave-01-controls-receipt.json",
+          "aggregate_receipt_sha256": "ce959a6cd8aba1517c3fd320546caccce2aecbbb0756fce9cf308dbd0d52fd7a"
+        }
+      }
     },
     {
       "jurisdiction_code": "WA_SPOKANE",

@@ -20,11 +20,13 @@ _DEVELOPMENT_ENVIRONMENT = "development"
 RATE_LIMIT_REQUESTS_ENV_VAR = "CIVIBUS_RATE_LIMIT_REQUESTS"
 RATE_LIMIT_WINDOW_SECONDS_ENV_VAR = "CIVIBUS_RATE_LIMIT_WINDOW_SECONDS"
 _RATE_LIMIT_EXCEEDED_DETAIL = "Rate limit exceeded"
+_CLIENT_IDENTITY_UNAVAILABLE_DETAIL = "Client identity unavailable"
 _RETRY_AFTER_HEADER = "Retry-After"
 _RATE_LIMIT_REQUESTS_STATE_KEY = "rate_limit_requests"
 _RATE_LIMIT_WINDOW_SECONDS_STATE_KEY = "rate_limit_window_seconds"
 _RATE_LIMIT_BUCKETS_STATE_KEY = "rate_limit_buckets"
 _RATE_LIMIT_LOCK_STATE_KEY = "rate_limit_lock"
+_RATE_LIMIT_LAST_CLEANUP_AT_STATE_KEY = "rate_limit_last_cleanup_at"
 
 
 @dataclass
@@ -71,10 +73,11 @@ def initialize_rate_limiter_state(
     setattr(app_state, _RATE_LIMIT_WINDOW_SECONDS_STATE_KEY, window_seconds)
     setattr(app_state, _RATE_LIMIT_BUCKETS_STATE_KEY, {})
     setattr(app_state, _RATE_LIMIT_LOCK_STATE_KEY, threading.Lock())
+    setattr(app_state, _RATE_LIMIT_LAST_CLEANUP_AT_STATE_KEY, _current_monotonic_seconds())
 
 
-def _current_epoch_seconds() -> int:
-    return int(time.time())
+def _current_monotonic_seconds() -> int:
+    return int(time.monotonic())
 
 
 def public_rate_limit_policy(app_state: object) -> tuple[int, int]:
@@ -114,6 +117,36 @@ def _retry_after_seconds(window_started_at: int, window_seconds: int, now_second
     return max(window_seconds - elapsed_seconds, 1)
 
 
+def _discard_expired_buckets_if_due(
+    app_state: object,
+    buckets: dict[str, _FixedWindowBucket],
+    *,
+    window_seconds: int,
+    now_seconds: int,
+) -> None:
+    """Compact stale state at most once per configured fixed window.
+
+    The cadence reuses the published window rather than adding a retention
+    policy. With monotonic time, after every enforcer call each retained bucket
+    is less than two windows old; the full O(n) compaction therefore runs on at
+    most one request per window instead of on every request.
+    """
+    last_cleanup_at = getattr(app_state, _RATE_LIMIT_LAST_CLEANUP_AT_STATE_KEY, None)
+    if not isinstance(last_cleanup_at, int):
+        raise RuntimeError("Rate limiter is not configured: invalid cleanup state")
+    if now_seconds - last_cleanup_at < window_seconds:
+        return
+
+    active_buckets = {
+        key: bucket for key, bucket in buckets.items() if now_seconds - bucket.window_started_at < window_seconds
+    }
+    # Preserve the registry object fetched by lock waiters and compact its
+    # backing table so cleanup reclaims stale identity allocations.
+    buckets.clear()
+    buckets.update(active_buckets)
+    setattr(app_state, _RATE_LIMIT_LAST_CLEANUP_AT_STATE_KEY, now_seconds)
+
+
 def _enforce_fixed_window_rate_limit(
     request: Request,
     api_key: str,
@@ -133,7 +166,13 @@ def _enforce_fixed_window_rate_limit_for_key(
     """Enforce the shared fixed-window rate limit for a caller key."""
     max_requests, window_seconds, buckets, lock = _rate_limit_state_for_request(request)
     with lock:
-        now_seconds = _current_epoch_seconds()
+        now_seconds = _current_monotonic_seconds()
+        _discard_expired_buckets_if_due(
+            request.app.state,
+            buckets,
+            window_seconds=window_seconds,
+            now_seconds=now_seconds,
+        )
         current_bucket = buckets.get(key)
         if current_bucket is None or now_seconds - current_bucket.window_started_at >= window_seconds:
             buckets[key] = _FixedWindowBucket(window_started_at=now_seconds, request_count=1)
@@ -155,9 +194,13 @@ def _enforce_fixed_window_rate_limit_for_key(
 
 def enforce_public_ip_rate_limit(request: Request) -> None:
     """Rate-limit authless public routes by client host."""
-    if request.client is None:
-        return
-    _enforce_fixed_window_rate_limit_for_key(request=request, key=request.client.host)
+    client_host = request.client.host if request.client is not None else None
+    if not isinstance(client_host, str) or not client_host.strip():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_CLIENT_IDENTITY_UNAVAILABLE_DETAIL,
+        )
+    _enforce_fixed_window_rate_limit_for_key(request=request, key=client_host)
 
 
 def _require_api_key_from_config(
@@ -167,7 +210,7 @@ def _require_api_key_from_config(
     env_var_name: str,
 ) -> None:
     configured_keys = _configured_api_keys(env_var_name)
-    if _allows_unauthenticated_development_requests(configured_keys):
+    if env_var_name == _API_KEYS_ENV_VAR and _allows_unauthenticated_development_requests(configured_keys):
         return
     if x_api_key is None or x_api_key not in configured_keys:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_AUTH_FAILURE_DETAIL)

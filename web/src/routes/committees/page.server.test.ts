@@ -84,6 +84,29 @@ describe("/committees +page.server load", () => {
     expect(requestJson).toHaveBeenCalledWith("/v1/committees?state=NC&limit=abc");
   });
 
+  it("forwards a signed-bigint overflow unchanged and preserves the backend 422", async () => {
+    const requestJson = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiResponseError(422, {
+          detail: [
+            {
+              loc: ["query", "offset"],
+              msg: "Input should be less than or equal to 9223372036854775807"
+            }
+          ]
+        })
+      );
+
+    await expect(
+      load(createLoadEvent("https://web.civibus.local/committees?offset=9223372036854775808", requestJson))
+    ).rejects.toMatchObject({
+      status: 422,
+      body: { detail: [{ loc: ["query", "offset"] }] }
+    });
+    expect(requestJson).toHaveBeenCalledWith("/v1/committees?offset=9223372036854775808");
+  });
+
   it("drops explicit blank committee filters while keeping populated values", async () => {
     const requestJson = vi.fn().mockResolvedValue(COMMITTEE_LIST_RESPONSE);
 

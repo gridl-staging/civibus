@@ -39,7 +39,7 @@
         </tr>
       </thead>
       <tbody>
-        {#each data.coverageRows as row (`${row.domain}:${row.jurisdiction ?? "null"}`)}
+        {#each data.coverageRows as row (JSON.stringify([row.domain, row.jurisdiction]))}
           <tr>
             <td>{row.domain}</td>
             <td>{row.jurisdiction ?? "(none)"}</td>

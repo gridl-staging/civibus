@@ -11,6 +11,7 @@ def update_candidate_person_link(
     conn: psycopg.Connection,
     *,
     fec_candidate_id: str,
+    data_source_id: UUID | None = None,
     person_id: UUID,
 ) -> None:
     """Guard candidate-master person links behind the candidate row lock.
@@ -19,14 +20,20 @@ def update_candidate_person_link(
     They may not replace an established link with a different person; federal
     spine convergence is the officeholder-side owner for intentional relinks.
     """
+    identity_predicate = (
+        "data_source_id = %s AND native_candidate_id = %s" if data_source_id is not None else "fec_candidate_id = %s"
+    )
+    identity_params: tuple[object, ...] = (
+        (data_source_id, fec_candidate_id) if data_source_id is not None else (fec_candidate_id,)
+    )
     with conn.cursor() as cursor:
         cursor.execute(
-            """
+            f"""
             WITH matched_candidate AS (
                 SELECT id,
                        person_id IS NULL OR person_id = %s AS person_link_is_fillable
                 FROM cf.candidate
-                WHERE fec_candidate_id = %s
+                WHERE {identity_predicate}
                 FOR UPDATE
             )
             UPDATE cf.candidate AS candidate
@@ -41,7 +48,7 @@ def update_candidate_person_link(
             FROM matched_candidate
             WHERE candidate.id = matched_candidate.id
             """,
-            (person_id, fec_candidate_id, person_id),
+            (person_id, *identity_params, person_id),
         )
         if cursor.rowcount != 1:
             raise RuntimeError(f"Expected one candidate person link update for {fec_candidate_id}")
@@ -51,14 +58,23 @@ def update_candidate_summary(
     conn: psycopg.Connection,
     *,
     mapped_fields: dict[str, object],
+    data_source_id: UUID | None = None,
 ) -> None:
     """Keep candidate weball totals from the newest coverage date.
 
     Equal-date corrections replace prior values.
     """
+    identity_predicate = (
+        "data_source_id = %s AND native_candidate_id = %s" if data_source_id is not None else "fec_candidate_id = %s"
+    )
+    identity_params: tuple[object, ...] = (
+        (data_source_id, mapped_fields["fec_candidate_id"])
+        if data_source_id is not None
+        else (mapped_fields["fec_candidate_id"],)
+    )
     with conn.cursor() as cursor:
         cursor.execute(
-            """
+            f"""
             WITH matched_candidate AS (
                 SELECT id,
                        (
@@ -75,7 +91,7 @@ def update_candidate_summary(
                            )
                        ) AS summary_coverage_end_date_is_newer
                 FROM cf.candidate
-                WHERE fec_candidate_id = %s
+                WHERE {identity_predicate}
                 FOR UPDATE
             )
             UPDATE cf.candidate AS candidate
@@ -120,7 +136,7 @@ def update_candidate_summary(
                 mapped_fields["summary_coverage_end_date"],
                 mapped_fields["summary_coverage_end_date"],
                 mapped_fields["summary_coverage_end_date"],
-                mapped_fields["fec_candidate_id"],
+                *identity_params,
                 mapped_fields["total_receipts"],
                 mapped_fields["total_disbursements"],
                 mapped_fields["cash_on_hand"],

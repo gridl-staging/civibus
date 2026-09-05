@@ -11,7 +11,12 @@ from uuid import UUID
 
 import psycopg
 
-from core.db import resolve_organization_by_canonical_name, try_insert_source_record
+from core.db import (
+    find_organization_by_identifier,
+    insert_organization,
+    select_active_source_records_by_keys,
+    try_insert_source_record,
+)
 from core.types.python.models import (
     DataSource,
     Organization,
@@ -20,7 +25,7 @@ from core.types.python.models import (
     utc_now,
 )
 from domains.campaign_finance.ingest.filing_loader import (
-    ensure_state_committee,
+    ensure_authority_committee,
     upsert_filing,
     upsert_transaction,
 )
@@ -30,8 +35,10 @@ from domains.campaign_finance.jurisdictions.states.load_utils import (
     commit_managed_transaction,
     ensure_data_source,
     ensure_transaction_open,
+    link_entity_source_and_optional_mailing_address,
     validated_limit,
 )
+from domains.campaign_finance.normalize.addresses import normalize_state
 from domains.campaign_finance.types.models import Filing, Transaction
 
 from . import _load_data_source_for_data_type
@@ -90,6 +97,8 @@ def ensure_sf_data_source(conn: psycopg.Connection) -> UUID:
     data_source = DataSource(
         domain=_SF_DOMAIN,
         jurisdiction=_SF_JURISDICTION,
+        filing_authority_type="municipality",
+        filing_authority_code="SF",
         name=ds_block.name,
         source_url=ds_block.url,
         source_format=_SF_SOURCE_FORMAT,
@@ -130,6 +139,7 @@ def load_sf_transactions_with_filings(
     _load_sf_relational_transactions(
         conn,
         row_source,
+        data_source_id=data_source_id,
         source_record_ids=source_record_ids,
         counts=counts,
         manages_outer=manages_outer,
@@ -158,13 +168,15 @@ def _load_sf_source_records(
     counts: _SFLoadCounts,
     manages_outer: bool,
 ) -> dict[str, UUID]:
-    """Pass 1 — insert a source record for every parsed row, returning what landed.
+    """Pass 1 — insert or recover a source record for every parsed row.
 
     The returned mapping is keyed by record hash, which is what pass 2 looks a row up by.
-    A dedupe skip is deliberately absent from it: pass 2 links only rows this pass
-    inserted, so re-running the loader does not re-link content already linked.
+    Existing records stay in the mapping so a retry can repair relational rows after an
+    interrupted or partially failed pass 2. Existing keys are recovered once per commit
+    batch rather than with one database query per row.
     """
     source_record_ids: dict[str, UUID] = {}
+    existing_keys: list[tuple[UUID, str]] = []
     processed_count = 0
 
     for row in row_source.iter_rows():
@@ -176,6 +188,7 @@ def _load_sf_source_records(
                 sr_id = try_insert_source_record(conn, sr)
                 if sr_id is None:
                     counts.skipped += 1
+                    existing_keys.append((data_source_id, sr.source_record_key))
                 else:
                     source_record_ids[sr.record_hash] = sr_id
                     counts.inserted += 1
@@ -187,16 +200,33 @@ def _load_sf_source_records(
         # rows: each already opened a transaction.
         processed_count += 1
         if processed_count % _COMMIT_BATCH_ROWS == 0:
+            _include_existing_sf_source_records(conn, existing_keys, source_record_ids)
+            existing_keys.clear()
             commit_managed_transaction(conn, manages_outer)
 
+    _include_existing_sf_source_records(conn, existing_keys, source_record_ids)
     commit_managed_transaction(conn, manages_outer)
     return source_record_ids
+
+
+def _include_existing_sf_source_records(
+    conn: psycopg.Connection,
+    keys: list[tuple[UUID, str]],
+    source_record_ids: dict[str, UUID],
+) -> None:
+    """Add active duplicate provenance rows to the pass-2 lookup."""
+    records = select_active_source_records_by_keys(conn, keys)
+    if len(records) != len(set(keys)):
+        raise RuntimeError("An SF source-record dedupe could not be resolved to its active row")
+    for (_data_source_id, source_record_key), record in records.items():
+        source_record_ids[source_record_key] = record.id
 
 
 def _load_sf_relational_transactions(
     conn: psycopg.Connection,
     row_source: _SFRowSource,
     *,
+    data_source_id: UUID,
     source_record_ids: dict[str, UUID],
     counts: _SFLoadCounts,
     manages_outer: bool,
@@ -217,7 +247,13 @@ def _load_sf_relational_transactions(
                 if manages_outer:
                     ensure_transaction_open(conn)
                 with conn.transaction():
-                    _upsert_sf_filing_and_transaction(conn, row, sr_id, filing_lookup=filing_lookup)
+                    _upsert_sf_filing_and_transaction(
+                        conn,
+                        row,
+                        sr_id,
+                        data_source_id=data_source_id,
+                        filing_lookup=filing_lookup,
+                    )
             except Exception:  # noqa: BLE001
                 counts.errors += 1
                 LOGGER.exception("Failed linking SF transaction to filing")
@@ -287,6 +323,7 @@ def _build_sf_filing(
     *,
     committee_id: UUID,
     source_record_id: UUID,
+    data_source_id: UUID,
 ) -> Filing:
     filing_date = row.get("filing_date")
     start_date = row.get("start_date")
@@ -295,6 +332,8 @@ def _build_sf_filing(
     form_type = normalize_optional_text(row.get("form_type"))
     return Filing(
         filing_fec_id=_build_sf_filing_fec_id(row),
+        data_source_id=data_source_id,
+        native_filing_id=_build_sf_filing_fec_id(row),
         committee_id=committee_id,
         report_type=form_type or _SF_DATA_TYPE,
         amendment_indicator="N",
@@ -313,6 +352,7 @@ def _build_sf_transaction(
     filing_id: UUID,
     committee_id: UUID,
     source_record_id: UUID,
+    data_source_id: UUID,
 ) -> Transaction:
     first = normalize_optional_text(row.get("transaction_first_name"))
     last = normalize_optional_text(row.get("transaction_last_name"))
@@ -320,6 +360,11 @@ def _build_sf_transaction(
     contributor_name_raw = " ".join(name_parts) if name_parts else None
 
     transaction_id = normalize_optional_text(row.get("transaction_id"))
+    if transaction_id is None:
+        # Some live rows have no source-native transaction ID. Use the same
+        # content hash as their provenance row so the shared transaction upsert
+        # still has a stable, source-scoped idempotency key.
+        transaction_id = f"sf-{compute_record_hash(_to_json_safe(row))}"
     transaction_code = normalize_optional_text(row.get("transaction_code"))
 
     amount = row.get("transaction_amount_1")
@@ -337,6 +382,8 @@ def _build_sf_transaction(
     return Transaction(
         filing_id=filing_id,
         committee_id=committee_id,
+        data_source_id=data_source_id,
+        native_transaction_id=transaction_id,
         transaction_type=transaction_code or "contribution",
         transaction_identifier=transaction_id,
         transaction_date=transaction_date,
@@ -344,7 +391,7 @@ def _build_sf_transaction(
         contributor_name_raw=contributor_name_raw,
         contributor_employer=normalize_optional_text(row.get("transaction_employer")),
         contributor_city=normalize_optional_text(row.get("transaction_city")),
-        contributor_state=normalize_optional_text(row.get("transaction_state")),
+        contributor_state=normalize_state(normalize_optional_text(row.get("transaction_state"))),
         contributor_zip=normalize_optional_text(row.get("transaction_zip")),
         amendment_indicator="N",
         source_record_id=source_record_id,
@@ -356,20 +403,39 @@ def _upsert_sf_filing_and_transaction(
     row: dict[str, object],
     source_record_id: UUID,
     *,
+    data_source_id: UUID,
     filing_lookup: dict[str, _SFFilingLookupEntry],
 ) -> None:
     """Resolve committee, upsert filing, upsert transaction for one row."""
     # Resolve organization and committee
     native_committee_id = _resolve_sf_native_committee_id(row)
     filer_name = normalize_optional_text(row.get("filer_name")) or "Unknown SF Filer"
-    org = Organization(canonical_name=filer_name)
-    organization_id = resolve_organization_by_canonical_name(conn, org)
-
-    committee_id = ensure_state_committee(
+    org = Organization(canonical_name=filer_name, identifiers={"sf_filer_id": native_committee_id})
+    organization_id = find_organization_by_identifier(
         conn,
-        state="CA",
+        "sf_filer_id",
+        native_committee_id,
+        data_source_id=data_source_id,
+    )
+    if organization_id is None:
+        organization_id = insert_organization(conn, org)
+    link_entity_source_and_optional_mailing_address(
+        conn,
+        entity_type="organization",
+        entity_id=organization_id,
+        source_record_id=source_record_id,
+        extraction_role="committee",
+        address_id=None,
+    )
+
+    committee_id = ensure_authority_committee(
+        conn,
+        data_source_id=data_source_id,
+        authority_type="municipality",
+        authority_code="SF",
         native_committee_id=native_committee_id,
         organization_id=organization_id,
+        source_record_id=source_record_id,
     )
 
     # Upsert filing (cache by filing_fec_id to avoid redundant writes)
@@ -386,6 +452,7 @@ def _upsert_sf_filing_and_transaction(
         row,
         committee_id=filing_committee_id,
         source_record_id=filing_sr_id,
+        data_source_id=data_source_id,
     )
     filing_id = upsert_filing(conn, filing)
     filing_lookup[filing_fec_id] = _SFFilingLookupEntry(
@@ -400,5 +467,6 @@ def _upsert_sf_filing_and_transaction(
         filing_id=filing_id,
         committee_id=committee_id,
         source_record_id=source_record_id,
+        data_source_id=data_source_id,
     )
     upsert_transaction(conn, txn)

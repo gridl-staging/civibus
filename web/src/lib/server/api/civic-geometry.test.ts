@@ -83,22 +83,31 @@ describe("fetchOptionalCivicGeometry", () => {
     expect(requestJson).toHaveBeenCalledTimes(1);
   });
 
-  it("rethrows non-404 backend failures so callers can preserve error semantics", async () => {
-    const requestJson = vi
-      .fn()
-      .mockRejectedValue(
-        new ApiResponseError(422, { detail: [{ loc: ["query", "state"], msg: "Invalid state" }] })
-      );
+  it.each([422, 503, 504])(
+    "rethrows backend %s failures so callers preserve error semantics",
+    async (status) => {
+      const failure = new ApiResponseError(status, { detail: `Geometry failed with ${status}` });
+      const requestJson = vi.fn().mockRejectedValue(failure);
+
+      await expect(
+        fetchOptionalCivicGeometry(
+          { requestJson: requestJson as ApiClient["requestJson"] },
+          { level: "county", state: "NC" }
+        )
+      ).rejects.toBe(failure);
+    }
+  );
+
+  it("rethrows unexpected failures unchanged", async () => {
+    const failure = new Error("geometry decoder failed");
+    const requestJson = vi.fn().mockRejectedValue(failure);
 
     await expect(
       fetchOptionalCivicGeometry(
         { requestJson: requestJson as ApiClient["requestJson"] },
         { level: "county", state: "NC" }
       )
-    ).rejects.toMatchObject({
-      status: 422,
-      body: { detail: [{ loc: ["query", "state"], msg: "Invalid state" }] }
-    });
+    ).rejects.toBe(failure);
   });
 });
 

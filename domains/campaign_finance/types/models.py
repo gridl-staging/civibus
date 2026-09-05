@@ -24,6 +24,18 @@ CommitteeSummaryMoney = FecMoney
 CandidateMoney = FecMoney
 
 
+def _validate_authority_scoped_native_identity(
+    *,
+    data_source_id: UUID | None,
+    native_id: str | None,
+    native_field_name: str,
+) -> None:
+    if (data_source_id is None) != (native_id is None):
+        raise ValueError(f"data_source_id and {native_field_name} must be supplied together")
+    if native_id is not None and not native_id.strip():
+        raise ValueError(f"{native_field_name} must be nonblank")
+
+
 def is_fec_memo_code(memo_code: str | None) -> bool:
     return memo_code in {"X", "x"}
 
@@ -79,6 +91,8 @@ class OfficeType(str, Enum):
 
 class Committee(CampaignFinanceBaseModel):
     fec_committee_id: str = Field(pattern=FEC_COMMITTEE_ID_REGEX)
+    data_source_id: Optional[UUID] = None
+    native_committee_id: Optional[str] = None
     name: str
     organization_id: Optional[UUID] = None
     committee_type: Optional[CommitteeType] = None
@@ -89,6 +103,15 @@ class Committee(CampaignFinanceBaseModel):
     zip_code: Optional[str] = None
     treasurer_name: Optional[str] = None
     source_record_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def _validate_native_identity(self) -> "Committee":
+        _validate_authority_scoped_native_identity(
+            data_source_id=self.data_source_id,
+            native_id=self.native_committee_id,
+            native_field_name="native_committee_id",
+        )
+        return self
 
 
 class CommitteeSummary(CampaignFinanceBaseModel):
@@ -197,6 +220,8 @@ class CommitteeSummary(CampaignFinanceBaseModel):
 
 class Candidate(CampaignFinanceBaseModel):
     fec_candidate_id: str = Field(pattern=FEC_CANDIDATE_ID_REGEX)
+    data_source_id: Optional[UUID] = None
+    native_candidate_id: Optional[str] = None
     name: str
     person_id: Optional[UUID] = None
     party: Optional[str] = None
@@ -221,9 +246,20 @@ class Candidate(CampaignFinanceBaseModel):
             raise ValueError("fec_candidate_id prefix must match office")
         return self
 
+    @model_validator(mode="after")
+    def _validate_native_identity(self) -> "Candidate":
+        _validate_authority_scoped_native_identity(
+            data_source_id=self.data_source_id,
+            native_id=self.native_candidate_id,
+            native_field_name="native_candidate_id",
+        )
+        return self
+
 
 class Filing(CampaignFinanceBaseModel):
     filing_fec_id: str
+    data_source_id: Optional[UUID] = None
+    native_filing_id: Optional[str] = None
     committee_id: UUID
     candidate_id: Optional[UUID] = None
     election_id: Optional[UUID] = None
@@ -268,12 +304,19 @@ class Filing(CampaignFinanceBaseModel):
             raise ValueError("coverage_start_date must be <= coverage_end_date")
         if self.amended_from_filing_id is not None and self.amendment_indicator not in {"A", "T"}:
             raise ValueError("amended_from_filing_id can only be set when amendment_indicator is A or T")
+        _validate_authority_scoped_native_identity(
+            data_source_id=self.data_source_id,
+            native_id=self.native_filing_id,
+            native_field_name="native_filing_id",
+        )
         return self
 
 
 class Transaction(CampaignFinanceBaseModel):
     filing_id: UUID
     committee_id: UUID
+    data_source_id: Optional[UUID] = None
+    native_transaction_id: Optional[str] = None
     transaction_type: str
     transaction_identifier: Optional[str] = None
     back_ref_transaction_id: Optional[str] = None
@@ -307,6 +350,11 @@ class Transaction(CampaignFinanceBaseModel):
     def _derive_is_memo_and_validate_contributor_ids(self) -> Transaction:
         if self.contributor_person_id is not None and self.contributor_organization_id is not None:
             raise ValueError("Only one contributor identifier may be provided")
+        _validate_authority_scoped_native_identity(
+            data_source_id=self.data_source_id,
+            native_id=self.native_transaction_id,
+            native_field_name="native_transaction_id",
+        )
         self.is_memo = is_fec_memo_code(self.memo_code)
         return self
 

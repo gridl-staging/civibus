@@ -97,6 +97,9 @@ _ENTITY_SOURCE_CIVIC_TYPES_MIGRATION_PATH = (
 _CONTRIBUTION_LIMIT_RULES_MIGRATION_PATH = (
     _REPO_ROOT / "core" / "schema" / "migrations" / "2026_08_23_contribution_limit_rules.sql"
 )
+_REFRESH_RUN_EXECUTION_ORIGIN_MIGRATION_PATH = (
+    _REPO_ROOT / "core" / "schema" / "migrations" / "2026_08_27_refresh_run_execution_origin.sql"
+)
 _ER_VIEWS_SCHEMA_PATH = _REPO_ROOT / "core" / "schema" / "er_views.sql"
 _CONTEST_SECTION_START = "-- Contest"
 _CONTEST_SECTION_END = "-- Contest Result"
@@ -702,6 +705,13 @@ def _bootstrap_missing_stage1_canaries(connection: psycopg.Connection, *, missin
                 connection,
                 cursor,
                 _CONTRIBUTION_LIMIT_RULES_MIGRATION_PATH.read_text(encoding="utf-8"),
+            )
+    if "core.refresh_run.execution_origin" in missing_canaries:
+        with connection.cursor() as cursor:
+            _execute_stage1_canary_repair(
+                connection,
+                cursor,
+                _REFRESH_RUN_EXECUTION_ORIGIN_MIGRATION_PATH.read_text(encoding="utf-8"),
             )
     if "civic.officeholding.date_precision" in missing_canaries:
         _ensure_core_date_precision_type(connection)

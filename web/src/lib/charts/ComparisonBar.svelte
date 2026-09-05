@@ -17,28 +17,45 @@
     portrait?: PortraitProps["portrait"];
     href?: string;
     linkTestId?: string;
-    // A finite number (including an honest 0) is a reported value; null signals
-    // money that was never reported or loaded, so the two never collapse together.
-    value: number | null;
+    // A finite number or exact serialized decimal (including an honest 0) is a
+    // reported value; null signals money that was never reported or loaded.
+    value: number | string | null;
     valueLabel: string;
+    // Exact-decimal callers project geometry before the number-only transform seam.
+    widthPercentage?: string;
+    // Keep the default genuine-empty copy unless the parent knows the whole metric request is unavailable.
+    showMissingValueLabel?: boolean;
     segments?: ComparisonSegmentInput[];
   };
 
   export let entities: ComparisonBarEntity[] = [];
-  export let scaleMax: number;
+  export let scaleMax: number | string;
   export let segmentOrder: readonly string[] = [];
 
   const NO_REPORTED_MONEY = "No reported/loaded money.";
   const INTERNAL_LINK_ORIGIN = "https://civibus.invalid";
   const SAFE_SEGMENT_COLOR = /^(?:#[\da-f]{3}|#[\da-f]{4}|#[\da-f]{6}|#[\da-f]{8}|[a-z]+)$/i;
+  const SAFE_WIDTH_PERCENTAGE = /^(?:100(?:\.0+)?|\d{1,2}(?:\.\d+)?)%$/;
 
-  function isReportedValue(value: number | null): value is number {
-    return value !== null && Number.isFinite(value);
+  function isReportedValue(entity: ComparisonBarEntity): boolean {
+    if (typeof entity.value === "number") {
+      return Number.isFinite(entity.value);
+    }
+    return typeof entity.value === "string" && getExactWidthPercentage(entity) !== null;
   }
 
-  function getSharedScaleWidth(value: number): string {
+  function getExactWidthPercentage(entity: ComparisonBarEntity): string | null {
+    const width = entity.widthPercentage;
+    return typeof width === "string" && SAFE_WIDTH_PERCENTAGE.test(width) ? width : null;
+  }
+
+  function getSharedScaleWidth(entity: ComparisonBarEntity): string {
+    const exactWidth = getExactWidthPercentage(entity);
+    if (typeof entity.value === "string") {
+      return exactWidth ?? "0%";
+    }
     // Keep the shared-scale ratio unrounded until the final CSS percentage render boundary.
-    return `${sharedScaleWidthPct(value, scaleMax) * 100}%`;
+    return `${sharedScaleWidthPct(entity.value ?? 0, typeof scaleMax === "number" ? scaleMax : 0) * 100}%`;
   }
 
   function getSegmentWidth(widthPct: number): string {
@@ -102,13 +119,12 @@
       </div>
 
       <div class="comparison-bars__measure">
-        {#if isReportedValue(entity.value)}
-          {@const reportedValue = entity.value ?? 0}
-          {@const segments = getSegments(entity, reportedValue)}
+        {#if isReportedValue(entity)}
+          {@const segments = typeof entity.value === "number" ? getSegments(entity, entity.value) : []}
           <div
             class="comparison-bars__track"
             data-testid={`comparison-bar-${entity.id}`}
-            style:--comparison-track-width={getSharedScaleWidth(reportedValue)}
+            style:--comparison-track-width={getSharedScaleWidth(entity)}
           >
             {#if segments.length > 0}
               {#each segments as segment (segment.id)}
@@ -130,9 +146,9 @@
       </div>
 
       <span class="comparison-bars__end-label" data-testid={`comparison-end-label-${entity.id}`}>
-        {#if isReportedValue(entity.value)}
+        {#if isReportedValue(entity)}
           {entity.valueLabel}
-        {:else}
+        {:else if entity.showMissingValueLabel !== false}
           {NO_REPORTED_MONEY}
         {/if}
       </span>

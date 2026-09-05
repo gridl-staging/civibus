@@ -16,6 +16,15 @@ from api.models.graph import (
 )
 
 
+class GraphEntityNotFoundError(LookupError):
+    """The requested public graph entity has no materialized graph node."""
+
+    def __init__(self, *, entity_type: str, entity_id: UUID) -> None:
+        self.entity_type = entity_type
+        self.entity_id = entity_id
+        super().__init__(f"{entity_type} not found for id={entity_id}")
+
+
 def _graph_entity_exists(
     conn: psycopg.Connection,
     *,
@@ -113,7 +122,7 @@ def fetch_entity_relationships(
     if entity_spec is None:
         raise ValueError(f"entity_type must be one of {sorted(GRAPH_ENTITY_TYPE_TO_AGE_LABEL)}, got {entity_type!r}")
     if not _graph_entity_exists(conn, entity_type=entity_type, entity_id=entity_id):
-        raise LookupError(f"{entity_type} not found for id={entity_id}")
+        raise GraphEntityNotFoundError(entity_type=entity_type, entity_id=entity_id)
 
     age_label = entity_spec.age_label
     safe_id = _escape_cypher_literal(str(entity_id))

@@ -9,6 +9,7 @@ from test_support.makefile_contract_helpers import parse_makefile_db_sql_files
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _AGE_BOOTSTRAP_SQL_PATH = "infra/db/09-age-graph-bootstrap.sql"
+_PROVENANCE_TEST_DATABASE_BOOTSTRAP_SQL_PATH = "infra/db/00_create_provenance_test_database.sql"
 
 
 def read_repo_text(relative_path: str) -> str:
@@ -59,6 +60,7 @@ def test_docker_compose_targets_image_and_mounted_schema_files():
     assert "POSTGRES_PORT: ${POSTGRES_PORT:-5433}" in compose
     assert "PGDATA: /var/lib/postgresql/data" in compose
     assert "127.0.0.1:${POSTGRES_PORT:-5433}:5432" in compose
+    assert "    network_mode: bridge" in compose
     assert "pg_isready -U" in compose
     assert "$${POSTGRES_USER}" in compose
     assert "$${POSTGRES_DB}" in compose
@@ -80,13 +82,18 @@ def test_docker_compose_init_mounts_stay_in_sync_with_makefile_db_sql_files() ->
     compose_schema_paths = _normalized_compose_init_repo_paths(compose)
     makefile_schema_paths = parse_makefile_db_sql_files(makefile)
 
+    # Database creation belongs to first-time Compose initialization, not to
+    # db-reset, which is already connected to one selected database.
+    assert compose_schema_paths[0] == _PROVENANCE_TEST_DATABASE_BOOTSTRAP_SQL_PATH
+    compose_reset_paths = compose_schema_paths[1:]
+
     # Stage 2 allows one explicit exception: AGE graph bootstrap can remain reset-time-only.
-    assert compose_schema_paths in (
+    assert compose_reset_paths in (
         makefile_schema_paths,
         [*makefile_schema_paths, _AGE_BOOTSTRAP_SQL_PATH],
     )
-    if compose_schema_paths != makefile_schema_paths:
-        assert compose_schema_paths[-1] == _AGE_BOOTSTRAP_SQL_PATH
+    if compose_reset_paths != makefile_schema_paths:
+        assert compose_reset_paths[-1] == _AGE_BOOTSTRAP_SQL_PATH
 
 
 def test_bio_migration_bootstrap_manifest_sync() -> None:

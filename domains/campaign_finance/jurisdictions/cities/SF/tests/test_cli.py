@@ -93,7 +93,7 @@ def test_main_download_mode_resolves_path_and_loads(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    download_sf_csv.assert_called_once_with("transactions", dest_dir=ANY)
+    download_sf_csv.assert_called_once_with("transactions", dest_dir=ANY, limit=None)
     load_with_filings.assert_called_once_with(connection, downloaded_path, limit=None)
     assert "SF transactions load complete" in captured.out
     assert captured.err == ""
@@ -173,10 +173,13 @@ def test_run_sf_refresh_download_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     load_with_filings = MagicMock(return_value=load_result)
     monkeypatch.setattr(cli, "load_sf_transactions_with_filings", load_with_filings)
 
-    result = cli.run_sf_refresh(data_type="transactions", download=True)
+    result = cli.run_sf_refresh(data_type="transactions", download=True, limit=6)
 
     assert result == load_result
-    download_sf_csv.assert_called_once()
+    # ``--limit`` is a safety boundary for both acquisition and loading. If the
+    # downloader ignores it, a 6-row production probe still transfers the full
+    # 581 MB source before discarding almost every row.
+    download_sf_csv.assert_called_once_with("transactions", dest_dir=ANY, limit=6)
     connection.commit.assert_called_once_with()
     connection.close.assert_called_once_with()
 

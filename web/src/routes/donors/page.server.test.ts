@@ -84,6 +84,28 @@ describe('/donors +page.server load', () => {
     expect(requestJson).not.toHaveBeenCalled();
   });
 
+  it('preserves backend-accepted signed integer text during short-query guidance', async () => {
+    const requestJson = vi.fn();
+
+    await expect(
+      load(
+        createLoadEvent(
+          'https://web.civibus.local/donors?q=Ja&by=name&limit=%2B1&offset=0',
+          requestJson
+        )
+      )
+    ).resolves.toEqual({
+      query: 'Ja',
+      by: 'name',
+      limit: 1,
+      offset: 0,
+      rollup_completed_at: null,
+      results: [],
+      shortQueryGuidance: true
+    });
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
   it('delegates populated requests through event.locals.api', async () => {
     const response = emptyResponse({
       query: 'Jane',
@@ -141,6 +163,165 @@ describe('/donors +page.server load', () => {
       buildDonorSearchPath({ q: 'Jane', by: 'name', limit: 20, offset: 0 })
     );
   });
+
+  it.each([
+    ['partial limit', '20donors', '0'],
+    ['exponent-like limit', '1e2', '0'],
+    ['fractional offset', '20', '20.5'],
+    ['partial offset', '20', '20donors'],
+    ['unsafe limit', '9007199254740993', '0']
+  ])(
+    'forwards %s text unchanged to backend-owned validation',
+    async (_label, limit, offset) => {
+      const requestJson = vi.fn().mockRejectedValue(
+        new ApiResponseError(422, {
+          detail: [{ loc: ['query', offset === '0' ? 'limit' : 'offset'] }]
+        })
+      );
+
+      await expect(
+        load(
+          createLoadEvent(
+            `https://web.civibus.local/donors?q=Jane&by=name&limit=${limit}&offset=${offset}`,
+            requestJson
+          )
+        )
+      ).resolves.toEqual({
+        query: 'Jane',
+        by: 'name',
+        limit: 20,
+        offset: 0,
+        rollup_completed_at: null,
+        results: [],
+        validationMessage:
+          'The donor search request could not be validated. Review your query and try again.'
+      });
+      expect(requestJson).toHaveBeenCalledWith(
+        buildDonorSearchPath({ q: 'Jane', by: 'name', limit, offset })
+      );
+    }
+  );
+
+  it.each([
+    ['limit below minimum', '0', '0'],
+    ['limit above maximum', '51', '0'],
+    ['negative offset', '20', '-1']
+  ])('leaves %s enforcement with the backend owner', async (_label, limit, offset) => {
+    const requestJson = vi.fn().mockRejectedValue(new ApiResponseError(422, { detail: [] }));
+
+    await load(
+      createLoadEvent(
+        `https://web.civibus.local/donors?q=Jane&by=name&limit=${limit}&offset=${offset}`,
+        requestJson
+      )
+    );
+
+    expect(requestJson).toHaveBeenCalledWith(
+      buildDonorSearchPath({ q: 'Jane', by: 'name', limit, offset })
+    );
+  });
+
+  it.each(['9007199254740993', '9007199254740972'])(
+    'fails closed after backend acceptance when offset %s cannot support exact web pagination',
+    async (rawOffset) => {
+      const response = emptyResponse({
+        offset: Number(rawOffset),
+        results: []
+      });
+      const requestJson = vi.fn().mockResolvedValue(response);
+
+      await expect(
+        load(
+          createLoadEvent(
+            `https://web.civibus.local/donors?q=Jane&by=name&limit=20&offset=${rawOffset}`,
+            requestJson
+          )
+        )
+      ).resolves.toEqual({
+        query: 'Jane',
+        by: 'name',
+        limit: 20,
+        offset: 0,
+        rollup_completed_at: null,
+        results: [],
+        validationMessage:
+          'The requested donor page could not be displayed safely. Submit the search to return to the first page.'
+      });
+      expect(requestJson).toHaveBeenCalledWith(
+        buildDonorSearchPath({ q: 'Jane', by: 'name', limit: '20', offset: rawOffset })
+      );
+    }
+  );
+
+  it.each([
+    ['limit', { limit: 21, offset: 20 }],
+    ['offset', { limit: 20, offset: 21 }]
+  ])('fails closed when a successful response changes the requested %s', async (_field, drift) => {
+    const response = emptyResponse(drift);
+    const requestJson = vi.fn().mockResolvedValue(response);
+
+    await expect(
+      load(
+        createLoadEvent(
+          'https://web.civibus.local/donors?q=Jane&by=name&limit=20&offset=20',
+          requestJson
+        )
+      )
+    ).resolves.toEqual({
+      query: 'Jane',
+      by: 'name',
+      limit: 20,
+      offset: 0,
+      rollup_completed_at: null,
+      results: [],
+      validationMessage:
+        'The requested donor page could not be displayed safely. Submit the search to return to the first page.'
+    });
+    expect(requestJson).toHaveBeenCalledWith(
+      buildDonorSearchPath({ q: 'Jane', by: 'name', limit: '20', offset: '20' })
+    );
+  });
+
+  it('keeps the exact safe-integer pagination headroom boundary available', async () => {
+    const rawOffset = String(Number.MAX_SAFE_INTEGER - 20);
+    const response = emptyResponse({ offset: Number(rawOffset), results: [] });
+    const requestJson = vi.fn().mockResolvedValue(response);
+
+    await expect(
+      load(
+        createLoadEvent(
+          `https://web.civibus.local/donors?q=Jane&by=name&limit=20&offset=${rawOffset}`,
+          requestJson
+        )
+      )
+    ).resolves.toEqual(response);
+    expect(requestJson).toHaveBeenCalledWith(
+      buildDonorSearchPath({ q: 'Jane', by: 'name', limit: '20', offset: rawOffset })
+    );
+  });
+
+  it.each([
+    ['minimum', '1', '0'],
+    ['maximum', '50', '50']
+  ])(
+    'preserves the backend-owned accepted limit %s and safe page offsets',
+    async (_label, limit, offset) => {
+      const response = emptyResponse({ limit: Number(limit), offset: Number(offset) });
+      const requestJson = vi.fn().mockResolvedValue(response);
+
+      await expect(
+        load(
+          createLoadEvent(
+            `https://web.civibus.local/donors?q=Jane&by=name&limit=${limit}&offset=${offset}`,
+            requestJson
+          )
+        )
+      ).resolves.toEqual(response);
+      expect(requestJson).toHaveBeenCalledWith(
+        buildDonorSearchPath({ q: 'Jane', by: 'name', limit, offset })
+      );
+    }
+  );
 
   it('rejects a successful backend response that drifts from the donor contract', async () => {
     const response = {
@@ -204,35 +385,21 @@ describe('/donors +page.server load', () => {
     });
   });
 
-  it.each([
-    'missing_provenance',
-    'stale_provenance',
-    'donor_key_fingerprint_mismatch'
-  ])('renders named rollup 503 reason %s inline while preserving form state', async (reason) => {
+  it('preserves the exact rollup-unavailable 503 through the shared error boundary', async () => {
+    const body = {
+      detail: {
+        code: 'donor_search_rollup_unavailable'
+      }
+    };
     const requestJson = vi.fn().mockRejectedValue(
-      new ApiResponseError(503, {
-        detail: {
-          code: 'donor_search_rollup_unavailable',
-          reason
-        }
-      })
+      new ApiResponseError(503, body)
     );
 
     await expect(
-      load(
-        createLoadEvent(
-          'https://web.civibus.local/donors?q=Williams&by=name&limit=10&offset=20',
-          requestJson
-        )
-      )
-    ).resolves.toEqual({
-      query: 'Williams',
-      by: 'name',
-      limit: 10,
-      offset: 20,
-      rollup_completed_at: null,
-      results: [],
-      rollupUnavailable: true
+      load(createLoadEvent('https://web.civibus.local/donors?q=Williams&by=name', requestJson))
+    ).rejects.toMatchObject({
+      status: 503,
+      body
     });
   });
 });

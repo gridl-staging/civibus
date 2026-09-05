@@ -4,6 +4,9 @@ type ValidationIssue = {
   msg?: unknown;
 };
 
+export const DONOR_SEARCH_ROLLUP_UNAVAILABLE_MESSAGE =
+  'Donor search is temporarily unavailable while contribution data is refreshed.';
+
 function formatValidationIssue(issue: ValidationIssue): string | null {
   if (typeof issue.msg !== 'string' || issue.msg.trim() === '') {
     return null;
@@ -23,6 +26,15 @@ function formatValidationIssue(issue: ValidationIssue): string | null {
 function formatDetailMessage(detail: unknown): string | null {
   if (typeof detail === 'string' && detail.trim() !== '') {
     return detail;
+  }
+
+  if (
+    detail !== null &&
+    typeof detail === 'object' &&
+    !Array.isArray(detail) &&
+    (detail as { code?: unknown }).code === 'donor_search_rollup_unavailable'
+  ) {
+    return DONOR_SEARCH_ROLLUP_UNAVAILABLE_MESSAGE;
   }
 
   if (!Array.isArray(detail)) {

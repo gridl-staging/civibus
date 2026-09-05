@@ -9,7 +9,7 @@ import psycopg
 import pytest
 
 from core.db import insert_data_source, insert_source_record
-from core.types.python.models import DataSource, SourceRecord, utc_now
+from core.types.python.models import DataSource, FilingAuthorityTypeLiteral, SourceRecord, utc_now
 from domains.campaign_finance.quality.cli import _discover_and_run, main
 from domains.campaign_finance.quality.conftest import EXPECTED_EDGE_FAMILIES
 
@@ -43,10 +43,14 @@ def _insert_data_source_fixture(
     name: str,
     record_count: int | None,
     source_url: str | None = None,
+    filing_authority_type: FilingAuthorityTypeLiteral | None = None,
+    filing_authority_code: str | None = None,
 ) -> DataSource:
     data_source = DataSource(
         domain=domain,
         jurisdiction=jurisdiction,
+        filing_authority_type=filing_authority_type,
+        filing_authority_code=filing_authority_code,
         name=f"{name} {uuid4()}",
         source_url=source_url or f"https://example.com/{domain}/{uuid4()}",
         record_count=record_count,
@@ -296,6 +300,8 @@ def test_discover_and_run_ignores_data_sources_with_null_jurisdiction(
         db_conn,
         domain="campaign_finance",
         jurisdiction=None,
+        filing_authority_type="named_other",
+        filing_authority_code="QUALITY_NULL_JURISDICTION",
         name="Jurisdictionless Campaign Source",
         record_count=1,
     )

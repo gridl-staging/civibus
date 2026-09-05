@@ -17,13 +17,13 @@ from domains.campaign_finance.jurisdictions._bulk_fixture_support import (
     cleanup_bulk_fixture,
 )
 from domains.campaign_finance.jurisdictions.states.PA.scraper import pa_load_test_support as pa_support
-from domains.campaign_finance.jurisdictions.states.PA.scraper import test_load as pa_load_tests
+from domains.campaign_finance.jurisdictions.states.PA.scraper import test_load_bulk as pa_load_bulk_tests
 from domains.campaign_finance.jurisdictions.states.PA.scraper.load import LoadResult, _resolve_pa_filings_path
 
 
 _TEST_FILE_LINE_HARD_LIMIT = 800
 _TEST_FUNCTION_LINE_HARD_LIMIT = 100
-_PA_TEST_MODULES = (Path(__file__).with_name("test_load.py"), Path(__file__))
+_PA_TEST_MODULES = tuple(sorted(Path(__file__).parent.glob("test_load*.py")))
 _SAMPLE_CONTRIBUTIONS_PATH = Path(__file__).parent / "test_fixtures" / "sample_contributions.csv"
 
 
@@ -280,8 +280,8 @@ def test_stage2_gated_row_loader_reports_unreleased_gate(
     gates = tuple(threading.Event() for _ in range(4))
     monkeypatch.setattr(pa_load_module, "_COMMIT_BATCH_ROWS", commit_batch_rows)
     monkeypatch.setattr(pa_load_module, "_load_pa_row", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(pa_load_tests, "_GATE_TIMEOUT_SECONDS", 0.0)
-    gated_loader = pa_load_tests._stage2_gated_row_loader(job_a, gates)
+    monkeypatch.setattr(pa_load_bulk_tests, "_GATE_TIMEOUT_SECONDS", 0.0)
+    gated_loader = pa_load_bulk_tests._stage2_gated_row_loader(job_a, gates)
 
     with pytest.raises(TimeoutError, match=expected_gate):
         gated_loader(
@@ -303,7 +303,7 @@ def test_lock_release_specimen_gate1_failure_preserves_error_and_cleans_resource
     event_calls = 0
     real_event_factory = threading.Event
     real_fixture_writer = pa_support.write_pa_fixture_pair
-    real_get_connection = pa_load_tests.get_connection
+    real_get_connection = pa_load_bulk_tests.get_connection
 
     class _NeverReachedEvent:
         def set(self) -> None:
@@ -333,11 +333,11 @@ def test_lock_release_specimen_gate1_failure_preserves_error_and_cleans_resource
 
     monkeypatch.setattr(threading, "Event", _event_factory)
     monkeypatch.setattr(pa_support, "write_pa_fixture_pair", _write_fixture)
-    monkeypatch.setattr(pa_load_tests, "get_connection", _get_connection)
+    monkeypatch.setattr(pa_load_bulk_tests, "get_connection", _get_connection)
 
     try:
         with pytest.raises(AssertionError, match="Job A never reached GATE 1"):
-            pa_load_tests.test_load_pa_with_filings_releases_shared_dimension_lock_at_batch_commit(
+            pa_load_bulk_tests.test_load_pa_with_filings_releases_shared_dimension_lock_at_batch_commit(
                 db_conn, tmp_path, monkeypatch
             )
 

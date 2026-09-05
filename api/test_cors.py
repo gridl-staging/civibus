@@ -126,3 +126,25 @@ def test_health_preflight_request_omits_cors_headers_for_non_matching_origin(mon
 
     assert response.status_code == 400
     assert _cors_related_headers(response) == {}
+
+
+def test_unhandled_error_for_configured_origin_preserves_cors_and_request_id_headers(monkeypatch) -> None:
+    monkeypatch.setenv("CIVIBUS_ENV", "production")
+    monkeypatch.setenv("CIVIBUS_API_KEYS", "cors-test-key")
+    configured_origin = "https://app.example.com"
+    monkeypatch.setenv("CIVIBUS_CORS_ORIGIN", configured_origin)
+    app = create_app()
+
+    @app.get("/__cors_error_probe")
+    def cors_error_probe() -> None:
+        raise RuntimeError("cors error-path probe")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/__cors_error_probe", headers={"Origin": configured_origin})
+
+    assert response.status_code == 500
+    assert response.text == "Internal Server Error"
+    assert response.headers["access-control-allow-origin"] == configured_origin
+    assert response.headers["vary"] == "Origin"
+    assert REQUEST_ID_HEADER_NAME.lower() in response.headers["access-control-expose-headers"].lower()
+    assert response.headers[REQUEST_ID_HEADER_NAME]

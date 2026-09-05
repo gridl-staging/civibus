@@ -19,6 +19,7 @@ from tests.ci.pytest_tier_classifier import (
     UnownedPytestNodeError,
     _make_variable_tokens,
     build_current_pytest_tier_classifier,
+    current_dev_repo_only_node_ids,
     current_parked_target_paths,
     current_quarantined_node_ids,
     current_release_node_ids,
@@ -85,7 +86,7 @@ def collected_tier_inputs() -> dict[str, set[str]]:
     projected_contract_file = PROJECTED_PUBLIC_CONTRACT_NODE_ID.split("::", 1)[0]
     return {
         "default": _collect_node_ids(),
-        "dev_repo_only": _collect_node_ids("-m", "dev_repo_only"),
+        "dev_repo_only": set(current_dev_repo_only_node_ids()),
         "integration": _collect_node_ids("-m", "integration"),
         "e2e": _collect_node_ids("-m", "e2e"),
         "qa_fast": _collect_qa_fast_node_ids(),
@@ -265,8 +266,10 @@ def test_parked_targets_are_derived_from_root_conftest_owner(monkeypatch: pytest
 def test_non_parked_collections_ignore_inherited_parked_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CIVIBUS_INCLUDE_PARKED", "1")
 
-    default_node_ids = _collect_node_ids()
-    explicit_inherited_node_ids = _collect_node_ids(inherit_parked_escape_hatch=True)
+    # Naming the parent keeps collect_ignore active; naming NC directly would bypass it.
+    states_parent = "domains/campaign_finance/jurisdictions/states"
+    default_node_ids = _collect_node_ids(states_parent)
+    explicit_inherited_node_ids = _collect_node_ids(states_parent, inherit_parked_escape_hatch=True)
     default_node_paths = {node_id.split("::", 1)[0] for node_id in default_node_ids}
     explicit_inherited_node_paths = {node_id.split("::", 1)[0] for node_id in explicit_inherited_node_ids}
 

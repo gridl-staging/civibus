@@ -5,7 +5,11 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from domains.campaign_finance.coverage.registry import CoverageRegistry, CoverageRegistryRow
+from domains.campaign_finance.coverage.registry import (
+    CoverageRegistry,
+    CoverageRegistryRow,
+    coverage_parent_linkage_error,
+)
 
 
 def _base_row_payload() -> dict[str, object]:
@@ -88,12 +92,19 @@ def test_registry_json_round_trip_preserves_all_fields() -> None:
             "evidence_date": "2026-03-25",
         }
     )
-    registry = CoverageRegistry.model_validate({"rows": [first, second]})
+    inherited = _municipality_row_payload(code="CA_CHILD", parent="CA", decision="covered_by_parent")
+    independent = _municipality_row_payload(code="MN_CHILD", parent="MN", decision="independent_target")
+    registry = CoverageRegistry.model_validate({"rows": [first, second, inherited, independent]})
 
     json_payload = registry.model_dump_json(indent=2)
     reparsed = CoverageRegistry.model_validate_json(json_payload)
 
     assert reparsed.model_dump(mode="json") == registry.model_dump(mode="json")
+    rows_by_code = {row.jurisdiction_code: row for row in reparsed.rows}
+    assert rows_by_code["CA_CHILD"].parent_jurisdiction_code == "CA"
+    assert rows_by_code["CA_CHILD"].municipal_audit_decision == "covered_by_parent"
+    assert rows_by_code["MN_CHILD"].parent_jurisdiction_code == "MN"
+    assert rows_by_code["MN_CHILD"].municipal_audit_decision == "independent_target"
 
 
 def test_registry_allows_zero_rows() -> None:
@@ -226,6 +237,35 @@ def test_county_row_rejects_municipality_linkage_fields() -> None:
 
     with pytest.raises(ValidationError, match="must be null"):
         CoverageRegistryRow.model_validate(payload)
+
+
+def test_coverage_parent_linkage_requires_existing_state_parent() -> None:
+    state = CoverageRegistryRow.model_validate(_base_row_payload())
+    child = CoverageRegistryRow.model_validate(_municipality_row_payload())
+
+    assert coverage_parent_linkage_error(child, {"CA": state, "CA_LOS_ANGELES": child}) is None
+    assert "no coverage-registry parent" in coverage_parent_linkage_error(child, {"CA_LOS_ANGELES": child})
+
+    municipal_parent = CoverageRegistryRow.model_validate(
+        _municipality_row_payload(code="CA", parent="NY", decision="independent_target")
+    )
+    error = coverage_parent_linkage_error(child, {"CA": municipal_parent, "CA_LOS_ANGELES": child})
+    assert error is not None
+    assert "must be a state" in error
+
+
+def test_coverage_parent_linkage_uses_scope_only_for_explicit_inheritance() -> None:
+    state_payload = _base_row_payload()
+    state_payload["covers_sub_jurisdictions"] = False
+    state = CoverageRegistryRow.model_validate(state_payload)
+    covered = CoverageRegistryRow.model_validate(_municipality_row_payload())
+    independent = CoverageRegistryRow.model_validate(_municipality_row_payload(decision="independent_target"))
+    rows_by_code = {"CA": state, "CA_LOS_ANGELES": covered}
+
+    covered_error = coverage_parent_linkage_error(covered, rows_by_code)
+    assert covered_error is not None
+    assert "covers_sub_jurisdictions=false" in covered_error
+    assert coverage_parent_linkage_error(independent, rows_by_code) is None
 
 
 def test_covered_by_parent_row_rejects_municipal_portal_url() -> None:

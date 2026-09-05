@@ -19,17 +19,21 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from api.deps import get_db
+from api.middleware.access import enforce_public_ip_rate_limit
 from api.models import (
     PublicContributorRow,
     PublicContributorsResponse,
     PublicEmployerRow,
     PublicEmployersResponse,
+    PublicMemberMoneySummary,
 )
 from api.models.provenance import SourceInfo
+from api.routes import civics as civics_route_module
 from api.routes import public_federal as public_federal_route_module
 from api.routes.public_federal import PUBLIC_FEDERAL_EXPORT_CSV_COLUMNS, router
 from api.test_campaign_finance_support import (
@@ -80,6 +84,7 @@ _PUBLIC_FEDERAL_EMPLOYERS_PATH = "/public/v1/federal/officials/{person_id}/emplo
 _PUBLIC_FEDERAL_EXPORT_JSON_PATH = "/public/v1/federal/export.json"
 _PUBLIC_FEDERAL_EXPORT_CSV_PATH = "/public/v1/federal/export.csv"
 _PUBLIC_FEDERAL_METADATA_PATH = "/public/v1/federal/metadata"
+_CONGRESS_MONEY_SUMMARIES_PATH = "/v1/congress/money-summaries"
 
 _EXPECTED_PUBLIC_FEDERAL_OPERATION_IDS = {
     _PUBLIC_FEDERAL_OFFICIALS_PATH: "list_public_federal_officials",
@@ -126,6 +131,23 @@ _EXPECTED_FEDERAL_OFFICIAL_NOT_FOUND_SCHEMA = {
     "required": ["detail"],
     "additionalProperties": False,
 }
+_EXPECTED_CANDIDATE_SUMMARY_UNAVAILABLE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "detail": {
+            "type": "string",
+            "const": "Candidate summary unavailable",
+        }
+    },
+    "required": ["detail"],
+    "additionalProperties": False,
+}
+_MEMBER_MONEY_CANDIDATE_SUMMARY_FAILURE_PATHS = (
+    _PUBLIC_FEDERAL_EXPORT_JSON_PATH,
+    _PUBLIC_FEDERAL_EXPORT_CSV_PATH,
+    _PUBLIC_FEDERAL_MONEY_PATH,
+    _CONGRESS_MONEY_SUMMARIES_PATH,
+)
 
 
 def _public_contract_source() -> SourceInfo:
@@ -421,6 +443,77 @@ def test_public_federal_openapi_success_response_references_its_response_model(p
     assert {key: value for key, value in published_schema.items() if key != "title"} == _expected_success_json_schema(
         _EXPECTED_PUBLIC_FEDERAL_SUCCESS_JSON_SCHEMAS[path]
     )
+
+
+def test_member_money_openapi_matches_sanitized_candidate_summary_failure_contract() -> None:
+    """Every route over the shared builder must publish its executable 500."""
+    openapi_paths = _generated_openapi_document()["paths"]
+
+    for path in _MEMBER_MONEY_CANDIDATE_SUMMARY_FAILURE_PATHS:
+        unavailable_response = openapi_paths[path]["get"]["responses"]["500"]
+        assert unavailable_response["description"].strip()
+        assert set(unavailable_response["content"]) == {"application/json"}
+        assert (
+            unavailable_response["content"]["application/json"]["schema"]
+            == _EXPECTED_CANDIDATE_SUMMARY_UNAVAILABLE_SCHEMA
+        )
+
+
+def test_member_money_runtime_sanitizes_missing_candidate_summary_across_shared_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The documented 500 exposes no query or model failure detail."""
+    person_id = UUID("11111111-1111-1111-1111-111111111111")
+    candidate_id = UUID("22222222-2222-2222-2222-222222222222")
+    member = {
+        "person_id": person_id,
+        "person_name": "Contract Evidence Executive",
+        "chamber": "Executive",
+        "office_name": "President of the United States",
+        "state": "US",
+        "district": None,
+        "officeholding_source_record_id": None,
+    }
+    candidate = {
+        "id": candidate_id,
+        "name": "Contract Evidence Candidate",
+        "office": "P",
+        "state": "US",
+        "district": "00",
+        "has_selected_cycle_link": True,
+        "source_record_id": None,
+    }
+
+    monkeypatch.setattr(public_federal_route_module, "fetch_current_federal_members", lambda _conn: [member])
+    monkeypatch.setattr(
+        public_federal_route_module,
+        "fetch_candidates_for_people",
+        lambda _conn, _person_ids: {person_id: [candidate]},
+    )
+    monkeypatch.setattr(
+        public_federal_route_module,
+        "fetch_candidate_public_money_summaries",
+        lambda _conn, _candidate_refs: {},
+    )
+    monkeypatch.setattr(public_federal_route_module, "fetch_candidate_summary", lambda *_args, **_kwargs: None)
+
+    app = FastAPI()
+    app.include_router(router)
+    app.include_router(civics_route_module.router, prefix="/v1")
+    app.dependency_overrides[get_db] = lambda: object()
+    app.dependency_overrides[enforce_public_ip_rate_limit] = lambda: None
+
+    with TestClient(app) as client:
+        for path in (
+            _PUBLIC_FEDERAL_EXPORT_JSON_PATH,
+            _PUBLIC_FEDERAL_EXPORT_CSV_PATH,
+            f"/public/v1/federal/officials/{person_id}/money",
+            _CONGRESS_MONEY_SUMMARIES_PATH,
+        ):
+            response = client.get(path)
+            assert response.status_code == 500
+            assert response.headers["content-type"].startswith("application/json")
+            assert response.json() == {"detail": "Candidate summary unavailable"}
 
 
 def test_public_federal_openapi_csv_export_publishes_only_a_text_csv_body() -> None:
@@ -1720,6 +1813,71 @@ def test_export_csv_leaves_unloaded_fundraising_cells_empty(
 )
 def test_export_csv_escapes_formula_like_string_cells(raw_value: str, expected_csv_value: str) -> None:
     assert public_federal_route_module._csv_cell(raw_value) == expected_csv_value
+
+
+def test_export_csv_formula_escape_policy_covers_every_string_bearing_column(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    person_id = UUID("11111111-1111-1111-1111-111111111111")
+    candidate_id = UUID("22222222-2222-2222-2222-222222222222")
+    row = PublicMemberMoneySummary(
+        person_id=person_id,
+        person_name=' =HYPERLINK("https://attacker.invalid","name")',
+        has_fec_money=True,
+        candidate_id=candidate_id,
+        total_raised=Decimal("0.00"),
+        total_spent=Decimal("1.00"),
+        net=Decimal("-1.00"),
+        cash_on_hand=None,
+        summary_source="@formula-like-source",
+        ie_support_total=Decimal("0.00"),
+        ie_oppose_total=None,
+        ie_support_count=0,
+        ie_oppose_count=None,
+        sources=[
+            SourceInfo(
+                domain="campaign_finance",
+                jurisdiction="federal",
+                data_source_name="Adversarial record URL",
+                data_source_url="https://unused.invalid/",
+                source_record_key="dangerous-record-url",
+                record_url='=HYPERLINK("https://attacker.invalid","source")',
+                pull_date=datetime(2026, 8, 27, tzinfo=timezone.utc),
+            ),
+            SourceInfo(
+                domain="campaign_finance",
+                jurisdiction="federal",
+                data_source_name="Fallback data-source URL",
+                data_source_url="https://fallback.invalid/",
+                source_record_key=None,
+                record_url=None,
+                pull_date=datetime(2026, 8, 27, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+    monkeypatch.setattr(public_federal_route_module, "build_public_federal_money_rows", lambda _conn: [row])
+
+    response = public_federal_route_module.export_federal_money_csv(None)
+
+    assert response.status_code == 200
+    assert _public_money_csv_rows(response.body.decode()) == [
+        {
+            "person_id": str(person_id),
+            "person_name": '\' =HYPERLINK("https://attacker.invalid","name")',
+            "has_fec_money": "true",
+            "candidate_id": str(candidate_id),
+            "total_raised": "0.00",
+            "total_spent": "1.00",
+            "net": "-1.00",
+            "cash_on_hand": "",
+            "summary_source": "'@formula-like-source",
+            "ie_support_total": "0.00",
+            "ie_oppose_total": "",
+            "ie_support_count": "0",
+            "ie_oppose_count": "",
+            "source_urls": '\'=HYPERLINK("https://attacker.invalid","source");https://fallback.invalid/',
+        }
+    ]
 
 
 def test_export_row_carries_source_url(api_client: TestClient, db_conn: psycopg.Connection) -> None:

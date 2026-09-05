@@ -17,6 +17,12 @@ import type { ApiClient } from "./client";
 const COMMITTEE_ID = "33333333-3333-4333-8333-333333333333";
 const CANDIDATE_ID = "44444444-4444-4444-8444-444444444444";
 const FILING_ID = "77777777-7777-4777-8777-777777777777";
+const SELECTED_CYCLE_FIELDS = {
+  selected_cycle: 2026,
+  coverage_start_date: "2025-01-01",
+  coverage_end_date: "2026-12-31",
+  available_cycles: [2022, 2024, 2026]
+};
 
 const CANDIDATE_DETAIL = {
   id: CANDIDATE_ID,
@@ -80,11 +86,17 @@ const COMMITTEE_FILING_BREAKDOWN = {
 };
 
 const COMMITTEE_IE_ACTIVITY = {
+  ...SELECTED_CYCLE_FIELDS,
   committee_id: COMMITTEE_ID,
   support_total: "0.00",
   oppose_total: "0.00",
   ie_transaction_count: 0,
   excluded_outlier_count: 0,
+  coverage: {
+    activity_state: "loaded_zero" as const,
+    completeness: "partial" as const,
+    basis: "fec_schedule_e_transactions" as const
+  },
   targets: []
 };
 

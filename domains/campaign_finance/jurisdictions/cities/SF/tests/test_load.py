@@ -13,18 +13,18 @@ import psycopg
 import pytest
 
 from core.types.python.models import compute_record_hash
-from domains.campaign_finance.ingest.filing_loader import generate_synthetic_committee_id
+from domains.campaign_finance.ingest.filing_loader import generate_authority_compatibility_committee_id
 from domains.campaign_finance.jurisdictions._bulk_fixture_support import (
     BulkFixtureInterruption,
     bulk_fixture_entity_row_counts,
     bulk_fixture_row_counts,
     install_write_interrupt,
     seed_bulk_fixture,
-    suppress_first_writes,
 )
 from domains.campaign_finance.jurisdictions.cities.SF.scraper import load as sf_load
 from domains.campaign_finance.jurisdictions.cities.SF.scraper.load import (
     LoadResult,
+    _build_sf_transaction,
     _to_json_safe,
     ensure_sf_data_source,
     load_sf_transactions_with_filings,
@@ -37,6 +37,38 @@ _SAMPLE_TRANSACTIONS_PATH = _FIXTURE_DIR / "sample_transactions.csv"
 _SF_DOMAIN = "campaign_finance"
 _SF_JURISDICTION = "municipality/SF"
 _DS_UUID = uuid4()
+
+
+def test_transaction_without_native_id_uses_content_hash_idempotency_key() -> None:
+    """A live SF row may omit ``transaction_id`` but must still be loadable."""
+    row = next(iter(parse_transactions(_SAMPLE_TRANSACTIONS_PATH, year_from=2020)))
+    row["transaction_id"] = None
+
+    transaction = _build_sf_transaction(
+        row,
+        filing_id=uuid4(),
+        committee_id=uuid4(),
+        source_record_id=uuid4(),
+        data_source_id=uuid4(),
+    )
+
+    assert transaction.transaction_identifier == f"sf-{compute_record_hash(_to_json_safe(row))}"
+
+
+def test_transaction_rejects_invalid_one_character_state_as_missing() -> None:
+    """A malformed live SF state must not prevent the otherwise valid row from loading."""
+    row = next(iter(parse_transactions(_SAMPLE_TRANSACTIONS_PATH, year_from=2020)))
+    row["transaction_state"] = "C"
+
+    transaction = _build_sf_transaction(
+        row,
+        filing_id=uuid4(),
+        committee_id=uuid4(),
+        source_record_id=uuid4(),
+        data_source_id=uuid4(),
+    )
+
+    assert transaction.contributor_state is None
 
 
 class TestEnsureSfDataSource:
@@ -113,11 +145,11 @@ class TestLoadSfTransactionsWithFilings:
             MagicMock(side_effect=lambda conn, t: t.id),
         )
         monkeypatch.setattr(
-            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.ensure_state_committee",
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.ensure_authority_committee",
             MagicMock(return_value=uuid4()),
         )
         monkeypatch.setattr(
-            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.resolve_organization_by_canonical_name",
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.find_organization_by_identifier",
             MagicMock(return_value=uuid4()),
         )
 
@@ -153,11 +185,11 @@ class TestLoadSfTransactionsWithFilings:
             MagicMock(side_effect=lambda conn, t: t.id),
         )
         monkeypatch.setattr(
-            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.ensure_state_committee",
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.ensure_authority_committee",
             MagicMock(return_value=uuid4()),
         )
         monkeypatch.setattr(
-            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.resolve_organization_by_canonical_name",
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.find_organization_by_identifier",
             MagicMock(return_value=uuid4()),
         )
 
@@ -165,6 +197,63 @@ class TestLoadSfTransactionsWithFilings:
 
         assert isinstance(result, LoadResult)
         assert result.inserted == 2
+
+    def test_duplicate_source_record_is_relinked_on_retry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A retry must repair relational rows after provenance was already committed."""
+        conn = MagicMock()
+        conn.info.transaction_status = 0  # IDLE
+        existing_source_record_id = uuid4()
+
+        monkeypatch.setattr(
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.ensure_data_source",
+            MagicMock(return_value=_DS_UUID),
+        )
+        monkeypatch.setattr(
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.try_insert_source_record",
+            MagicMock(return_value=None),
+        )
+
+        def select_existing(conn, keys):
+            assert len(keys) == 1
+            data_source_id, source_record_key = keys[0]
+            assert data_source_id == _DS_UUID
+            existing = MagicMock(
+                id=existing_source_record_id,
+                data_source_id=data_source_id,
+                source_record_key=source_record_key,
+            )
+            return {(data_source_id, source_record_key): existing}
+
+        monkeypatch.setattr(
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.select_active_source_records_by_keys",
+            select_existing,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.upsert_filing",
+            MagicMock(side_effect=lambda conn, filing: filing.id),
+        )
+        upsert_transaction = MagicMock(side_effect=lambda conn, transaction: transaction.id)
+        monkeypatch.setattr(
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.upsert_transaction",
+            upsert_transaction,
+        )
+        monkeypatch.setattr(
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.ensure_authority_committee",
+            MagicMock(return_value=uuid4()),
+        )
+        monkeypatch.setattr(
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.find_organization_by_identifier",
+            MagicMock(return_value=uuid4()),
+        )
+
+        result = load_sf_transactions_with_filings(conn, _SAMPLE_TRANSACTIONS_PATH, limit=1)
+
+        assert result.inserted == 0
+        assert result.skipped == 1
+        assert result.errors == 0
+        upsert_transaction.assert_called_once()
+        assert upsert_transaction.call_args.args[1].source_record_id == existing_source_record_id
 
     def test_provenance_written_before_relational_rows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Verify two-pass: source records first, then filing+transaction upserts."""
@@ -203,11 +292,11 @@ class TestLoadSfTransactionsWithFilings:
             track_upsert_transaction,
         )
         monkeypatch.setattr(
-            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.ensure_state_committee",
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.ensure_authority_committee",
             MagicMock(return_value=uuid4()),
         )
         monkeypatch.setattr(
-            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.resolve_organization_by_canonical_name",
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.find_organization_by_identifier",
             MagicMock(return_value=uuid4()),
         )
 
@@ -240,12 +329,21 @@ class TestLoadSfTransactionsWithFilings:
         committee_calls: list[tuple] = []
         mock_committee_id = uuid4()
 
-        def track_ensure_committee(conn, *, state, native_committee_id, organization_id):
-            committee_calls.append((state, native_committee_id))
+        def track_ensure_committee(
+            conn,
+            *,
+            data_source_id,
+            authority_type,
+            authority_code,
+            native_committee_id,
+            organization_id,
+            source_record_id,
+        ):
+            committee_calls.append((data_source_id, authority_type, authority_code, native_committee_id))
             return mock_committee_id
 
         monkeypatch.setattr(
-            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.ensure_state_committee",
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.ensure_authority_committee",
             track_ensure_committee,
         )
         monkeypatch.setattr(
@@ -257,7 +355,7 @@ class TestLoadSfTransactionsWithFilings:
             MagicMock(side_effect=lambda conn, t: t.id),
         )
         monkeypatch.setattr(
-            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.resolve_organization_by_canonical_name",
+            "domains.campaign_finance.jurisdictions.cities.SF.scraper.load.find_organization_by_identifier",
             MagicMock(return_value=uuid4()),
         )
 
@@ -265,8 +363,10 @@ class TestLoadSfTransactionsWithFilings:
 
         # Fixture row 1 has fppc_id "1488379" — should use that as native_committee_id
         assert len(committee_calls) >= 1
-        state, native_id = committee_calls[0]
-        assert state == "CA"
+        data_source_id, authority_type, authority_code, native_id = committee_calls[0]
+        assert data_source_id == _DS_UUID
+        assert authority_type == "municipality"
+        assert authority_code == "SF"
         assert native_id == "1488379"
 
 
@@ -301,7 +401,7 @@ class SFBulkFixture(NamedTuple):
 
     @property
     def committee_fec_id(self) -> str:
-        return generate_synthetic_committee_id("CA", self.fppc_id)
+        return generate_authority_compatibility_committee_id("municipality", "SF", self.fppc_id)
 
 
 def _write_sf_transaction_fixture(tmp_path: Path, *, row_count: int) -> SFBulkFixture:
@@ -436,12 +536,17 @@ def test_load_sf_relational_batch_boundary_advances_on_missing_provenance(
     with ExitStack() as resources:
         fixture = _seed_sf_bulk_fixture(resources, db_conn, tmp_path)
 
-        suppress_first_writes(
-            monkeypatch,
-            sf_load,
-            "try_insert_source_record",
-            suppress_first=_SF_SKIPPED_PROVENANCE_ROWS,
-        )
+        original_try_insert = sf_load.try_insert_source_record
+        provenance_attempts = 0
+
+        def fail_first_provenance_writes(conn, source_record):
+            nonlocal provenance_attempts
+            provenance_attempts += 1
+            if provenance_attempts <= _SF_SKIPPED_PROVENANCE_ROWS:
+                raise RuntimeError("fixture-only provenance failure")
+            return original_try_insert(conn, source_record)
+
+        monkeypatch.setattr(sf_load, "try_insert_source_record", fail_first_provenance_writes)
         expected_durable_transactions = _EXPECTED_DURABLE_BATCH_ROWS - _SF_SKIPPED_PROVENANCE_ROWS
         write_counts = install_write_interrupt(
             monkeypatch,

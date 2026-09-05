@@ -7,7 +7,7 @@ import {
   SMOKE_HOME_FORBIDDEN_UNSUPPORTED_STATE,
   SMOKE_HOME_FORBIDDEN_WARNING_STATE,
   SMOKE_HOME_FORBIDDEN_WARNING_TEXT,
-  SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME
+  SMOKE_NC_SHOWCASE_COUNTY_LINK_NAME
 } from "./fixtures";
 
 test.describe("honesty pass", () => {
@@ -34,6 +34,6 @@ test.describe("honesty pass", () => {
 
   test("exposes county click-through only on supported drilldown coverage", async ({ page }: { page: any }) => {
     await page.goto("/state/NC");
-    await expect(page.getByRole("link", { name: SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME })).toHaveCount(1);
+    await expect(page.getByRole("link", { name: SMOKE_NC_SHOWCASE_COUNTY_LINK_NAME })).toHaveCount(1);
   });
 });

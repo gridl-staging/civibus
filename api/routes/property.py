@@ -1,18 +1,16 @@
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
 import psycopg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_db
 from api.models import ParcelDetailResponse, ParcelListParams, ParcelSummaryResponse
 from api.queries import fetch_parcel_detail, fetch_parcel_list
-from api.routes.validation import build_query_params_dependency
 
 router = APIRouter()
-
-_build_parcel_list_params = build_query_params_dependency(ParcelListParams)
 
 
 @router.get("/parcels/{parcel_id}", response_model=ParcelDetailResponse)
@@ -25,7 +23,7 @@ def get_parcel(parcel_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> P
 
 @router.get("/parcels", response_model=list[ParcelSummaryResponse])
 def list_parcels(
-    params: ParcelListParams = Depends(_build_parcel_list_params),
+    params: Annotated[ParcelListParams, Query()],
     conn: psycopg.Connection = Depends(get_db),
 ) -> list[ParcelSummaryResponse]:
     parcel_rows = fetch_parcel_list(conn, params)

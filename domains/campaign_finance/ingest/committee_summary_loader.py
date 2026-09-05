@@ -233,7 +233,11 @@ def load_committee_summaries(
             cursor.execute(f"SAVEPOINT {_COMMITTEE_SUMMARY_ROW_SAVEPOINT}")
             try:
                 committee_fec_id = _require_committee_fec_id(row)
-                committee_id = find_committee_id_by_fec_id(conn, committee_fec_id)
+                committee_id = find_committee_id_by_fec_id(
+                    conn,
+                    committee_fec_id,
+                    data_source_id=data_source_id,
+                )
                 if committee_id is None:
                     LOGGER.warning(
                         "Skipping committee summary row for missing committee CMTE_ID=%s",
